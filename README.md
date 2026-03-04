@@ -1,4 +1,4 @@
-# acadrust 0.2.0
+# acadrust 0.2.1
 
 [![Crates.io](https://img.shields.io/crates/v/acadrust.svg)](https://crates.io/crates/acadrust)
 [![Documentation](https://docs.rs/acadrust/badge.svg)](https://docs.rs/acadrust)
@@ -166,7 +166,7 @@ Add acadrust to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-acadrust = "0.1.8"
+acadrust = "0.2.1"
 ```
 
 Or install via cargo:
@@ -437,6 +437,8 @@ acadrust is built on a foundation of high-quality Rust crates:
 | `rayon` | Parallel iterators |
 | `encoding_rs` | Character encoding support |
 | `bitflags` | Type-safe bitflags |
+| `once_cell` | Lazy static initialization |
+| `ahash` | Fast hashing |
 
 ---
 
@@ -457,21 +459,7 @@ cargo test test_read_minimal_dxf
 
 ### Generate DWG Samples
 
-Generate a full set of DWG test files for verification in AutoCAD, IntelliCAD, or BricsCAD:
-
-```bash
-cargo run --example dwg_samples
-```
-
-This produces 40 DWG files in `target/dwg_samples/`:
-
-| Folder | Contents |
-|--------|----------|
-| `individual/` | One file per entity type (32 files) — line, circle, arc, spline, hatch, dimensions, mesh, etc. |
-| `by_version/` | Showcase file per DWG version (5 files) — R2000 through R2018 |
-| `stress/` | Larger files for stress testing (3 files) — 200–500 entities each |
-
-Generate a comprehensive matrix of every entity type × every DWG version (R13–R2018):
+Generate a comprehensive matrix of every entity type × every DWG version (R13–R2018) for verification in AutoCAD, IntelliCAD, or BricsCAD:
 
 ```bash
 cargo run --example gen_all_entities_all_versions
