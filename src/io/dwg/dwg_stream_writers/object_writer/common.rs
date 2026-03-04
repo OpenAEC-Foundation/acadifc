@@ -80,14 +80,16 @@ pub const OBJ_GROUP: i16 = 72;
 pub const OBJ_MLINESTYLE: i16 = 73;
 pub const OBJ_OLE2FRAME: i16 = 74;
 
-// Non-fixed type codes (variable, written as class index + 500)
-// For simplicity in the writer, we use negative sentinel values
-// and handle them in write_common_data via write_object_type.
-pub const OBJ_LWPOLYLINE: i16 = 77;    // class-based in some versions
-pub const OBJ_HATCH: i16 = 78;
-pub const OBJ_IMAGE: i16 = 79;
-pub const OBJ_MESH: i16 = 80;
-pub const OBJ_MULTILEADER: i16 = 81;
+// Standard table-type fixed codes (77+)
+pub const OBJ_LWPOLYLINE: i16 = 77;    // standard fixed type in R14+
+pub const OBJ_HATCH: i16 = 78;         // standard fixed type
+
+// Class-based (UNLISTED) entity types.
+// These must ALWAYS be resolved via class_type_code(), never used directly.
+// The values below are just fallbacks — never valid as fixed type codes.
+pub const OBJ_IMAGE: i16 = -1;         // UNLISTED: always use class number
+pub const OBJ_MESH: i16 = -2;          // UNLISTED: always use class number
+pub const OBJ_MULTILEADER: i16 = -3;   // UNLISTED: always use class number
 
 // Fixed-type non-graphical objects (standard type codes from ODA spec)
 pub const OBJ_XRECORD: i16 = 79;        // 0x4F
@@ -311,10 +313,11 @@ impl<'a> DwgObjectWriter<'a> {
             // If not by-layer, would write linetype handle here
         }
 
-        // ── Pre-R2004: Nolinks + prev/next ──
-        if !self.version.r2004_plus() && self.version.r2000_plus() {
-            // Nolinks optimization: if prev == handle-1 and next == handle+1,
-            // write Nolinks=true and skip handles
+        // ── R13-R2000 (pre-R2004): Nolinks + prev/next entity chain ──
+        // In R13/R14/R2000, entities in a block form a doubly-linked list.
+        // Each entity must have prev/next entity handles.
+        // C# ACadSharp always writes both handles regardless of hasLinks.
+        if !self.version.r2004_plus() {
             let prev_h = self.prev_handle.unwrap_or(Handle::NULL);
             let next_h = self.next_handle.unwrap_or(Handle::NULL);
             let has_links = !prev_h.is_null()
@@ -322,16 +325,14 @@ impl<'a> DwgObjectWriter<'a> {
                 && !next_h.is_null()
                 && next_h.value() == handle.value().wrapping_add(1);
 
-            // MAIN: Nolinks bit (true = sequential links, skip handles)
+            // MAIN: Nolinks bit (true = sequential links)
             self.writer.write_bit(has_links);
 
-            if !has_links {
-                // HANDLE: prev + next entity handles
-                self.writer
-                    .write_handle(DwgReferenceType::SoftPointer, prev_h.value());
-                self.writer
-                    .write_handle(DwgReferenceType::SoftPointer, next_h.value());
-            }
+            // HANDLE: prev + next entity handles (always written, matching C#)
+            self.writer
+                .write_handle(DwgReferenceType::SoftPointer, prev_h.value());
+            self.writer
+                .write_handle(DwgReferenceType::SoftPointer, next_h.value());
         }
 
         // ── MAIN: Color (EnColor) ──
@@ -351,7 +352,7 @@ impl<'a> DwgObjectWriter<'a> {
             return;
         }
 
-        // ── R2000+: Layer handle (HANDLE: soft pointer, spec §19.3.2) ──
+        // ── R2000+: Layer handle (HANDLE: hard pointer) ──
         let layer_h = self
             .document
             .layers
@@ -359,7 +360,7 @@ impl<'a> DwgObjectWriter<'a> {
             .map(|l| l.handle)
             .unwrap_or(Handle::NULL);
         self.writer
-            .write_handle(DwgReferenceType::SoftPointer, layer_h.value());
+            .write_handle(DwgReferenceType::HardPointer, layer_h.value());
 
         // ── MAIN: Linetype flags ──
         // 00 = bylayer, 01 = byblock, 10 = continuous, 11 = handle present

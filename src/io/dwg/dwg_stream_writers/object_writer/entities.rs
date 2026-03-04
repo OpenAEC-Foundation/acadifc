@@ -250,9 +250,9 @@ impl<'a> DwgObjectWriter<'a> {
             // Uses insertion pt X,Y as default values
             if (data_flags & 0x02) == 0 {
                 self.writer
-                    .write_bit_double_with_default(e.insertion_point.x, alignment_point.x);
+                    .write_bit_double_with_default(alignment_point.x, e.insertion_point.x);
                 self.writer
-                    .write_bit_double_with_default(e.insertion_point.y, alignment_point.y);
+                    .write_bit_double_with_default(alignment_point.y, e.insertion_point.y);
             }
             // Extrusion BE 210
             self.writer.write_bit_extrusion(e.normal);
@@ -412,43 +412,38 @@ impl<'a> DwgObjectWriter<'a> {
             let has_no_flags = e.invisible_edges.bits() == 0;
             self.writer.write_bit(has_no_flags);
 
-            let z_are_same = e.first_corner.z == e.second_corner.z
-                && e.first_corner.z == e.third_corner.z
-                && e.first_corner.z == e.fourth_corner.z;
-            self.writer.write_bit(z_are_same);
+            let z_is_zero = e.first_corner.z == 0.0;
+            self.writer.write_bit(z_is_zero);
 
             self.writer.write_raw_double(e.first_corner.x);
             self.writer.write_raw_double(e.first_corner.y);
-            if !z_are_same {
+            if !z_is_zero {
                 self.writer.write_raw_double(e.first_corner.z);
             }
 
+            // 2nd corner 3DD (default = 1st corner) — always includes Z
             self.writer
                 .write_bit_double_with_default(e.second_corner.x, e.first_corner.x);
             self.writer
                 .write_bit_double_with_default(e.second_corner.y, e.first_corner.y);
-            if !z_are_same {
-                self.writer
-                    .write_bit_double_with_default(e.second_corner.z, e.first_corner.z);
-            }
+            self.writer
+                .write_bit_double_with_default(e.second_corner.z, e.first_corner.z);
 
+            // 3rd corner 3DD (default = 2nd corner)
             self.writer
                 .write_bit_double_with_default(e.third_corner.x, e.second_corner.x);
             self.writer
                 .write_bit_double_with_default(e.third_corner.y, e.second_corner.y);
-            if !z_are_same {
-                self.writer
-                    .write_bit_double_with_default(e.third_corner.z, e.second_corner.z);
-            }
+            self.writer
+                .write_bit_double_with_default(e.third_corner.z, e.second_corner.z);
 
+            // 4th corner 3DD (default = 3rd corner)
             self.writer
                 .write_bit_double_with_default(e.fourth_corner.x, e.third_corner.x);
             self.writer
                 .write_bit_double_with_default(e.fourth_corner.y, e.third_corner.y);
-            if !z_are_same {
-                self.writer
-                    .write_bit_double_with_default(e.fourth_corner.z, e.third_corner.z);
-            }
+            self.writer
+                .write_bit_double_with_default(e.fourth_corner.z, e.third_corner.z);
 
             if !has_no_flags {
                 self.writer
@@ -490,14 +485,14 @@ impl<'a> DwgObjectWriter<'a> {
             } else if sx == 1.0 {
                 // 01 - 41 is 1.0, 2 DD's present using 1.0 as default
                 self.writer.write_2bits(1);
-                self.writer.write_bit_double_with_default(1.0, sy);
-                self.writer.write_bit_double_with_default(1.0, sz);
+                self.writer.write_bit_double_with_default(sy, 1.0);
+                self.writer.write_bit_double_with_default(sz, 1.0);
             } else {
                 // 00 - 41 as RD, then 42 as DD (default=41), 43 as DD (default=41)
                 self.writer.write_2bits(0);
                 self.writer.write_raw_double(sx);
-                self.writer.write_bit_double_with_default(sx, sy);
-                self.writer.write_bit_double_with_default(sx, sz);
+                self.writer.write_bit_double_with_default(sy, sx);
+                self.writer.write_bit_double_with_default(sz, sx);
             }
         }
 
@@ -772,8 +767,10 @@ impl<'a> DwgObjectWriter<'a> {
         // Offsettoblockinspt 3BD 212
         self.writer.write_3bit_double(e.block_offset);
 
-        // R14+: Endptproj 3BD (annotation offset) — always write for R2000+
-        self.writer.write_3bit_double(e.annotation_offset);
+        // R14+: Endptproj 3BD (annotation offset) — not present in R13
+        if self.dxf_version >= crate::types::DxfVersion::AC1014 {
+            self.writer.write_3bit_double(e.annotation_offset);
+        }
 
         // R13-R14 Only: DIMGAP and arrowhead data
         if self.version.r13_14_only() {
@@ -1201,6 +1198,12 @@ impl<'a> DwgObjectWriter<'a> {
                 .write_cm_color(&crate::types::Color::from_index(e.ambient_color as i16));
         }
 
+        // R13-R14 Only: null handle reference
+        if self.version.r13_14_only() {
+            self.writer
+                .write_handle(DwgReferenceType::HardPointer, 0);
+        }
+
         // R2000+: Frozen layer handles
         if self.version.r2000_plus() {
             for h in &e.frozen_layers {
@@ -1439,6 +1442,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.entity_preamble(common::OBJ_POLYLINE_2D, &e.common);
 
         self.writer.write_bit_short(e.flags.bits() as i16);
+        self.writer.write_bit_short(e.smooth_surface as i16); // BS 75 curve type
         self.writer.write_bit_double(e.start_width);
         self.writer.write_bit_double(e.end_width);
         self.writer.write_bit_thickness(e.thickness);

@@ -444,9 +444,10 @@ impl<'a> DwgObjectWriter<'a> {
         // Big font name
         self.writer.write_variable_text(&style.big_font_file);
 
-        // External reference block handle (null for non-xref entries)
+        // External reference block handle (hard pointer)
+        // C# ACadSharp writes the parent TextStyles table handle here
         self.writer
-            .write_handle(DwgReferenceType::HardPointer, 0);
+            .write_handle(DwgReferenceType::HardPointer, self.document.text_styles.handle().value());
 
         self.register_object(style.handle);
     }
@@ -868,6 +869,120 @@ impl<'a> DwgObjectWriter<'a> {
         // Common: Entry name TV 2
         self.writer.write_variable_text(&ds.name);
         self.write_xref_dependant_bit();
+
+        // ── R13/R14 Only: DimStyle fields ───────────────────────────
+        // These fields are ONLY written for R13/R14 (not R2000+).
+        // Field order matches C# ACadSharp writeDimensionStyle() R13_14Only block.
+        if self.version.r13_14_only() {
+            // DIMTOL B 71
+            self.writer.write_bit(ds.dimtol);
+            // DIMLIM B 72
+            self.writer.write_bit(ds.dimlim);
+            // DIMTIH B 73
+            self.writer.write_bit(ds.dimtih);
+            // DIMTOH B 74
+            self.writer.write_bit(ds.dimtoh);
+            // DIMSE1 B 75
+            self.writer.write_bit(ds.dimse1);
+            // DIMSE2 B 76
+            self.writer.write_bit(ds.dimse2);
+            // DIMALT B 170
+            self.writer.write_bit(ds.dimalt);
+            // DIMTOFL B 172
+            self.writer.write_bit(ds.dimtofl);
+            // DIMSAH B 173
+            self.writer.write_bit(ds.dimsah);
+            // DIMTIX B 174
+            self.writer.write_bit(ds.dimtix);
+            // DIMSOXD B 175
+            self.writer.write_bit(ds.dimsoxd);
+            // DIMALTD RC 171
+            self.writer.write_byte(ds.dimaltd as u8);
+            // DIMZIN RC 78
+            self.writer.write_byte(ds.dimzin as u8);
+            // DIMSD1 B 281
+            self.writer.write_bit(ds.dimsd1);
+            // DIMSD2 B 282
+            self.writer.write_bit(ds.dimsd2);
+            // DIMTOLJ RC 283
+            self.writer.write_byte(ds.dimtolj as u8);
+            // DIMJUST RC 280
+            self.writer.write_byte(ds.dimjust as u8);
+            // DIMFIT RC 287
+            self.writer.write_byte(3); // default
+            // DIMUPT B 288
+            self.writer.write_bit(ds.dimupt);
+            // DIMTZIN RC 284
+            self.writer.write_byte(ds.dimtzin as u8);
+            // DIMALTZ RC 285
+            self.writer.write_byte(ds.dimaltz as u8);
+            // DIMALTTZ RC 286
+            self.writer.write_byte(ds.dimalttz as u8);
+            // DIMTAD RC 77
+            self.writer.write_byte(ds.dimtad as u8);
+            // DIMUNIT BS 270
+            self.writer.write_bit_short(ds.dimlunit); // R13/R14 uses DIMUNIT (270)
+            // DIMAUNIT BS 275
+            self.writer.write_bit_short(ds.dimaunit);
+            // DIMDEC BS 271
+            self.writer.write_bit_short(ds.dimdec);
+            // DIMTDEC BS 272
+            self.writer.write_bit_short(ds.dimtdec);
+            // DIMALTU BS 273
+            self.writer.write_bit_short(ds.dimaltu);
+            // DIMALTTD BS 274
+            self.writer.write_bit_short(ds.dimalttd);
+            // DIMSCALE BD 40
+            self.writer.write_bit_double(ds.dimscale);
+            // DIMASZ BD 41
+            self.writer.write_bit_double(ds.dimasz);
+            // DIMEXO BD 42
+            self.writer.write_bit_double(ds.dimexo);
+            // DIMDLI BD 43
+            self.writer.write_bit_double(ds.dimdli);
+            // DIMEXE BD 44
+            self.writer.write_bit_double(ds.dimexe);
+            // DIMRND BD 45
+            self.writer.write_bit_double(ds.dimrnd);
+            // DIMDLE BD 46
+            self.writer.write_bit_double(ds.dimdle);
+            // DIMTP BD 47
+            self.writer.write_bit_double(ds.dimtp);
+            // DIMTM BD 48
+            self.writer.write_bit_double(ds.dimtm);
+            // DIMTXT BD 140
+            self.writer.write_bit_double(ds.dimtxt);
+            // DIMCEN BD 141
+            self.writer.write_bit_double(ds.dimcen);
+            // DIMTSZ BD 142
+            self.writer.write_bit_double(ds.dimtsz);
+            // DIMALTF BD 143
+            self.writer.write_bit_double(ds.dimaltf);
+            // DIMLFAC BD 144
+            self.writer.write_bit_double(ds.dimlfac);
+            // DIMTVP BD 145
+            self.writer.write_bit_double(ds.dimtvp);
+            // DIMTFAC BD 146
+            self.writer.write_bit_double(ds.dimtfac);
+            // DIMGAP BD 147
+            self.writer.write_bit_double(ds.dimgap);
+            // DIMPOST T 3
+            self.writer.write_variable_text(&ds.dimpost);
+            // DIMAPOST T 4
+            self.writer.write_variable_text(&ds.dimapost);
+            // DIMBLK T 5
+            self.writer.write_variable_text("");
+            // DIMBLK1 T 6
+            self.writer.write_variable_text("");
+            // DIMBLK2 T 7
+            self.writer.write_variable_text("");
+            // DIMCLRD BS 176
+            self.writer.write_cm_color(&crate::types::Color::from_index(ds.dimclrd));
+            // DIMCLRE BS 177
+            self.writer.write_cm_color(&crate::types::Color::from_index(ds.dimclre));
+            // DIMCLRT BS 178
+            self.writer.write_cm_color(&crate::types::Color::from_index(ds.dimclrt));
+        }
 
         // ── R2000+ DimStyle fields ──────────────────────────────────
         // Field order, data types, and version guards match C# ACadSharp

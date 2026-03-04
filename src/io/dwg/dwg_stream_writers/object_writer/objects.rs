@@ -12,7 +12,7 @@
 
 use crate::io::dwg::dwg_reference_type::DwgReferenceType;
 use crate::objects::*;
-use crate::types::Handle;
+use crate::types::{DxfVersion, Handle};
 
 use super::common;
 use super::DwgObjectWriter;
@@ -64,6 +64,11 @@ impl<'a> DwgObjectWriter<'a> {
         // Number of entries (BL)
         self.writer.write_bit_long(dict.entries.len() as i32);
 
+        // R14 Only: Unknown byte (always 0)
+        if self.dxf_version == DxfVersion::AC1014 {
+            self.writer.write_byte(0);
+        }
+
         // R2000+: Cloning flag (BS 281) + Hard-owner flag (RC)
         if self.version.r2000_plus() {
             self.writer.write_bit_short(dict.duplicate_cloning as i16);
@@ -105,6 +110,12 @@ impl<'a> DwgObjectWriter<'a> {
 
         // Same as dictionary
         self.writer.write_bit_long(dict.entries.len() as i32);
+
+        // R14 Only: Unknown byte (always 0)
+        if self.dxf_version == DxfVersion::AC1014 {
+            self.writer.write_byte(0);
+        }
+
         // R2000+: Cloning flag (BS) + Hard-owner flag (RC)
         if self.version.r2000_plus() {
             self.writer.write_bit_short(dict.duplicate_cloning as i16);
