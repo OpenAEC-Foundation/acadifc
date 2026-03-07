@@ -5,6 +5,7 @@ use crate::types::Handle;
 
 /// A dimension style table entry — maps to ACadSharp's DimensionStyle
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DimStyle {
     /// Unique handle
     pub handle: Handle,

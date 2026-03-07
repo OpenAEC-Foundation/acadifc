@@ -6,6 +6,7 @@ use crate::types::Handle;
 
 /// Block record flags
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BlockFlags {
     /// Block is anonymous
     pub anonymous: bool,
@@ -40,6 +41,7 @@ impl Default for BlockFlags {
 
 /// A block record table entry
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BlockRecord {
     /// Unique handle for the block record table entry
     pub handle: Handle,

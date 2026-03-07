@@ -5,6 +5,7 @@ use std::ops::{Add, Sub, Mul, Div, Neg};
 
 /// 2D vector
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Vector2 {
     pub x: f64,
     pub y: f64,
@@ -110,6 +111,7 @@ impl fmt::Display for Vector2 {
 
 /// 3D vector
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Vector3 {
     pub x: f64,
     pub y: f64,

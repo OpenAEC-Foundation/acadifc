@@ -27,6 +27,7 @@ use std::collections::HashMap;
 
 /// DWG header variables containing drawing settings
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HeaderVariables {
     // ==================== Version-specific Flags ====================
     /// REQUIREDVERSIONS (R2013+) - Bit coded required versions
@@ -858,6 +859,7 @@ impl Default for HeaderVariables {
 
 /// A CAD document containing all drawing data
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CadDocument {
     /// Document version
     pub version: DxfVersion,

@@ -5,6 +5,7 @@ use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transparency, Vecto
 
 /// A vertex in a lightweight polyline
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LwVertex {
     /// Location of the vertex (2D)
     pub location: Vector2,
@@ -47,6 +48,7 @@ impl LwVertex {
 
 /// A lightweight (2D) polyline entity
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LwPolyline {
     /// Common entity data
     pub common: EntityCommon,

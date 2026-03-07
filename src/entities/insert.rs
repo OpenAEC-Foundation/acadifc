@@ -8,6 +8,7 @@ use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transparency, Vecto
 /// An Insert entity places an instance of a block at a specified location
 /// with optional scaling, rotation, and array properties.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Insert {
     pub common: EntityCommon,
     /// Block name (references a BlockRecord)

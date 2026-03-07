@@ -14,6 +14,7 @@ use bitflags::bitflags;
 
 /// Content type for multileader annotation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(i16)]
 pub enum LeaderContentType {
     /// No content (leader only).
@@ -41,6 +42,7 @@ impl From<i16> for LeaderContentType {
 
 /// Leader path type (line style).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(i16)]
 pub enum MultiLeaderPathType {
     /// Leader is invisible.
@@ -65,6 +67,7 @@ impl From<i16> for MultiLeaderPathType {
 
 /// Text attachment point relative to landing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(i16)]
 pub enum TextAttachmentType {
     /// Top of top line.
@@ -113,6 +116,7 @@ impl From<i16> for TextAttachmentType {
 
 /// Text angle type for leader content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(i16)]
 pub enum TextAngleType {
     /// Text angle parallel to last leader line segment.
@@ -137,6 +141,7 @@ impl From<i16> for TextAngleType {
 
 /// Block content connection type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(i16)]
 pub enum BlockContentConnectionType {
     /// Connect to block extents.
@@ -158,6 +163,7 @@ impl From<i16> for BlockContentConnectionType {
 
 /// Text attachment direction (horizontal or vertical).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(i16)]
 pub enum TextAttachmentDirectionType {
     /// Leaders attach to left/right of content.
@@ -179,6 +185,7 @@ impl From<i16> for TextAttachmentDirectionType {
 
 /// Text attachment point type (left/center/right).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(i16)]
 pub enum TextAttachmentPointType {
     /// Attach to left.
@@ -203,6 +210,7 @@ impl From<i16> for TextAttachmentPointType {
 
 /// Text alignment type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(i16)]
 pub enum TextAlignmentType {
     /// Left alignment.
@@ -227,6 +235,7 @@ impl From<i16> for TextAlignmentType {
 
 /// Flow direction for text columns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(i16)]
 pub enum FlowDirectionType {
     /// Horizontal flow.
@@ -251,6 +260,7 @@ impl From<i16> for FlowDirectionType {
 
 /// Line spacing style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(i16)]
 pub enum LineSpacingStyle {
     /// At least the specified spacing.
@@ -277,6 +287,7 @@ impl From<i16> for LineSpacingStyle {
 bitflags! {
     /// Property override flags for MultiLeader.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct MultiLeaderPropertyOverrideFlags: u32 {
         /// No overrides.
         const NONE = 0;
@@ -346,6 +357,7 @@ bitflags! {
 bitflags! {
     /// Property override flags for individual leader lines.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct LeaderLinePropertyOverrideFlags: u32 {
         /// No overrides.
         const NONE = 0;
@@ -370,6 +382,7 @@ bitflags! {
 
 /// Start/end point pair for leader line breaks.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct StartEndPointPair {
     /// Break start point.
     pub start_point: Vector3,
@@ -398,6 +411,7 @@ impl Default for StartEndPointPair {
 
 /// A single leader line with vertices.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LeaderLine {
     /// Index of this leader line.
     pub index: i32,
@@ -491,6 +505,7 @@ impl Default for LeaderLine {
 
 /// A leader root containing one or more leader lines.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LeaderRoot {
     /// Index of this leader root.
     pub leader_index: i32,
@@ -555,6 +570,7 @@ impl Default for LeaderRoot {
 
 /// Block attribute for block content.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BlockAttribute {
     /// Handle to the attribute definition.
     pub attribute_definition_handle: Option<Handle>,
@@ -590,6 +606,7 @@ impl Default for BlockAttribute {
 
 /// Context data for MultiLeader annotation (geometry and content).
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MultiLeaderAnnotContext {
     /// Leader roots (each can have multiple leader lines).
     pub leader_roots: Vec<LeaderRoot>,
@@ -839,6 +856,7 @@ impl Default for MultiLeaderAnnotContext {
 /// ]);
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MultiLeader {
     /// Common entity data.
     pub common: EntityCommon,
@@ -1260,6 +1278,7 @@ impl Entity for MultiLeader {
 
 /// Builder for MultiLeader entities.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MultiLeaderBuilder {
     multileader: MultiLeader,
 }

@@ -5,6 +5,7 @@ use crate::types::{Handle, Vector3};
 
 /// A User Coordinate System (UCS) table entry
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Ucs {
     /// Unique handle
     pub handle: Handle,

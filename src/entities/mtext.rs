@@ -5,6 +5,7 @@ use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transparency, Vecto
 
 /// Attachment point for MText
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum AttachmentPoint {
     /// Top left
     TopLeft = 1,
@@ -28,6 +29,7 @@ pub enum AttachmentPoint {
 
 /// Drawing direction for MText
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DrawingDirection {
     /// Left to right
     LeftToRight = 1,
@@ -39,6 +41,7 @@ pub enum DrawingDirection {
 
 /// A multi-line text entity
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MText {
     /// Common entity data
     pub common: EntityCommon,

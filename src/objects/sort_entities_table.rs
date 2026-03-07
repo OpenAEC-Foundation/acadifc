@@ -13,6 +13,7 @@ use std::collections::HashMap;
 ///
 /// Maps an entity handle to its sort handle for determining draw order.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SortEntsEntry {
     /// Entity handle (the entity being sorted).
     /// DXF code: 331
@@ -69,6 +70,7 @@ impl SortEntsEntry {
 /// table.add_entry(Handle::new(0x101), Handle::new(0xFFFFFF));
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SortEntitiesTable {
     /// Object handle.
     pub handle: Handle,

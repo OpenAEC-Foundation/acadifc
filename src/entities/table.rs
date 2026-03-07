@@ -14,6 +14,7 @@ use bitflags::bitflags;
 
 /// Cell content type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
 pub enum CellType {
     /// Text content.
@@ -35,6 +36,7 @@ impl From<u8> for CellType {
 
 /// Cell value data type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u32)]
 pub enum CellValueType {
     /// Unknown type.
@@ -82,6 +84,7 @@ impl From<u32> for CellValueType {
 
 /// Value unit type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u32)]
 pub enum ValueUnitType {
     /// No units.
@@ -117,6 +120,7 @@ impl From<u32> for ValueUnitType {
 
 /// Border type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(i16)]
 pub enum BorderType {
     /// Single line border.
@@ -138,6 +142,7 @@ impl From<i16> for BorderType {
 
 /// Cell content type for table content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
 pub enum TableCellContentType {
     /// Unknown content.
@@ -164,6 +169,7 @@ impl From<u8> for TableCellContentType {
 
 /// Cell style type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
 pub enum CellStyleType {
     /// Cell style.
@@ -194,6 +200,7 @@ impl From<u8> for CellStyleType {
 
 /// Break flow direction for table breaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
 pub enum BreakFlowDirection {
     /// Break to the right.
@@ -223,6 +230,7 @@ impl From<u8> for BreakFlowDirection {
 bitflags! {
     /// Cell edge flags indicating which borders to affect.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct CellEdgeFlags: u32 {
         /// No edges.
         const NONE = 0;
@@ -246,6 +254,7 @@ bitflags! {
 bitflags! {
     /// Cell state flags.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct CellStateFlags: u32 {
         /// No state.
         const NONE = 0;
@@ -269,6 +278,7 @@ bitflags! {
 bitflags! {
     /// Cell style property override flags.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct CellStylePropertyFlags: u32 {
         /// No properties.
         const NONE = 0;
@@ -316,6 +326,7 @@ bitflags! {
 bitflags! {
     /// Border property override flags.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct BorderPropertyFlags: u32 {
         /// No properties.
         const NONE = 0;
@@ -339,6 +350,7 @@ bitflags! {
 bitflags! {
     /// Content layout flags.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct ContentLayoutFlags: u32 {
         /// No layout.
         const NONE = 0;
@@ -354,6 +366,7 @@ bitflags! {
 bitflags! {
     /// Break option flags.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct BreakOptionFlags: u32 {
         /// No options.
         const NONE = 0;
@@ -376,6 +389,7 @@ bitflags! {
 
 /// Border definition for a cell edge.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CellBorder {
     /// Border type.
     pub border_type: BorderType,
@@ -432,6 +446,7 @@ impl Default for CellBorder {
 
 /// Value stored in a table cell.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CellValue {
     /// Value type.
     pub value_type: CellValueType,
@@ -537,6 +552,7 @@ impl Default for CellValue {
 
 /// Content within a table cell.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CellContent {
     /// Content type.
     pub content_type: TableCellContentType,
@@ -612,6 +628,7 @@ impl Default for CellContent {
 
 /// Style applied to a table cell.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CellStyle {
     /// Style type.
     pub style_type: CellStyleType,
@@ -707,6 +724,7 @@ impl Default for CellStyle {
 
 /// A cell in a table.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TableCell {
     /// Cell type (text or block).
     pub cell_type: CellType,
@@ -821,6 +839,7 @@ impl Default for TableCell {
 
 /// A row in a table.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TableRow {
     /// Row height.
     pub height: f64,
@@ -883,6 +902,7 @@ impl Default for TableRow {
 
 /// A column definition in a table.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TableColumn {
     /// Column name.
     pub name: String,
@@ -938,6 +958,7 @@ impl Default for TableColumn {
 
 /// A range of cells in a table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CellRange {
     /// Top row index.
     pub top_row: usize,
@@ -1028,6 +1049,7 @@ impl Default for CellRange {
 /// table.set_cell_text(1, 2, "mm");
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Table {
     /// Common entity data.
     pub common: EntityCommon,
@@ -1347,6 +1369,7 @@ impl Entity for Table {
 
 /// Builder for Table entities.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TableBuilder {
     table: Table,
 }

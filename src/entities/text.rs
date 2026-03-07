@@ -5,6 +5,7 @@ use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transparency, Vecto
 
 /// Text horizontal alignment
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TextHorizontalAlignment {
     /// Left aligned
     Left,
@@ -22,6 +23,7 @@ pub enum TextHorizontalAlignment {
 
 /// Text vertical alignment
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TextVerticalAlignment {
     /// Baseline
     Baseline,
@@ -35,6 +37,7 @@ pub enum TextVerticalAlignment {
 
 /// A single-line text entity
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Text {
     /// Common entity data
     pub common: EntityCommon,

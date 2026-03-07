@@ -5,6 +5,7 @@ use crate::types::{Handle, Vector3};
 
 /// A view table entry
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct View {
     /// Unique handle
     pub handle: Handle,

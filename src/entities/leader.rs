@@ -5,6 +5,7 @@ use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transparency, Vecto
 
 /// Leader path type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum LeaderPathType {
     /// Straight line segments
     #[default]
@@ -30,6 +31,7 @@ impl LeaderPathType {
 
 /// Leader creation type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum LeaderCreationType {
     /// Created with text annotation
     #[default]
@@ -61,6 +63,7 @@ impl LeaderCreationType {
 
 /// Hookline direction
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum HooklineDirection {
     /// Direction opposite to horizontal
     #[default]
@@ -105,6 +108,7 @@ impl HooklineDirection {
 /// leader.add_vertex(Vector3::new(20.0, 10.0, 0.0));  // End at annotation
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Leader {
     /// Common entity properties
     pub common: EntityCommon,

@@ -16,6 +16,7 @@ use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transform, Transpar
 /// Preserves the DXF type name (e.g. `"ACAD_PROXY_ENTITY"`) and common entity
 /// properties.  Entity-specific codes are discarded.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct UnknownEntity {
     /// Common entity data (handle, layer, color, reactors, …).
     pub common: EntityCommon,

@@ -31,6 +31,7 @@ use crate::types::Handle;
 /// assert!((scale.factor() - 0.02).abs() < 1e-10);
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Scale {
     /// Object handle.
     pub handle: Handle,

@@ -18,6 +18,7 @@ use super::safe_count;
 
 /// Parsed table control object data.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TableControlData {
     /// Entry count
     pub entry_count: i32,
@@ -27,6 +28,7 @@ pub struct TableControlData {
 
 /// Parsed BLOCK_CONTROL data (special — has *Model_Space and *Paper_Space).
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BlockControlData {
     /// Regular entry count (excludes *Model_Space, *Paper_Space)
     pub entry_count: i32,
@@ -40,6 +42,7 @@ pub struct BlockControlData {
 
 /// Parsed LAYER data.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LayerData {
     pub name: String,
     pub frozen: bool,
@@ -58,6 +61,7 @@ pub struct LayerData {
 
 /// Parsed text STYLE data.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextStyleData {
     pub name: String,
     pub is_shape_file: bool,
@@ -74,6 +78,7 @@ pub struct TextStyleData {
 
 /// Parsed LTYPE data.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LinetypeData {
     pub name: String,
     pub description: String,
@@ -86,6 +91,7 @@ pub struct LinetypeData {
 
 /// A single dash/dot/space segment in a linetype.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LinetypeSegment {
     pub length: f64,
     pub shape_number: i16,
@@ -98,6 +104,7 @@ pub struct LinetypeSegment {
 
 /// Parsed VIEW data.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ViewData {
     pub name: String,
     pub height: f64,
@@ -120,6 +127,7 @@ pub struct ViewData {
 
 /// Parsed UCS data.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct UcsData {
     pub name: String,
     pub origin: Vector3,
@@ -133,6 +141,7 @@ pub struct UcsData {
 
 /// Parsed VPORT data.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct VPortData {
     pub name: String,
     pub view_height: f64,
@@ -164,6 +173,7 @@ pub struct VPortData {
 
 /// Parsed APPID data.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AppIdData {
     pub name: String,
     pub unknown_byte: u8,
@@ -172,6 +182,7 @@ pub struct AppIdData {
 
 /// Parsed DIMSTYLE data.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DimStyleData {
     pub name: String,
     // We store all the dimstyle fields
@@ -244,6 +255,7 @@ pub struct DimStyleData {
 
 /// Parsed BLOCK_HEADER (block record) data.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BlockHeaderData {
     pub name: String,
     pub anonymous: bool,
@@ -938,6 +950,7 @@ pub fn read_block_header(
 
 /// Parsed VPORT_ENTITY_CONTROL data (R13-R14 viewport entity control, type 70).
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct VPortEntityControlData {
     /// Entry count
     pub entry_count: i32,
@@ -947,6 +960,7 @@ pub struct VPortEntityControlData {
 
 /// Parsed VPORT_ENTITY_HEADER data (R13-R14 viewport entity header, type 71).
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct VPortEntityHeaderData {
     pub name: String,
     /// Flag bit

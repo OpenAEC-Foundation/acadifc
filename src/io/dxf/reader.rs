@@ -20,6 +20,7 @@ use std::path::Path;
 
 /// Configuration for the DXF reader.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DxfReaderConfiguration {
     /// When `true`, parse errors within individual entities/objects/sections
     /// are caught and reported as notifications instead of aborting the read.

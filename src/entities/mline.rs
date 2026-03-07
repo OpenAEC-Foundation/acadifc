@@ -15,6 +15,7 @@ use std::f64::consts::PI;
 
 /// Justification for MLine entity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(i16)]
 pub enum MLineJustification {
     /// Justify to top line.
@@ -44,6 +45,7 @@ impl From<i16> for MLineJustification {
 bitflags! {
     /// Flags for MLine entity.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct MLineFlags: i16 {
         /// Has at least one vertex.
         const HAS_VERTICES = 1;
@@ -59,6 +61,7 @@ bitflags! {
 bitflags! {
     /// Flags for MLineStyle.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct MLineStyleFlags: i16 {
         /// No flags.
         const NONE = 0;
@@ -87,6 +90,7 @@ bitflags! {
 
 /// An element (parallel line) in an MLineStyle.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MLineStyleElement {
     /// Offset from center line.
     /// Positive values are above/left, negative are below/right.
@@ -136,6 +140,7 @@ impl Default for MLineStyleElement {
 /// - Cap styles (square, round, inner arcs)
 /// - Fill color and visibility
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MLineStyle {
     /// Object handle.
     pub handle: Handle,
@@ -262,6 +267,7 @@ impl Default for MLineStyle {
 
 /// Segment data for one element at a vertex.
 #[derive(Debug, Clone, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MLineSegment {
     /// Segment parameters (distances along the mline element).
     pub parameters: Vec<f64>,
@@ -295,6 +301,7 @@ impl MLineSegment {
 
 /// A vertex in an MLine entity.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MLineVertex {
     /// Vertex position in WCS.
     pub position: Vector3,
@@ -377,6 +384,7 @@ impl Default for MLineVertex {
 /// mline.add_vertex(Vector3::new(10.0, 10.0, 0.0));
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MLine {
     /// Common entity data.
     pub common: EntityCommon,
@@ -690,6 +698,7 @@ impl Entity for MLine {
 
 /// Builder for MLine entities.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MLineBuilder {
     mline: MLine,
 }

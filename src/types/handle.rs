@@ -9,6 +9,7 @@ use std::fmt;
 /// Handles are 64-bit unsigned integers that uniquely identify
 /// objects within a CAD document. Handle 0 is reserved and invalid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Handle(u64);
 
 impl Handle {

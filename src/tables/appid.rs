@@ -5,6 +5,7 @@ use crate::types::Handle;
 
 /// An application ID table entry (for extended data)
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AppId {
     /// Unique handle
     pub handle: Handle,

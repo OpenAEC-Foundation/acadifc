@@ -5,6 +5,7 @@ use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transparency, Vecto
 
 /// Hatch pattern type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum HatchPatternType {
     /// User-defined pattern
     UserDefined = 0,
@@ -16,6 +17,7 @@ pub enum HatchPatternType {
 
 /// Hatch style type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum HatchStyleType {
     /// Hatch "odd parity" area (normal)
     Normal = 0,
@@ -27,6 +29,7 @@ pub enum HatchStyleType {
 
 /// Boundary path flags
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BoundaryPathFlags {
     bits: u32,
 }
@@ -110,6 +113,7 @@ impl Default for BoundaryPathFlags {
 
 /// Edge type for boundary paths
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum EdgeType {
     Polyline = 0,
     Line = 1,
@@ -120,6 +124,7 @@ pub enum EdgeType {
 
 /// Line edge in a boundary path
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LineEdge {
     /// Start point (in OCS)
     pub start: Vector2,
@@ -129,6 +134,7 @@ pub struct LineEdge {
 
 /// Circular arc edge in a boundary path
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CircularArcEdge {
     /// Center point (in OCS)
     pub center: Vector2,
@@ -144,6 +150,7 @@ pub struct CircularArcEdge {
 
 /// Elliptic arc edge in a boundary path
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EllipticArcEdge {
     /// Center point (in OCS)
     pub center: Vector2,
@@ -161,6 +168,7 @@ pub struct EllipticArcEdge {
 
 /// Spline edge in a boundary path
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SplineEdge {
     /// Degree of the spline
     pub degree: i32,
@@ -182,6 +190,7 @@ pub struct SplineEdge {
 
 /// Polyline edge in a boundary path
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PolylineEdge {
     /// Vertices (X, Y, bulge)
     pub vertices: Vec<Vector3>,
@@ -211,6 +220,7 @@ impl PolylineEdge {
 
 /// Boundary path edge
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BoundaryEdge {
     Line(LineEdge),
     CircularArc(CircularArcEdge),
@@ -221,6 +231,7 @@ pub enum BoundaryEdge {
 
 /// Boundary path for a hatch
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BoundaryPath {
     /// Boundary path flags
     pub flags: BoundaryPathFlags,
@@ -284,6 +295,7 @@ impl Default for BoundaryPath {
 
 /// Hatch pattern line
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HatchPatternLine {
     /// Pattern line angle in radians
     pub angle: f64,
@@ -297,6 +309,7 @@ pub struct HatchPatternLine {
 
 /// Hatch pattern
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HatchPattern {
     /// Pattern name
     pub name: String,
@@ -340,6 +353,7 @@ impl HatchPattern {
 
 /// Gradient color with value
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GradientColorEntry {
     /// Gradient value (position 0.0 - 1.0)
     pub value: f64,
@@ -349,6 +363,7 @@ pub struct GradientColorEntry {
 
 /// Gradient color pattern
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HatchGradientPattern {
     /// Gradient is enabled
     pub enabled: bool,
@@ -403,6 +418,7 @@ impl Default for HatchGradientPattern {
 ///
 /// Represents a filled or patterned area defined by boundary paths.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Hatch {
     pub common: EntityCommon,
     /// Elevation of the hatch

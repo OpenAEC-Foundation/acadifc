@@ -21,6 +21,7 @@ use crate::types::Handle;
 /// group.add_entity(Handle::new(101));
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Group {
     /// Unique handle
     pub handle: Handle,

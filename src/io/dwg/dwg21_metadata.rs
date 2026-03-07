@@ -20,6 +20,7 @@ use crate::error::DxfError;
 /// little-endian unsigned 64-bit integers. The total structure
 /// is 0x110 (272) bytes = 34 × 8 bytes.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Dwg21CompressedMetadata {
     /// Header size (expected: 0x70)
     pub header_size: u64,

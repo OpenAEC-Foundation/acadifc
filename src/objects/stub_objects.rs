@@ -20,6 +20,7 @@ pub trait StubObject {
 
 /// VisualStyle object — named visual rendering style
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct VisualStyle {
     /// Unique handle
     pub handle: Handle,
@@ -70,6 +71,7 @@ impl Default for VisualStyle {
 
 /// Material object — named material for 3D rendering
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Material {
     /// Unique handle
     pub handle: Handle,
@@ -99,6 +101,7 @@ impl Default for Material {
 
 /// GeoData — geographic location data for a drawing
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GeoData {
     /// Unique handle
     pub handle: Handle,
@@ -128,6 +131,7 @@ impl Default for GeoData {
 
 /// SpatialFilter — clip boundary for external references
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SpatialFilter {
     /// Unique handle
     pub handle: Handle,
@@ -151,6 +155,7 @@ impl Default for SpatialFilter {
 
 /// RasterVariables — global raster image settings
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RasterVariables {
     /// Unique handle
     pub handle: Handle,
@@ -186,6 +191,7 @@ impl Default for RasterVariables {
 
 /// BookColor (DBCOLOR) — named color definition
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BookColor {
     /// Unique handle
     pub handle: Handle,
@@ -215,6 +221,7 @@ impl Default for BookColor {
 
 /// AcDbPlaceHolder — placeholder object (no data beyond handle)
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PlaceHolder {
     /// Unique handle
     pub handle: Handle,
@@ -238,6 +245,7 @@ impl Default for PlaceHolder {
 
 /// DictionaryWithDefault — dictionary with a default entry handle
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DictionaryWithDefault {
     /// Unique handle
     pub handle: Handle,
@@ -273,6 +281,7 @@ impl Default for DictionaryWithDefault {
 
 /// WipeoutVariables — global wipeout display settings
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct WipeoutVariables {
     /// Unique handle
     pub handle: Handle,

@@ -6,6 +6,7 @@ use std::f64::consts::PI;
 
 /// Attribute flags
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AttributeFlags {
     /// Attribute is invisible
     pub invisible: bool,
@@ -49,6 +50,7 @@ impl AttributeFlags {
 
 /// Text horizontal alignment
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum HorizontalAlignment {
     /// Left alignment
     #[default]
@@ -86,6 +88,7 @@ impl HorizontalAlignment {
 
 /// Text vertical alignment
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum VerticalAlignment {
     /// Baseline alignment
     #[default]
@@ -117,6 +120,7 @@ impl VerticalAlignment {
 
 /// Multiline attribute type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MTextFlag {
     /// Single-line attribute
     #[default]
@@ -167,6 +171,7 @@ impl MTextFlag {
 /// attdef.height = 2.5;
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AttributeDefinition {
     /// Common entity properties
     pub common: EntityCommon,

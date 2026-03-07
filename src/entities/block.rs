@@ -8,6 +8,7 @@ use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transparency, Vecto
 /// A Block entity is the beginning marker for a block definition in the BLOCKS section.
 /// It contains the block's base point and other properties.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Block {
     pub common: EntityCommon,
     /// Block name (should match the BlockRecord name)
@@ -50,6 +51,7 @@ impl Block {
 /// A BlockEnd entity is the ending marker for a block definition in the BLOCKS section.
 /// It has no additional properties beyond the common entity properties.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BlockEnd {
     pub common: EntityCommon,
 }

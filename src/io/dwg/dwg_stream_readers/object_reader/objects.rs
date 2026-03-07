@@ -14,12 +14,14 @@ use super::safe_count;
 // ════════════════════════════════════════════════════════════════════════
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DictionaryEntry {
     pub name: String,
     pub handle: u64,
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DictionaryData {
     pub duplicate_cloning: i16,
     pub hard_owner: bool,
@@ -27,6 +29,7 @@ pub struct DictionaryData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DictionaryWithDefaultData {
     pub duplicate_cloning: i16,
     pub hard_owner: bool,
@@ -35,12 +38,14 @@ pub struct DictionaryWithDefaultData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DictionaryVariableData {
     pub schema_number: u8,
     pub value: String,
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PlotSettingsData {
     pub page_name: String,
     pub printer_name: String,
@@ -75,6 +80,7 @@ pub struct PlotSettingsData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LayoutData {
     pub plot_settings: PlotSettingsData,
     pub name: String,
@@ -98,6 +104,7 @@ pub struct LayoutData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GroupData {
     pub description: String,
     pub unnamed: i16,
@@ -106,6 +113,7 @@ pub struct GroupData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MLineStyleElementData {
     pub offset: f64,
     pub color: Color,
@@ -113,6 +121,7 @@ pub struct MLineStyleElementData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MLineStyleData {
     pub name: String,
     pub description: String,
@@ -124,6 +133,7 @@ pub struct MLineStyleData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MultiLeaderStyleData {
     pub content_type: i16,
     pub multileader_draw_order: i16,
@@ -172,6 +182,7 @@ pub struct MultiLeaderStyleData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ImageDefinitionData {
     pub class_version: i32,
     pub size_in_pixels: Vector2,
@@ -182,11 +193,13 @@ pub struct ImageDefinitionData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ImageDefinitionReactorData {
     pub class_version: i32,
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ScaleData {
     pub unknown_bs: i16,
     pub name: String,
@@ -196,18 +209,21 @@ pub struct ScaleData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SortEntitiesEntry {
     pub sort_handle: u64,
     pub entity_handle: u64,
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SortEntitiesTableData {
     pub entries: Vec<SortEntitiesEntry>,
     pub block_owner_handle: u64,
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct XRecordData {
     pub cloning_flags: i16,
     pub data_size: i32,
@@ -215,6 +231,7 @@ pub struct XRecordData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RasterVariablesData {
     pub class_version: i32,
     pub display_image_frame: i16,
@@ -223,12 +240,14 @@ pub struct RasterVariablesData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BookColorData {
     pub color_name: String,
     pub book_name: String,
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct WipeoutVariablesData {
     pub display_frame: i16,
 }

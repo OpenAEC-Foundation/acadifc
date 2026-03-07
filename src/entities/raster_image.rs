@@ -14,6 +14,7 @@ use bitflags::bitflags;
 
 /// Clipping mode for raster images.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
 pub enum ClipMode {
     /// Clip the outside (show inside the boundary).
@@ -35,6 +36,7 @@ impl From<u8> for ClipMode {
 
 /// Clipping boundary type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(i16)]
 pub enum ClipType {
     /// Rectangular clipping (two opposite corners).
@@ -56,6 +58,7 @@ impl From<i16> for ClipType {
 
 /// Resolution units for image definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
 pub enum ResolutionUnit {
     /// No units.
@@ -80,6 +83,7 @@ impl From<u8> for ResolutionUnit {
 
 /// Image display quality.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(i32)]
 pub enum ImageDisplayQuality {
     /// Draft quality (faster).
@@ -106,6 +110,7 @@ impl From<i32> for ImageDisplayQuality {
 bitflags! {
     /// Image display flags.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct ImageDisplayFlags: i16 {
         /// No flags.
         const NONE = 0;
@@ -126,6 +131,7 @@ bitflags! {
 
 /// Clipping boundary for a raster image.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ClipBoundary {
     /// Clipping type.
     pub clip_type: ClipType,
@@ -241,6 +247,7 @@ impl Default for ClipBoundary {
 /// image.contrast = 50;
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RasterImage {
     /// Common entity data.
     pub common: EntityCommon,
@@ -622,6 +629,7 @@ impl Entity for RasterImage {
 /// Stores the actual image file reference and properties.
 /// Multiple RasterImage entities can reference the same ImageDefinition.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ImageDefinition {
     /// Object handle.
     pub handle: Handle,
@@ -713,6 +721,7 @@ impl Default for ImageDefinition {
 
 /// Builder for RasterImage entities.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RasterImageBuilder {
     image: RasterImage,
 }

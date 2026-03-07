@@ -10,6 +10,7 @@ use std::fmt;
 /// - By layer: Use the layer's color
 /// - By block: Use the block's color
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Color {
     /// Color by layer (index 256)
     #[default]

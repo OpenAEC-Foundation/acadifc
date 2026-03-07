@@ -7,6 +7,7 @@ use std::fmt;
 /// Line weights are specified in millimeters (mm) or can be special values
 /// like ByLayer, ByBlock, or Default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum LineWeight {
     /// Use the layer's line weight
     #[default]

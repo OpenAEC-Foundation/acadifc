@@ -8,6 +8,7 @@ use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transparency, Vecto
 /// A Solid entity is a filled shape defined by 3 or 4 corner points.
 /// If only 3 corners are provided, the fourth corner is the same as the third.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Solid {
     pub common: EntityCommon,
     /// First corner point (in OCS)

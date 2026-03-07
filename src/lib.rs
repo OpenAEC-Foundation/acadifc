@@ -15,6 +15,46 @@
 //! - **Type safe** — strongly-typed entities, tables, and enums
 //! - **Failsafe mode** — error-tolerant parsing that collects diagnostics
 //! - **Encoding support** — automatic code page detection for pre-2007 files
+//! - **Serde support** — optional `Serialize`/`Deserialize` for all types (enable the `serde` feature)
+//!
+//! ## Feature Flags
+//!
+//! | Feature | Description |
+//! |---------|-------------|
+//! | `serde` | Enables `serde::Serialize` and `serde::Deserialize` on all document types |
+//!
+//! ```toml
+//! [dependencies]
+//! acadrust = { version = "0.2.5", features = ["serde"] }
+//! ```
+//!
+//! ### Serialize an entity to JSON
+//!
+//! ```rust,ignore
+//! use acadrust::entities::Line;
+//!
+//! let line = Line::from_coords(0.0, 0.0, 0.0, 100.0, 50.0, 0.0);
+//! let json = serde_json::to_string_pretty(&line).unwrap();
+//! println!("{json}");
+//! ```
+//!
+//! ### Round-trip a full document
+//!
+//! ```rust,ignore
+//! use acadrust::{CadDocument, DxfReader};
+//!
+//! let doc = DxfReader::from_file("input.dxf")?.read()?;
+//!
+//! // Serialize
+//! let json = serde_json::to_string(&doc).unwrap();
+//!
+//! // Deserialize
+//! let doc2: CadDocument = serde_json::from_str(&json).unwrap();
+//! assert_eq!(doc2.entities().count(), doc.entities().count());
+//! ```
+//!
+//! See the [`examples/serde_json.rs`](https://github.com/hakanaktt/acadrust/blob/main/examples/serde_json.rs)
+//! example for more patterns including web-API-style entity lists.
 //!
 //! ## Quick Start — DXF
 //!

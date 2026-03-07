@@ -8,6 +8,7 @@ use std::fmt;
 /// - 0 = fully opaque (0% transparent)
 /// - 255 = fully transparent (100% transparent)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Transparency(u8);
 
 impl Transparency {

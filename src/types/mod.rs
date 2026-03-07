@@ -29,6 +29,7 @@ pub use vector::{Vector2, Vector3};
 
 /// DXF version enumeration
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DxfVersion {
     /// Unknown version
     Unknown,

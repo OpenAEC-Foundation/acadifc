@@ -35,6 +35,7 @@ fn safe_count(raw: i32) -> i32 {
 
 /// Result of reading a single object record's common data.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ObjectCommonData {
     /// DWG type code (fixed 0–82 or class number 500+)
     pub type_code: i16,
@@ -46,6 +47,7 @@ pub struct ObjectCommonData {
 
 /// Common entity data read from the entity preamble.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EntityCommonData {
     /// Base common data (type + handle + xdata)
     pub common: ObjectCommonData,
@@ -81,6 +83,7 @@ pub struct EntityCommonData {
 
 /// Common non-entity object data.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct NonEntityCommonData {
     /// Base common data (type + handle + xdata)
     pub common: ObjectCommonData,

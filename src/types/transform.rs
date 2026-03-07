@@ -8,6 +8,7 @@ use std::ops::Mul;
 
 /// 3x3 matrix for 2D transformations and rotations
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Matrix3 {
     /// Matrix elements stored in row-major order
     pub m: [[f64; 3]; 3],
@@ -185,6 +186,7 @@ impl Default for Matrix3 {
 
 /// 4x4 transformation matrix for 3D operations
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Matrix4 {
     /// Matrix elements stored in row-major order
     pub m: [[f64; 4]; 4],
@@ -398,6 +400,7 @@ impl Default for Matrix4 {
 
 /// Transform structure combining rotation, scaling, and translation
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Transform {
     /// The 4x4 transformation matrix
     pub matrix: Matrix4,

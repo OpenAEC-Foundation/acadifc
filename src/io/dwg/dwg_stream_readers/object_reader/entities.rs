@@ -15,6 +15,7 @@ use super::safe_count;
 // ════════════════════════════════════════════════════════════════════════
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PointData {
     pub location: Vector3,
     pub thickness: f64,
@@ -23,6 +24,7 @@ pub struct PointData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LineData {
     pub start: Vector3,
     pub end: Vector3,
@@ -31,6 +33,7 @@ pub struct LineData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CircleData {
     pub center: Vector3,
     pub radius: f64,
@@ -39,6 +42,7 @@ pub struct CircleData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ArcData {
     pub center: Vector3,
     pub radius: f64,
@@ -49,6 +53,7 @@ pub struct ArcData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EllipseData {
     pub center: Vector3,
     pub major_axis: Vector3,
@@ -59,18 +64,21 @@ pub struct EllipseData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RayData {
     pub base_point: Vector3,
     pub direction: Vector3,
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct XLineData {
     pub base_point: Vector3,
     pub direction: Vector3,
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SolidData {
     pub thickness: f64,
     pub elevation: f64,
@@ -82,6 +90,7 @@ pub struct SolidData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Face3DData {
     pub first_corner: Vector3,
     pub second_corner: Vector3,
@@ -91,6 +100,7 @@ pub struct Face3DData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct InsertData {
     pub insert_point: Vector3,
     pub x_scale: f64,
@@ -103,6 +113,7 @@ pub struct InsertData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LwPolylineVertex {
     pub x: f64,
     pub y: f64,
@@ -112,6 +123,7 @@ pub struct LwPolylineVertex {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LwPolylineData {
     pub flag: i16,
     pub constant_width: f64,
@@ -122,6 +134,7 @@ pub struct LwPolylineData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SplineData {
     pub scenario: i32,
     pub degree: i32,
@@ -140,6 +153,7 @@ pub struct SplineData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextEntityData {
     pub insertion_point: Vector3,
     pub alignment_point: Vector3,
@@ -157,6 +171,7 @@ pub struct TextEntityData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MTextData {
     pub insertion_point: Vector3,
     pub normal: Vector3,
@@ -177,6 +192,7 @@ pub struct MTextData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ShapeData {
     pub insertion_point: Vector3,
     pub size: f64,
@@ -190,6 +206,7 @@ pub struct ShapeData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LeaderData {
     pub unknown_bit: bool,
     pub annotation_type: i16,
@@ -209,6 +226,7 @@ pub struct LeaderData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ToleranceData {
     pub insertion_point: Vector3,
     pub direction: Vector3,
@@ -735,6 +753,7 @@ pub fn read_tolerance(reader: &mut DwgMergedReader, version: DwgVersion) -> Tole
 // ════════════════════════════════════════════════════════════════════════
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DimensionCommonData {
     pub version_byte: u8,
     pub normal: Vector3,
@@ -758,6 +777,7 @@ pub struct DimensionCommonData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DimensionLinearData {
     pub common: DimensionCommonData,
     pub first_point: Vector3,
@@ -768,6 +788,7 @@ pub struct DimensionLinearData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DimensionAlignedData {
     pub common: DimensionCommonData,
     pub first_point: Vector3,
@@ -777,6 +798,7 @@ pub struct DimensionAlignedData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DimensionRadiusData {
     pub common: DimensionCommonData,
     pub definition_point: Vector3,
@@ -785,6 +807,7 @@ pub struct DimensionRadiusData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DimensionDiameterData {
     pub common: DimensionCommonData,
     pub definition_point: Vector3,
@@ -793,6 +816,7 @@ pub struct DimensionDiameterData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DimensionAngular2LnData {
     pub common: DimensionCommonData,
     pub dimension_arc: Vector2,
@@ -803,6 +827,7 @@ pub struct DimensionAngular2LnData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DimensionAngular3PtData {
     pub common: DimensionCommonData,
     pub definition_point: Vector3,
@@ -812,6 +837,7 @@ pub struct DimensionAngular3PtData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DimensionOrdinateData {
     pub common: DimensionCommonData,
     pub definition_point: Vector3,
@@ -821,20 +847,28 @@ pub struct DimensionOrdinateData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HatchBoundaryEdgeLine { pub start: Vector2, pub end: Vector2 }
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HatchBoundaryEdgeArc { pub center: Vector2, pub radius: f64, pub start_angle: f64, pub end_angle: f64, pub ccw: bool }
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HatchBoundaryEdgeEllipse { pub center: Vector2, pub major_endpoint: Vector2, pub minor_ratio: f64, pub start_angle: f64, pub end_angle: f64, pub ccw: bool }
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HatchBoundaryEdgeSpline { pub degree: i32, pub rational: bool, pub periodic: bool, pub knots: Vec<f64>, pub control_points: Vec<Vector3>, pub fit_points: Vec<Vector2>, pub start_tangent: Vector2, pub end_tangent: Vector2 }
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum HatchEdge { Line(HatchBoundaryEdgeLine), Arc(HatchBoundaryEdgeArc), Ellipse(HatchBoundaryEdgeEllipse), Spline(HatchBoundaryEdgeSpline) }
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HatchBoundaryPath { pub flags: i32, pub edges: Vec<HatchEdge>, pub polyline_vertices: Vec<(Vector2, f64)>, pub polyline_closed: bool, pub boundary_handle_count: i32 }
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HatchPatternLine { pub angle: f64, pub base_point: Vector2, pub offset: Vector2, pub dashes: Vec<f64> }
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HatchData {
     pub gradient_enabled: bool,
     pub elevation: f64,
@@ -854,6 +888,7 @@ pub struct HatchData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ViewportData {
     pub center: Vector3,
     pub width: f64,
@@ -877,6 +912,7 @@ pub struct ViewportData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Polyline2DData {
     pub flags: i16,
     pub start_width: f64,
@@ -888,6 +924,7 @@ pub struct Polyline2DData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Vertex2DData {
     pub flags: u8,
     pub x: f64, pub y: f64, pub z: f64,
@@ -899,6 +936,7 @@ pub struct Vertex2DData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Polyline3DData {
     pub smooth_type: u8,
     pub closed_flag: u8,
@@ -906,12 +944,14 @@ pub struct Polyline3DData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Vertex3DData {
     pub flags: u8,
     pub position: Vector3,
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MLineVertexData {
     pub position: Vector3,
     pub direction: Vector3,
@@ -920,12 +960,14 @@ pub struct MLineVertexData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MLineSegmentData {
     pub parameters: Vec<f64>,
     pub area_fill_parameters: Vec<f64>,
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MLineData {
     pub scale_factor: f64,
     pub justification: u8,
@@ -939,6 +981,7 @@ pub struct MLineData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MeshData {
     pub version: i16,
     pub blend_crease: bool,
@@ -950,6 +993,7 @@ pub struct MeshData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RasterImageData {
     pub class_version: i32,
     pub insertion_point: Vector3,
@@ -968,6 +1012,7 @@ pub struct RasterImageData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Ole2FrameData {
     pub version: i16,
     pub mode: i16,
@@ -975,6 +1020,7 @@ pub struct Ole2FrameData {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AttributeCommonData {
     pub text_data: TextEntityData,
     pub att_version: u8,
@@ -1564,6 +1610,7 @@ pub fn read_attribute_entity(reader: &mut DwgMergedReader, version: DwgVersion, 
 
 /// Data returned by the multileader reader.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MultiLeaderData {
     pub context: MultiLeaderAnnotContext,
     pub style_handle: u64,

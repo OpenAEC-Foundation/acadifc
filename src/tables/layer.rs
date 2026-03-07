@@ -5,6 +5,7 @@ use crate::types::{Color, Handle, LineWeight};
 
 /// Layer flags
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LayerFlags {
     /// Layer is frozen
     pub frozen: bool,
@@ -38,6 +39,7 @@ impl Default for LayerFlags {
 
 /// A layer table entry
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Layer {
     /// Unique handle
     pub handle: Handle,

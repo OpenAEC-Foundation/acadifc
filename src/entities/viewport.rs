@@ -5,6 +5,7 @@ use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transparency, Vecto
 
 /// Viewport status flags
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ViewportStatusFlags {
     /// Viewport is on (visible)
     pub is_on: bool,
@@ -96,6 +97,7 @@ impl ViewportStatusFlags {
 
 /// Render mode for viewport display
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ViewportRenderMode {
     /// 2D Wireframe
     #[default]
@@ -136,6 +138,7 @@ impl ViewportRenderMode {
 
 /// Grid display flags
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GridFlags {
     /// Grid beyond limits
     pub beyond_limits: bool,
@@ -192,6 +195,7 @@ impl GridFlags {
 /// viewport.custom_scale = 0.5; // 1:2 scale
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Viewport {
     /// Common entity properties
     pub common: EntityCommon,
@@ -522,6 +526,7 @@ impl Viewport {
 
 /// Standard view directions
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StandardView {
     /// Top view (looking down Z)
     Top,

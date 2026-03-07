@@ -5,6 +5,7 @@ use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transparency, Vecto
 
 /// Invisible edge flags for Face3D
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct InvisibleEdgeFlags {
     bits: u8,
 }
@@ -90,6 +91,7 @@ impl Default for InvisibleEdgeFlags {
 /// A Face3D entity is a 3D surface defined by 3 or 4 corner points.
 /// Individual edges can be marked as invisible.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Face3D {
     pub common: EntityCommon,
     /// First corner point (in WCS)

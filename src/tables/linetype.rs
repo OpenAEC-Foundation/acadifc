@@ -5,6 +5,7 @@ use crate::types::Handle;
 
 /// Line type element (dash, dot, space)
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LineTypeElement {
     /// Length of the element (positive = dash, negative = space, 0 = dot)
     pub length: f64,
@@ -44,6 +45,7 @@ impl LineTypeElement {
 
 /// A line type table entry
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LineType {
     /// Unique handle
     pub handle: Handle,

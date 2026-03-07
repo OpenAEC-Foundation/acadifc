@@ -29,6 +29,7 @@ use std::f64::consts::PI;
 /// attrib.height = 2.5;
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AttributeEntity {
     /// Common entity properties
     pub common: EntityCommon,

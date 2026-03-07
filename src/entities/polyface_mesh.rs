@@ -15,6 +15,7 @@ use bitflags::bitflags;
 bitflags! {
     /// Polyline flags for polyface mesh.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct PolyfaceMeshFlags: i16 {
         /// No flags.
         const NONE = 0;
@@ -40,6 +41,7 @@ bitflags! {
 bitflags! {
     /// Vertex flags.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct PolyfaceVertexFlags: i16 {
         /// No flags.
         const NONE = 0;
@@ -62,6 +64,7 @@ bitflags! {
 
 /// Smooth surface type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(i16)]
 pub enum PolyfaceSmoothType {
     /// No smooth surface.
@@ -95,6 +98,7 @@ impl From<i16> for PolyfaceSmoothType {
 /// Represents a 3D vertex position in the mesh.
 /// DXF subclass: AcDbPolyFaceMeshVertex
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PolyfaceVertex {
     /// Common entity data (for DXF compatibility).
     pub common: EntityCommon,
@@ -168,6 +172,7 @@ impl Default for PolyfaceVertex {
 ///
 /// DXF subclass: AcDbFaceRecord
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PolyfaceFace {
     /// Common entity data (for DXF compatibility).
     pub common: EntityCommon,
@@ -367,6 +372,7 @@ impl Default for PolyfaceFace {
 /// mesh.add_face(PolyfaceFace::triangle(4, 1, 5)); // side 4
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PolyfaceMesh {
     /// Common entity data.
     pub common: EntityCommon,

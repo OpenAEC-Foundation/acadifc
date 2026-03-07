@@ -15,6 +15,7 @@ use bitflags::bitflags;
 bitflags! {
     /// Display flags for underlay entities.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct UnderlayDisplayFlags: u8 {
         /// No flags.
         const NONE = 0;
@@ -35,6 +36,7 @@ bitflags! {
 
 /// Type of underlay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum UnderlayType {
     /// PDF file underlay.
     #[default]
@@ -88,6 +90,7 @@ impl UnderlayType {
 /// This is a non-graphical object that stores the path to the external
 /// file and page/sheet information.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct UnderlayDefinition {
     /// Object handle.
     pub handle: Handle,
@@ -196,6 +199,7 @@ impl Default for UnderlayDefinition {
 /// Represents an underlay reference placed in the drawing.
 /// This is a common structure for PDF, DWF, and DGN underlays.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Underlay {
     /// Common entity data.
     pub common: EntityCommon,

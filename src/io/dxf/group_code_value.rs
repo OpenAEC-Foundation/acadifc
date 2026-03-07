@@ -6,6 +6,7 @@ use super::DxfCode;
 
 /// Type of value associated with a group code
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum GroupCodeValueType {
     /// No value or unknown
     None,

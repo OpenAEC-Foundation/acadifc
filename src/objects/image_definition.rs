@@ -4,6 +4,7 @@ use crate::types::Handle;
 
 /// Resolution unit for image definitions
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ResolutionUnit {
     /// No units specified
     #[default]
@@ -39,6 +40,7 @@ impl ResolutionUnit {
 ///
 /// Links an image definition to an image entity that references it.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ImageDefinitionReactor {
     /// Unique handle
     pub handle: Handle,
@@ -79,6 +81,7 @@ impl ImageDefinitionReactor {
 /// img_def.pixel_size = (0.01, 0.01); // 0.01 units per pixel
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ImageDefinition {
     /// Unique handle
     pub handle: Handle,

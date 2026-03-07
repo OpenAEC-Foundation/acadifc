@@ -1,4 +1,4 @@
-# acadrust 0.2.5
+# acadrust 0.2.6
 
 [![Crates.io](https://img.shields.io/crates/v/acadrust.svg)](https://crates.io/crates/acadrust)
 [![Documentation](https://docs.rs/acadrust/badge.svg)](https://docs.rs/acadrust)
@@ -166,13 +166,24 @@ Add acadrust to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-acadrust = "0.2.4"
+acadrust = "0.2.6"
 ```
 
 Or install via cargo:
 
 ```bash
 cargo add acadrust
+```
+
+### Optional Features
+
+| Feature | Description |
+|---------|-------------|
+| `serde` | Enables `Serialize` / `Deserialize` on all document types for JSON, YAML, etc. |
+
+```toml
+[dependencies]
+acadrust = { version = "0.2.5", features = ["serde"] }
 ```
 
 ---
@@ -252,6 +263,58 @@ fn main() -> acadrust::Result<()> {
     Ok(())
 }
 ```
+
+### Serialization (optional `serde` feature)
+
+Serialize individual entities:
+
+```rust
+use acadrust::entities::Line;
+
+let line = Line::from_coords(0.0, 0.0, 0.0, 100.0, 50.0, 0.0);
+let json = serde_json::to_string_pretty(&line).unwrap();
+println!("{json}");
+```
+
+Round-trip a full document:
+
+```rust
+use acadrust::{CadDocument, DxfReader};
+
+fn main() -> acadrust::Result<()> {
+    let doc = DxfReader::from_file("drawing.dxf")?.read()?;
+
+    // Serialize the entire document to JSON
+    let json = serde_json::to_string_pretty(&doc).unwrap();
+
+    // Deserialize back
+    let doc2: CadDocument = serde_json::from_str(&json).unwrap();
+    println!("Entities: {}", doc2.entities().count());
+
+    Ok(())
+}
+```
+
+Extract entities as a JSON array for a web API:
+
+```rust
+use acadrust::{CadDocument, DxfReader};
+use acadrust::entities::EntityType;
+
+fn main() -> acadrust::Result<()> {
+    let doc = DxfReader::from_file("drawing.dxf")?.read()?;
+    let entities: Vec<&EntityType> = doc.entities().collect();
+    let api_response = serde_json::to_string_pretty(&entities).unwrap();
+    println!("{api_response}");
+    Ok(())
+}
+```
+
+All entities, tables, objects, and types implement `Serialize` and `Deserialize`
+when the `serde` feature is enabled, making it easy to build web APIs, store
+drawings in databases, or convert between formats.
+
+See the full example: [`examples/serde_json.rs`](examples/serde_json.rs)
 
 ### Reading a DWG File
 
@@ -439,6 +502,7 @@ acadrust is built on a foundation of high-quality Rust crates:
 | `bitflags` | Type-safe bitflags |
 | `once_cell` | Lazy static initialization |
 | `ahash` | Fast hashing |
+| `serde` | Serialization/deserialization (optional) |
 
 ---
 
@@ -497,6 +561,7 @@ cargo bench
 - [x] DWG binary write (R13, R14, R2000, R2004, R2007, R2010, R2013, R2018)
 - [x] DWG binary read (R13 through R2018)
 - [x] 208/208 roundtrip data integrity (0 field drift across all entity types × all versions)
+- [x] Optional serde support (`Serialize` / `Deserialize` for all types)
 - [ ] Geometric operations (offset, trim, extend)
 - [ ] SVG/PDF export
 - [ ] Spatial indexing for large drawings

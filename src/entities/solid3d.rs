@@ -13,6 +13,7 @@ use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transparency, Vecto
 
 /// Wire type for wireframe display.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
 pub enum WireType {
     /// Unknown wire type.
@@ -48,6 +49,7 @@ impl From<u8> for WireType {
 ///
 /// Provides display geometry without requiring full ACIS parsing.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Wire {
     /// ACIS entity index this wire belongs to.
     pub acis_index: i32,
@@ -156,6 +158,7 @@ impl Default for Wire {
 ///
 /// Provides pre-computed silhouette curves for different view directions.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Silhouette {
     /// Viewport identifier.
     pub viewport_id: i64,
@@ -219,6 +222,7 @@ impl Default for Silhouette {
 
 /// ACIS/SAT data format version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
 pub enum AcisVersion {
     /// Version 1: SAT data with character encoding.
@@ -243,6 +247,7 @@ impl From<u8> for AcisVersion {
 /// The ACIS data represents the actual 3D solid geometry in Spatial
 /// Corporation's proprietary format.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AcisData {
     /// Version of the modeler format.
     pub version: AcisVersion,
@@ -336,6 +341,7 @@ impl Default for AcisData {
 /// }
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Solid3D {
     /// Common entity data.
     pub common: EntityCommon,
@@ -584,6 +590,7 @@ impl Entity for Solid3D {
 /// Represents a 2D enclosed area stored in ACIS format.
 /// Similar to Solid3D but for 2D geometry.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Region {
     /// Common entity data.
     pub common: EntityCommon,
@@ -742,6 +749,7 @@ impl Entity for Region {
 /// Represents a 3D body stored in ACIS format.
 /// Similar to Solid3D but a different entity type.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Body {
     /// Common entity data.
     pub common: EntityCommon,

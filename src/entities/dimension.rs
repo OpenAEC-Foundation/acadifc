@@ -5,6 +5,7 @@ use crate::types::Vector3;
 
 /// Dimension type flags
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DimensionType {
     /// Rotated, horizontal, or vertical linear dimension
     Linear = 0,
@@ -24,6 +25,7 @@ pub enum DimensionType {
 
 /// Attachment point type for dimension text
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum AttachmentPointType {
     TopLeft = 1,
     TopCenter = 2,
@@ -41,6 +43,7 @@ pub enum AttachmentPointType {
 /// All dimension types share common properties and behavior.
 /// Specific dimension types extend this base with additional properties.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DimensionBase {
     pub common: EntityCommon,
     /// Definition point for the dimension line (in WCS)
@@ -135,6 +138,7 @@ impl Default for DimensionBase {
 /// 
 /// Measures the distance between two points along a line parallel to those points.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DimensionAligned {
     pub base: DimensionBase,
     /// First definition point (in WCS)
@@ -199,6 +203,7 @@ impl Default for DimensionAligned {
 /// Measures the horizontal or vertical distance between two points,
 /// or the distance along a rotated axis.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DimensionLinear {
     pub base: DimensionBase,
     /// First definition point (in WCS)
@@ -281,6 +286,7 @@ impl Default for DimensionLinear {
 ///
 /// Measures the radius of a circle or arc.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DimensionRadius {
     pub base: DimensionBase,
     /// Definition point (point on arc/circle) - in WCS
@@ -326,6 +332,7 @@ impl Default for DimensionRadius {
 ///
 /// Measures the diameter of a circle or arc.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DimensionDiameter {
     pub base: DimensionBase,
     /// Definition point (opposite side of diameter) - in WCS
@@ -376,6 +383,7 @@ impl Default for DimensionDiameter {
 ///
 /// Measures the angle between two lines.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DimensionAngular2Ln {
     pub base: DimensionBase,
     /// Arc definition point (dimension arc location) - in WCS
@@ -444,6 +452,7 @@ pub type DimensionAngular2Line = DimensionAngular2Ln;
 ///
 /// Measures the angle defined by three points.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DimensionAngular3Pt {
     pub base: DimensionBase,
     /// Definition point (arc location) - in WCS
@@ -508,6 +517,7 @@ pub type DimensionAngular3Point = DimensionAngular3Pt;
 ///
 /// Measures the X or Y ordinate of a point.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DimensionOrdinate {
     pub base: DimensionBase,
     /// Definition point (origin) - in WCS
@@ -573,6 +583,7 @@ impl Default for DimensionOrdinate {
 
 /// Unified dimension enum for all dimension types
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Dimension {
     Aligned(DimensionAligned),
     Linear(DimensionLinear),

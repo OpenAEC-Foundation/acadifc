@@ -41,6 +41,7 @@ use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transparency, Vecto
 /// shape.style_name = "MYSHAPES".to_string(); // TextStyle name
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Shape {
     /// Common entity data.
     pub common: EntityCommon,

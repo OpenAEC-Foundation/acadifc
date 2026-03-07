@@ -4,6 +4,7 @@ use crate::types::Handle;
 
 /// Dictionary cloning behavior flags
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DictionaryCloningFlags {
     /// Not applicable
     #[default]
@@ -46,6 +47,7 @@ impl DictionaryCloningFlags {
 
 /// Group code value type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum XRecordValueType {
     /// String value
     String,
@@ -112,6 +114,7 @@ impl XRecordValueType {
 
 /// XRecord entry value
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum XRecordValue {
     /// String value
     String(String),
@@ -189,6 +192,7 @@ impl XRecordValue {
 
 /// XRecord entry with group code and value
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct XRecordEntry {
     /// DXF group code (1-369, except 5 and 105)
     pub code: i32,
@@ -263,6 +267,7 @@ impl XRecordEntry {
 /// xrecord.add_int32(90, 42);
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct XRecord {
     /// Unique handle
     pub handle: Handle,

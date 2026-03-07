@@ -15,6 +15,7 @@ use bitflags::bitflags;
 bitflags! {
     /// Display flags for wipeout and raster image entities.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct WipeoutDisplayFlags: i16 {
         /// No flags.
         const NONE = 0;
@@ -33,6 +34,7 @@ bitflags! {
 
 /// Clipping boundary type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(i16)]
 pub enum WipeoutClipType {
     /// Rectangular clipping (2 vertices: opposite corners).
@@ -54,6 +56,7 @@ impl From<i16> for WipeoutClipType {
 
 /// Clipping mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
 pub enum WipeoutClipMode {
     /// Show inside the boundary, clip outside.
@@ -110,6 +113,7 @@ impl From<u8> for WipeoutClipMode {
 /// ]);
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Wipeout {
     /// Common entity data.
     pub common: EntityCommon,

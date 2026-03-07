@@ -5,6 +5,7 @@ use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transparency, Vecto
 
 /// Polyline flags (matches DXF group code 70)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PolylineFlags {
     bits: u16,
 }
@@ -75,6 +76,7 @@ impl std::ops::BitOrAssign for PolylineFlags {
 
 /// Vertex flags (matches DXF group code 70)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct VertexFlags {
     bits: u8,
 }
@@ -103,6 +105,7 @@ impl VertexFlags {
 
 /// Smooth surface type (matches DXF group code 75)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SmoothSurfaceType {
     #[default]
     None = 0,
@@ -124,6 +127,7 @@ impl From<i16> for SmoothSurfaceType {
 
 /// A vertex in a 2D polyline
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Vertex2D {
     /// Location of the vertex (X, Y in OCS, Z is elevation)
     pub location: Vector3,
@@ -172,6 +176,7 @@ impl Vertex2D {
 
 /// A vertex in a 3D polyline
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Vertex3D {
     /// Location of the vertex
     pub location: Vector3,
@@ -196,6 +201,7 @@ impl Vertex3D {
 
 /// A 2D polyline entity (heavy polyline with vertices)
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Polyline2D {
     /// Common entity data
     pub common: EntityCommon,
@@ -253,6 +259,7 @@ impl Default for Polyline2D {
 
 /// A 3D polyline entity
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Polyline {
     /// Common entity data
     pub common: EntityCommon,

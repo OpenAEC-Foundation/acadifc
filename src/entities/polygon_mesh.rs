@@ -5,6 +5,7 @@ use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transform, Transpar
 
 /// Smooth surface type for polygon meshes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(i16)]
 pub enum SurfaceSmoothType {
     /// No smooth surface fitting
@@ -31,6 +32,7 @@ impl SurfaceSmoothType {
 
 /// A vertex in a polygon mesh
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PolygonMeshVertex {
     /// Common entity data
     pub common: EntityCommon,
@@ -68,6 +70,7 @@ impl Default for PolygonMeshVertex {
 bitflags::bitflags! {
     // Flags for polygon mesh (code 70)
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct PolygonMeshFlags: i16 {
         /// Closed in M direction
         const CLOSED_M = 1;
@@ -89,6 +92,7 @@ bitflags::bitflags! {
 /// In DXF this is a POLYLINE entity with flag bit 16 set
 /// and subclass marker `AcDbPolygonMesh`.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PolygonMesh {
     /// Common entity data
     pub common: EntityCommon,

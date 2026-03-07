@@ -8,6 +8,7 @@
 /// These codes appear in DXF files to indicate the type of data that follows.
 /// The codes are organized by range, with each range representing a specific data type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(i32)]
 pub enum DxfCode {
     /// Invalid code

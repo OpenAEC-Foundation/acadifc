@@ -19,6 +19,7 @@ use crate::error::DxfError;
 /// - AC21: Unicode text encoding (R2007) — RS-encoded pages, LZ77 AC21 compression, CRC-64
 /// - AC24: Compact object type encoding (R2010+)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DwgVersion {
     /// R13/R14 baseline
     AC12,

@@ -5,6 +5,7 @@ use std::fmt;
 
 /// 2D bounding box
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BoundingBox2D {
     /// Minimum point (lower-left corner)
     pub min: Vector2,
@@ -107,6 +108,7 @@ impl fmt::Display for BoundingBox2D {
 
 /// 3D bounding box
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BoundingBox3D {
     /// Minimum point (lower-left-back corner)
     pub min: Vector3,

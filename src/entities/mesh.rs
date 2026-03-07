@@ -12,6 +12,7 @@ use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transparency, Vecto
 
 /// An edge in a mesh, defined by two vertex indices.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MeshEdge {
     /// Index of the start vertex.
     pub start: usize,
@@ -93,6 +94,7 @@ impl Default for MeshEdge {
 ///
 /// Faces can have any number of vertices (3 for triangles, 4 for quads, etc.).
 #[derive(Debug, Clone, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MeshFace {
     /// Indices of vertices that form this face (in order).
     pub vertices: Vec<usize>,
@@ -212,6 +214,7 @@ impl From<Vec<usize>> for MeshFace {
 /// mesh.subdivision_level = 2;
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Mesh {
     /// Common entity data.
     pub common: EntityCommon,
@@ -725,6 +728,7 @@ impl Entity for Mesh {
 
 /// Builder for Mesh entities.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MeshBuilder {
     mesh: Mesh,
 }

@@ -49,6 +49,7 @@ const AC21_FILE_HEADER_SIZE: u64 = 0x480;
 ///
 /// Contains version info, section layout, and all extracted CRC values.
 #[derive(Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DwgFileHeaderInfo {
     /// DWG version string (e.g., "AC1021")
     pub version_string: String,
@@ -100,6 +101,7 @@ pub struct DwgFileHeaderInfo {
 
 /// Information about a DWG section (from the section map).
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DwgSectionInfo {
     /// Section name (e.g., "AcDb:Header")
     pub name: String,
@@ -121,6 +123,7 @@ pub struct DwgSectionInfo {
 
 /// CRC information for a single page within a section.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DwgPageCrcInfo {
     /// Page number
     pub page_number: i64,
@@ -150,6 +153,7 @@ pub struct DwgPageCrcInfo {
 /// * Skipped records and sections are reported through the
 ///   [`CadDocument::notifications`](crate::document::CadDocument::notifications) collection.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DwgReadOptions {
     /// When `true`, recover as much data as possible from corrupt files.
     pub failsafe: bool,
@@ -1466,6 +1470,7 @@ impl<R: Read + Seek> DwgReader<R> {
 
 /// Complete CRC extraction report from a DWG file.
 #[derive(Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CrcExtractionReport {
     /// DWG version string
     pub version: String,
@@ -1501,6 +1506,7 @@ pub struct CrcExtractionReport {
 
 /// CRC entry for a single page.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PageCrcEntry {
     /// Section name
     pub section_name: String,

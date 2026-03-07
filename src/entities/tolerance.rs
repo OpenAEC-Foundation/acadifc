@@ -43,6 +43,7 @@ use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transparency, Vecto
 /// tol.dimension_style_name = "Standard".to_string();
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Tolerance {
     /// Common entity data.
     pub common: EntityCommon,

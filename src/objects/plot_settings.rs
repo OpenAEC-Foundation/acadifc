@@ -4,6 +4,7 @@ use crate::types::Handle;
 
 /// Plot paper units
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PlotPaperUnits {
     /// Inches
     #[default]
@@ -32,6 +33,7 @@ impl PlotPaperUnits {
 
 /// Plot rotation angle
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PlotRotation {
     /// No rotation (0 degrees)
     #[default]
@@ -78,6 +80,7 @@ impl PlotRotation {
 
 /// Plot type - what area of the drawing to plot
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PlotType {
     /// Plot the last screen display
     LastScreenDisplay = 0,
@@ -115,6 +118,7 @@ impl PlotType {
 
 /// Scale type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ScaledType {
     /// Scale to fit
     #[default]
@@ -213,6 +217,7 @@ impl ScaledType {
 
 /// Shade plot mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ShadePlotMode {
     /// As displayed
     #[default]
@@ -244,6 +249,7 @@ impl ShadePlotMode {
 
 /// Shade plot resolution level
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ShadePlotResolutionLevel {
     /// Draft
     Draft = 0,
@@ -281,6 +287,7 @@ impl ShadePlotResolutionLevel {
 
 /// Plot flags
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PlotFlags {
     /// Plot viewport borders
     pub plot_viewport_borders: bool,
@@ -356,6 +363,7 @@ impl PlotFlags {
 
 /// Paper margins
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PaperMargin {
     /// Left margin (unprintable area)
     pub left: f64,
@@ -401,6 +409,7 @@ impl PaperMargin {
 
 /// Plot window area
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PlotWindow {
     /// Lower-left X coordinate
     pub lower_left_x: f64,
@@ -456,6 +465,7 @@ impl PlotWindow {
 /// settings.paper_units = PlotPaperUnits::Millimeters;
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PlotSettings {
     /// Unique handle
     pub handle: Handle,

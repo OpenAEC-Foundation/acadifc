@@ -8,6 +8,7 @@ use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transform, Transpar
 /// Seqend has no geometry or entity-specific data. It only carries
 /// the inherited common entity fields (handle, owner, layer, etc.).
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Seqend {
     /// Common entity data
     pub common: EntityCommon,

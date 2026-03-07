@@ -8,6 +8,7 @@
 ///
 /// See OpenDesign spec section "Handle References".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
 pub enum DwgReferenceType {
     /// Undefined / absolute handle reference (type 0)

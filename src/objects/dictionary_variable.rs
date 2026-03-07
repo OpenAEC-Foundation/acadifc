@@ -29,6 +29,7 @@ use crate::types::Handle;
 /// assert_eq!(var.value, "Model");
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DictionaryVariable {
     /// Object handle.
     pub handle: Handle,

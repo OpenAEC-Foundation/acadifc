@@ -6,6 +6,7 @@ use crate::types::Vector3;
 
 /// A DXF code/value pair
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DxfCodePair {
     /// The DXF group code
     pub code: i32,

@@ -5,6 +5,7 @@ use crate::types::Handle;
 
 /// Text generation flags
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextGenerationFlags {
     /// Text is backward (mirrored in X)
     pub backward: bool,
@@ -30,6 +31,7 @@ impl Default for TextGenerationFlags {
 
 /// A text style table entry
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextStyle {
     /// Unique handle
     pub handle: Handle,

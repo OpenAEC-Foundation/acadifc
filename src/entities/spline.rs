@@ -5,6 +5,7 @@ use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transparency, Vecto
 
 /// Spline flags
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SplineFlags {
     /// Is the spline closed?
     pub closed: bool,
@@ -39,6 +40,7 @@ impl Default for SplineFlags {
 
 /// A spline entity (NURBS curve)
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Spline {
     /// Common entity data
     pub common: EntityCommon,

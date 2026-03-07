@@ -4,6 +4,7 @@ use crate::types::{Color, Handle};
 
 /// Multiline style flags
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MLineStyleFlags {
     /// Fill is on
     pub fill_on: bool,
@@ -76,6 +77,7 @@ impl MLineStyleFlags {
 /// Each element represents one line in the multiline, with its offset,
 /// color, and linetype.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MLineStyleElement {
     /// Element offset from the center line
     pub offset: f64,
@@ -154,6 +156,7 @@ impl Default for MLineStyleElement {
 /// style.add_element(MLineStyleElement::new(0.5));
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MLineStyle {
     /// Unique handle
     pub handle: Handle,

@@ -13,6 +13,7 @@ use std::collections::HashMap;
 /// These flags control what operations are allowed on proxy entities/objects
 /// when the application that created them is not available.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ProxyFlags(pub u16);
 
 impl ProxyFlags {
@@ -67,6 +68,7 @@ impl From<i32> for ProxyFlags {
 /// - 280: Was-a-zombie flag
 /// - 281: Is-an-entity flag (1 = can appear in ENTITIES/BLOCKS, 0 = OBJECTS only)
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DxfClass {
     /// DXF class name (group code 1) — e.g. "ACDBPLACEHOLDER"
     pub dxf_name: String,
@@ -117,6 +119,7 @@ impl DxfClass {
 ///
 /// Corresponds to ACadSharp's `DxfClassCollection`.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DxfClassCollection {
     entries: Vec<DxfClass>,
     name_index: HashMap<String, usize>,

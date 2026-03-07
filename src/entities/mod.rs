@@ -205,6 +205,7 @@ pub trait Entity {
 
 /// Common entity data shared by all entities
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EntityCommon {
     /// Unique handle
     pub handle: Handle,
@@ -262,6 +263,7 @@ impl Default for EntityCommon {
 
 /// Enumeration of all entity types for type-safe storage
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum EntityType {
     /// Point entity
     Point(Point),

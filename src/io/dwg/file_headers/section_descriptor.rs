@@ -11,6 +11,7 @@
 /// locator table. Contains the section number, absolute file offset,
 /// and size in bytes.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DwgSectionLocatorRecord {
     /// Section number (0=Header, 1=Classes, 2=Handles, 3=ObjFreeSpace, 4=Template, 5=AuxHeader).
     /// `None` for sections not in the locator table (AcDbObjects, Preview).
@@ -37,6 +38,7 @@ impl DwgSectionLocatorRecord {
 /// Describes a section with compression settings, page layout,
 /// and references to local section map entries.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DwgSectionDescriptor {
     /// Section name (e.g., "AcDb:Header").
     pub name: String,
@@ -85,6 +87,7 @@ impl DwgSectionDescriptor {
 /// Each section can span multiple pages. This struct holds the
 /// compression, checksum, and offset information for a single page.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DwgLocalSectionMap {
     /// Compression type (1 = none, 2 = LZ77).
     pub compression: i32,

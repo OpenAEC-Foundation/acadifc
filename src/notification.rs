@@ -11,6 +11,7 @@ use std::fmt;
 
 /// Severity level of a notification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum NotificationType {
     /// An entity/object/section is not yet implemented.
     NotImplemented,
@@ -35,6 +36,7 @@ impl fmt::Display for NotificationType {
 
 /// A single notification produced during reading or writing.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Notification {
     /// The severity / category.
     pub notification_type: NotificationType,
@@ -60,6 +62,7 @@ impl fmt::Display for Notification {
 
 /// Collects notifications during a read/write operation.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct NotificationCollection {
     items: Vec<Notification>,
 }

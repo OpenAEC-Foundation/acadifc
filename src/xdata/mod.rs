@@ -7,6 +7,7 @@ use crate::types::{Handle, Vector3};
 
 /// Extended data value types
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum XDataValue {
     /// String value (group code 1000)
     String(String),
@@ -40,6 +41,7 @@ pub enum XDataValue {
 
 /// Extended data record for a single application
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ExtendedDataRecord {
     /// Application name (from group code 1001)
     pub application_name: String,
@@ -74,6 +76,7 @@ impl ExtendedDataRecord {
 
 /// Extended data collection for an entity
 #[derive(Debug, Clone, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ExtendedData {
     /// Extended data records, keyed by application name
     records: Vec<ExtendedDataRecord>,

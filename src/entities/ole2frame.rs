@@ -5,6 +5,7 @@ use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transform, Transpar
 
 /// OLE object type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(i16)]
 pub enum OleObjectType {
     /// Linked OLE object
@@ -30,6 +31,7 @@ impl OleObjectType {
 ///
 /// Stores the binary OLE data and bounding rectangle.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Ole2Frame {
     /// Common entity data
     pub common: EntityCommon,

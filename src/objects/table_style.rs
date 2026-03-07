@@ -12,6 +12,7 @@ use bitflags::bitflags;
 
 /// Flow direction for table content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(i16)]
 pub enum TableFlowDirection {
     /// Content flows from top to bottom (default).
@@ -32,6 +33,7 @@ impl From<i16> for TableFlowDirection {
 
 /// Cell alignment within the cell bounds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(i16)]
 pub enum CellAlignment {
     /// Top left alignment.
@@ -106,6 +108,7 @@ impl CellAlignment {
 
 /// Border type for cell borders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(i16)]
 pub enum TableBorderType {
     /// Single line border (default).
@@ -131,6 +134,7 @@ impl From<i16> for TableBorderType {
 bitflags! {
     /// Property override flags for table cell styles.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct TableCellStylePropertyFlags: i32 {
         /// No properties overridden.
         const NONE = 0x0;
@@ -178,6 +182,7 @@ bitflags! {
 bitflags! {
     /// Border property override flags.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct TableBorderPropertyFlags: i32 {
         /// No properties overridden.
         const NONE = 0x0;
@@ -197,6 +202,7 @@ bitflags! {
 bitflags! {
     /// Table style flags.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct TableStyleFlags: i16 {
         /// No flags.
         const NONE = 0;
@@ -213,6 +219,7 @@ bitflags! {
 
 /// Border definition for a cell edge.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TableCellBorder {
     /// Property override flags.
     pub property_flags: TableBorderPropertyFlags,
@@ -276,6 +283,7 @@ impl Default for TableCellBorder {
 
 /// Cell style definition for a row type (data, header, title).
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RowCellStyle {
     /// Text style name.
     pub text_style_name: String,
@@ -425,6 +433,7 @@ impl Default for RowCellStyle {
 /// style.data_row_style.text_height = 0.2;
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TableStyle {
     /// Object handle.
     pub handle: Handle,

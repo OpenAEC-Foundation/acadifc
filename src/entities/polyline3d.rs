@@ -5,6 +5,7 @@ use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transparency, Vecto
 
 /// Polyline3D flags
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Polyline3DFlags {
     /// Polyline is closed
     pub closed: bool,
@@ -60,6 +61,7 @@ impl Polyline3DFlags {
 
 /// Smooth surface type for 3D polylines
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SmoothSurfaceType {
     /// No smooth surface
     #[default]
@@ -91,6 +93,7 @@ impl SmoothSurfaceType {
 
 /// 3D Vertex for Polyline3D
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Vertex3DPolyline {
     /// Vertex handle
     pub handle: Handle,
@@ -146,6 +149,7 @@ impl Default for Vertex3DPolyline {
 /// polyline.close();
 /// ```
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Polyline3D {
     /// Common entity properties
     pub common: EntityCommon,
