@@ -53,6 +53,19 @@ impl<'a> DwgObjectWriter<'a> {
     // ── Dictionary ──────────────────────────────────────────────────
 
     fn write_dictionary(&mut self, dict: &Dictionary) {
+        // For pre-R2000, filter out R2000+-only dictionary entries
+        // (PLOTSTYLENAME, LAYOUT, PLOTSETTINGS, MATERIAL, COLOR, VISUALSTYLE)
+        let entries: Vec<&(String, Handle)> = if self.version.r2000_plus() {
+            dict.entries.iter().collect()
+        } else {
+            dict.entries.iter().filter(|(name, _)| {
+                !matches!(name.as_str(),
+                    "ACAD_PLOTSTYLENAME" | "ACAD_LAYOUT" | "ACAD_PLOTSETTINGS" |
+                    "ACAD_MATERIAL" | "ACAD_COLOR" | "ACAD_VISUALSTYLE"
+                )
+            }).collect()
+        };
+
         self.write_common_non_entity_data(
             common::OBJ_DICTIONARY,
             dict.handle,
@@ -62,7 +75,7 @@ impl<'a> DwgObjectWriter<'a> {
         );
 
         // Number of entries (BL)
-        self.writer.write_bit_long(dict.entries.len() as i32);
+        self.writer.write_bit_long(entries.len() as i32);
 
         // R14 Only: Unknown byte (always 0)
         if self.dxf_version == DxfVersion::AC1014 {
@@ -76,7 +89,7 @@ impl<'a> DwgObjectWriter<'a> {
         }
 
         // Entry names + handles
-        for (name, handle) in &dict.entries {
+        for (name, handle) in &entries {
             self.writer.write_variable_text(name);
             let ref_type = if dict.hard_owner {
                 DwgReferenceType::HardOwnership
@@ -97,6 +110,22 @@ impl<'a> DwgObjectWriter<'a> {
     // ── Dictionary with default ─────────────────────────────────────
 
     fn write_dictionary_with_default(&mut self, dict: &DictionaryWithDefault) {
+        // Pre-R2000: ACDBDICTIONARYWDFLT class doesn't exist, so fall back
+        // to writing as a regular Dictionary (skip the default_handle field).
+        if !self.version.r2000_plus() {
+            let plain = Dictionary {
+                handle: dict.handle,
+                owner: dict.owner,
+                hard_owner: dict.hard_owner,
+                duplicate_cloning: dict.duplicate_cloning,
+                entries: dict.entries.clone(),
+                reactors: vec![],
+                xdictionary_handle: None,
+            };
+            self.write_dictionary(&plain);
+            return;
+        }
+
         // UNLISTED type — always use DXF class number (500+)
         let type_code = self.class_type_code("ACDBDICTIONARYWDFLT", common::OBJ_DICTIONARYWDFLT);
 
@@ -111,16 +140,9 @@ impl<'a> DwgObjectWriter<'a> {
         // Same as dictionary
         self.writer.write_bit_long(dict.entries.len() as i32);
 
-        // R14 Only: Unknown byte (always 0)
-        if self.dxf_version == DxfVersion::AC1014 {
-            self.writer.write_byte(0);
-        }
-
         // R2000+: Cloning flag (BS) + Hard-owner flag (RC)
-        if self.version.r2000_plus() {
-            self.writer.write_bit_short(dict.duplicate_cloning as i16);
-            self.writer.write_byte(if dict.hard_owner { 1 } else { 0 });
-        }
+        self.writer.write_bit_short(dict.duplicate_cloning as i16);
+        self.writer.write_byte(if dict.hard_owner { 1 } else { 0 });
 
         for (name, handle) in &dict.entries {
             self.writer.write_variable_text(name);

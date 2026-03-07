@@ -1462,11 +1462,11 @@ impl<'a> DwgObjectWriter<'a> {
         // Vertex handles
         if self.version.r13_15_only() {
             let first = vertex_handles.first().copied().unwrap_or(Handle::NULL);
-            let last = vertex_handles.last().copied().unwrap_or(Handle::NULL);
+            // Last owned entity is SEQEND, not the last vertex
             self.writer
                 .write_handle(DwgReferenceType::SoftPointer, first.value());
             self.writer
-                .write_handle(DwgReferenceType::SoftPointer, last.value());
+                .write_handle(DwgReferenceType::SoftPointer, seqend_handle.value());
         } else if self.version.r2004_plus() {
             for &vh in &vertex_handles {
                 self.writer
@@ -1480,12 +1480,22 @@ impl<'a> DwgObjectWriter<'a> {
 
         self.register_object(e.common.handle);
 
-        // Write vertices as child entities — inherit parent's layer and color
-        for (v, &vh) in e.vertices.iter().zip(vertex_handles.iter()) {
+        // Write vertices as child entities — set up internal entity chain
+        let saved_prev = self.prev_handle.take();
+        let saved_next = self.next_handle.take();
+
+        let sub_count = vertex_handles.len() + 1; // vertices + seqend
+        for (i, (v, &vh)) in e.vertices.iter().zip(vertex_handles.iter()).enumerate() {
+            self.prev_handle = if i > 0 { Some(vertex_handles[i - 1]) } else { None };
+            self.next_handle = if i + 1 < sub_count {
+                if i + 1 < vertex_handles.len() { Some(vertex_handles[i + 1]) } else { Some(seqend_handle) }
+            } else { None };
             self.write_vertex2d(v, vh, e.common.handle, &e.common.layer, &e.common.color);
         }
 
-        // Write SEQEND — inherit parent's layer and color
+        // Write SEQEND — last in polyline chain
+        self.prev_handle = vertex_handles.last().copied();
+        self.next_handle = None;
         self.write_common_entity_data(
             common::OBJ_SEQEND,
             seqend_handle,
@@ -1500,6 +1510,10 @@ impl<'a> DwgObjectWriter<'a> {
             &None,
         );
         self.register_object(seqend_handle);
+
+        // Restore block-level entity chain
+        self.prev_handle = saved_prev;
+        self.next_handle = saved_next;
     }
 
     fn write_vertex2d(
@@ -1580,11 +1594,11 @@ impl<'a> DwgObjectWriter<'a> {
         // Vertex handles
         if self.version.r13_15_only() {
             let first = vertex_handles.first().copied().unwrap_or(Handle::NULL);
-            let last = vertex_handles.last().copied().unwrap_or(Handle::NULL);
+            // Last owned entity is SEQEND, not the last vertex
             self.writer
                 .write_handle(DwgReferenceType::SoftPointer, first.value());
             self.writer
-                .write_handle(DwgReferenceType::SoftPointer, last.value());
+                .write_handle(DwgReferenceType::SoftPointer, seqend_handle.value());
         } else if self.version.r2004_plus() {
             for &vh in &vertex_handles {
                 self.writer
@@ -1598,12 +1612,22 @@ impl<'a> DwgObjectWriter<'a> {
 
         self.register_object(e.common.handle);
 
-        // Write vertices — inherit parent's layer and color
-        for (v, &vh) in e.vertices.iter().zip(vertex_handles.iter()) {
+        // Write vertices — set up internal entity chain
+        let saved_prev = self.prev_handle.take();
+        let saved_next = self.next_handle.take();
+
+        let sub_count = vertex_handles.len() + 1; // vertices + seqend
+        for (i, (v, &vh)) in e.vertices.iter().zip(vertex_handles.iter()).enumerate() {
+            self.prev_handle = if i > 0 { Some(vertex_handles[i - 1]) } else { None };
+            self.next_handle = if i + 1 < sub_count {
+                if i + 1 < vertex_handles.len() { Some(vertex_handles[i + 1]) } else { Some(seqend_handle) }
+            } else { None };
             self.write_vertex3d(v, vh, e.common.handle, &e.common.layer, &e.common.color);
         }
 
-        // Write SEQEND — inherit parent's layer and color
+        // Write SEQEND — last in polyline chain
+        self.prev_handle = vertex_handles.last().copied();
+        self.next_handle = None;
         self.write_common_entity_data(
             common::OBJ_SEQEND,
             seqend_handle,
@@ -1618,6 +1642,10 @@ impl<'a> DwgObjectWriter<'a> {
             &None,
         );
         self.register_object(seqend_handle);
+
+        // Restore block-level entity chain
+        self.prev_handle = saved_prev;
+        self.next_handle = saved_next;
     }
 
     fn write_vertex3d(
@@ -1674,19 +1702,15 @@ impl<'a> DwgObjectWriter<'a> {
         }
 
         if self.version.r13_15_only() {
-            // First / last child
+            // First / last child — last is always SEQEND
             let first = vertex_handles.first()
                 .or_else(|| face_handles.first())
-                .copied()
-                .unwrap_or(Handle::NULL);
-            let last = face_handles.last()
-                .or_else(|| vertex_handles.last())
                 .copied()
                 .unwrap_or(Handle::NULL);
             self.writer
                 .write_handle(DwgReferenceType::SoftPointer, first.value());
             self.writer
-                .write_handle(DwgReferenceType::SoftPointer, last.value());
+                .write_handle(DwgReferenceType::SoftPointer, seqend_handle.value());
         } else if self.version.r2004_plus() {
             for &vh in &vertex_handles {
                 self.writer
@@ -1704,8 +1728,21 @@ impl<'a> DwgObjectWriter<'a> {
 
         self.register_object(e.common.handle);
 
+        // Build combined sub-entity handle chain for prev/next linking
+        let saved_prev = self.prev_handle.take();
+        let saved_next = self.next_handle.take();
+
+        let mut all_sub_handles: Vec<Handle> = Vec::with_capacity(total_owned + 1);
+        all_sub_handles.extend_from_slice(&vertex_handles);
+        all_sub_handles.extend_from_slice(&face_handles);
+        all_sub_handles.push(seqend_handle);
+
+        let mut sub_idx = 0usize;
+
         // Write vertex child entities (OBJ_VERTEX_PFACE = 13)
         for (v, &vh) in e.vertices.iter().zip(vertex_handles.iter()) {
+            self.prev_handle = if sub_idx > 0 { Some(all_sub_handles[sub_idx - 1]) } else { None };
+            self.next_handle = if sub_idx + 1 < all_sub_handles.len() { Some(all_sub_handles[sub_idx + 1]) } else { None };
             self.write_common_entity_data(
                 common::OBJ_VERTEX_PFACE,
                 vh,
@@ -1722,10 +1759,13 @@ impl<'a> DwgObjectWriter<'a> {
             self.writer.write_byte(v.flags.bits() as u8);
             self.writer.write_3bit_double(v.location);
             self.register_object(vh);
+            sub_idx += 1;
         }
 
         // Write face child entities (OBJ_VERTEX_PFACE_FACE = 14)
         for (f, &fh) in e.faces.iter().zip(face_handles.iter()) {
+            self.prev_handle = if sub_idx > 0 { Some(all_sub_handles[sub_idx - 1]) } else { None };
+            self.next_handle = if sub_idx + 1 < all_sub_handles.len() { Some(all_sub_handles[sub_idx + 1]) } else { None };
             self.write_common_entity_data(
                 common::OBJ_VERTEX_PFACE_FACE,
                 fh,
@@ -1744,9 +1784,12 @@ impl<'a> DwgObjectWriter<'a> {
             self.writer.write_bit_short(f.index3);
             self.writer.write_bit_short(f.index4);
             self.register_object(fh);
+            sub_idx += 1;
         }
 
-        // Write SEQEND — inherit parent's layer and color
+        // Write SEQEND — last in polyface chain
+        self.prev_handle = if sub_idx > 0 { Some(all_sub_handles[sub_idx - 1]) } else { None };
+        self.next_handle = None;
         self.write_common_entity_data(
             common::OBJ_SEQEND,
             seqend_handle,
@@ -1761,6 +1804,10 @@ impl<'a> DwgObjectWriter<'a> {
             &None,
         );
         self.register_object(seqend_handle);
+
+        // Restore block-level entity chain
+        self.prev_handle = saved_prev;
+        self.next_handle = saved_next;
     }
 
     // ── PolygonMesh ─────────────────────────────────────────────────
@@ -1788,11 +1835,11 @@ impl<'a> DwgObjectWriter<'a> {
 
         if self.version.r13_15_only() {
             let first = vertex_handles.first().copied().unwrap_or(Handle::NULL);
-            let last = vertex_handles.last().copied().unwrap_or(Handle::NULL);
+            // Last owned entity is SEQEND, not the last vertex
             self.writer
                 .write_handle(DwgReferenceType::SoftPointer, first.value());
             self.writer
-                .write_handle(DwgReferenceType::SoftPointer, last.value());
+                .write_handle(DwgReferenceType::SoftPointer, seqend_handle.value());
         } else if self.version.r2004_plus() {
             for &vh in &vertex_handles {
                 self.writer
@@ -1806,8 +1853,16 @@ impl<'a> DwgObjectWriter<'a> {
 
         self.register_object(e.common.handle);
 
-        // Write vertex child entities (OBJ_VERTEX_MESH = 12)
-        for (v, &vh) in e.vertices.iter().zip(vertex_handles.iter()) {
+        // Write vertex child entities (OBJ_VERTEX_MESH = 12) with internal chain
+        let saved_prev = self.prev_handle.take();
+        let saved_next = self.next_handle.take();
+
+        let sub_count = vertex_handles.len() + 1; // vertices + seqend
+        for (i, (v, &vh)) in e.vertices.iter().zip(vertex_handles.iter()).enumerate() {
+            self.prev_handle = if i > 0 { Some(vertex_handles[i - 1]) } else { None };
+            self.next_handle = if i + 1 < sub_count {
+                if i + 1 < vertex_handles.len() { Some(vertex_handles[i + 1]) } else { Some(seqend_handle) }
+            } else { None };
             self.write_common_entity_data(
                 common::OBJ_VERTEX_MESH,
                 vh,
@@ -1826,7 +1881,9 @@ impl<'a> DwgObjectWriter<'a> {
             self.register_object(vh);
         }
 
-        // Write SEQEND — inherit parent's layer and color
+        // Write SEQEND — last in polygon mesh chain
+        self.prev_handle = vertex_handles.last().copied();
+        self.next_handle = None;
         self.write_common_entity_data(
             common::OBJ_SEQEND,
             seqend_handle,
@@ -1841,6 +1898,10 @@ impl<'a> DwgObjectWriter<'a> {
             &None,
         );
         self.register_object(seqend_handle);
+
+        // Restore block-level entity chain
+        self.prev_handle = saved_prev;
+        self.next_handle = saved_next;
     }
 
     // ── Seqend ──────────────────────────────────────────────────────
@@ -2736,7 +2797,7 @@ mod tests {
         };
         let doc = make_doc_with_entity(EntityType::Point(pt));
         let writer = DwgObjectWriter::new(&doc).unwrap();
-        let (output, _map) = writer.write();
+        let (output, _map, _) = writer.write();
         assert!(!output.is_empty());
     }
 
@@ -2754,7 +2815,7 @@ mod tests {
         };
         let doc = make_doc_with_entity(EntityType::Line(line));
         let writer = DwgObjectWriter::new(&doc).unwrap();
-        let (output, _map) = writer.write();
+        let (output, _map, _) = writer.write();
         assert!(!output.is_empty());
     }
 }

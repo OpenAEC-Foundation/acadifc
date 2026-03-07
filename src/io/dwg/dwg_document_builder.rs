@@ -111,6 +111,12 @@ impl DwgDocumentBuilder {
         let mut skipped_pass2 = 0u32;
         let total_handles = handles.len();
 
+        // Build class_number → internal type code mapping for non-fixed types.
+        // The DWG binary uses class numbers (500+) for object types defined in
+        // the CLASSES section.  We translate these to our internal OBJ_*
+        // constants so the match statements work correctly.
+        let class_map = Self::build_class_type_map(document);
+
         // ── Pass 1: Build handle→name maps from table entries ──────────
         let mut maps = HandleMaps::new();
 
@@ -119,10 +125,11 @@ impl DwgDocumentBuilder {
                 Some(o) if o >= 0 => o,
                 _ => continue,
             };
-            let (type_code, mut reader) = match self.obj_reader.read_record_at(offset as usize) {
+            let (raw_type_code, mut reader) = match self.obj_reader.read_record_at(offset as usize) {
                 Ok(r) => r,
                 Err(_) => continue,
             };
+            let type_code = Self::resolve_type_code(raw_type_code, &class_map);
 
             if is_table_type(type_code) {
                 // Wrap in catch_unwind to survive corrupt/misaligned records
@@ -164,7 +171,10 @@ impl DwgDocumentBuilder {
                             Some(("block", obj_handle, data.name))
                         },
                         OBJ_STYLE => {
-                            let data = tables::read_text_style(&mut reader);
+                            let data = tables::read_text_style(
+                                &mut reader,
+                                self.obj_reader.version(),
+                            );
                             Some(("style", obj_handle, data.name))
                         },
                         OBJ_LTYPE => {
@@ -217,10 +227,11 @@ impl DwgDocumentBuilder {
                 Some(o) if o >= 0 => o,
                 _ => continue,
             };
-            let (type_code, reader) = match self.obj_reader.read_record_at(offset as usize) {
+            let (raw_type_code, reader) = match self.obj_reader.read_record_at(offset as usize) {
                 Ok(r) => r,
                 Err(_) => continue,
             };
+            let type_code = Self::resolve_type_code(raw_type_code, &class_map);
 
             // Wrap per-object processing in catch_unwind to survive
             // corrupt or misaligned records without crashing the entire read.
@@ -658,6 +669,46 @@ impl DwgDocumentBuilder {
                     ));
                 },
 
+                OBJ_MLINE => {
+                    let data = entities::read_mline(&mut reader);
+                    let mut e = MLine::new();
+                    e.common = entity_common;
+                    e.scale_factor = data.scale_factor;
+                    e.justification = MLineJustification::from(data.justification as i16);
+                    e.start_point = data.start_point;
+                    e.normal = data.normal;
+                    e.style_element_count = data.lines_in_style as usize;
+                    let _ = document.add_entity(EntityType::MLine(e));
+                },
+
+                OBJ_POLYLINE_PFACE => {
+                    let (_num_verts, _num_faces, _owned_count) = entities::read_polyface_mesh(
+                        &mut reader, self.obj_reader.version(),
+                    );
+                    let mut e = PolyfaceMesh::new();
+                    e.common = entity_common;
+                    let _ = document.add_entity(EntityType::PolyfaceMesh(e));
+                },
+
+                OBJ_MESH => {
+                    let data = entities::read_mesh(&mut reader);
+                    let mut e = Mesh::new();
+                    e.common = entity_common;
+                    e.version = data.version;
+                    e.blend_crease = data.blend_crease;
+                    e.subdivision_level = data.subdivision_level;
+                    e.vertices = data.vertices;
+                    e.faces = data.faces.into_iter().map(|f| MeshFace { vertices: f.into_iter().map(|v| v as usize).collect() }).collect();
+                    e.edges = data.edges.into_iter().map(|(a, b)| MeshEdge { start: a as usize, end: b as usize, crease: None }).collect();
+                    let _ = document.add_entity(EntityType::Mesh(e));
+                },
+
+                OBJ_MULTILEADER => {
+                    let mut e = MultiLeader::new();
+                    e.common = entity_common;
+                    let _ = document.add_entity(EntityType::MultiLeader(e));
+                },
+
                 // ── Catch-all ──────────────────────────────────────
                 _ => {
                     let mut e = UnknownEntity::new(format!("DWG_TYPE_{}", type_code));
@@ -777,6 +828,35 @@ impl DwgDocumentBuilder {
             }
         }
         // Table types already processed in Pass 1
+    }
+
+    /// Build a class_number → internal OBJ_* type code mapping.
+    ///
+    /// The DWG binary uses class numbers (≥500) for non-fixed object types.
+    /// This builds a translation table so the builder can match them against
+    /// the internal OBJ_* constants.
+    fn build_class_type_map(document: &CadDocument) -> HashMap<i16, i16> {
+        let mut map = HashMap::new();
+        for class in document.classes.iter() {
+            if let Some(internal_code) = dxf_name_to_type_code(&class.dxf_name) {
+                if class.class_number >= 500 {
+                    map.insert(class.class_number, internal_code);
+                }
+            }
+        }
+        map
+    }
+
+    /// Resolve a raw DWG type code to the internal OBJ_* constant.
+    ///
+    /// Fixed type codes (0–82) pass through unchanged.
+    /// Class-based codes (≥500) are looked up in the class map.
+    fn resolve_type_code(raw: i16, class_map: &HashMap<i16, i16>) -> i16 {
+        if raw >= 500 {
+            class_map.get(&raw).copied().unwrap_or(raw)
+        } else {
+            raw
+        }
     }
 }
 

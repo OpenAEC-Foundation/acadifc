@@ -46,6 +46,52 @@ impl LineWeight {
         self.value()
     }
 
+    // ── DWG table-index encoding ────────────────────────────────────
+    //
+    // In the DWG LAYER combined BS (R2000+), lineweight is stored as a
+    // 5-bit TABLE INDEX (0-31), **not** the raw weight value.
+    //
+    // Mapping (matches ACadSharp's CadUtils.ToIndex / ToValue):
+    //   Indices 0..23  → standard weights (0, 5, 9, 13, 15, …, 200, 211)
+    //   Index   29     → ByLayer  (-1)
+    //   Index   30     → ByBlock  (-2)
+    //   Index   31     → Default  (-3)
+
+    /// Standard lineweight values indexed by DWG table position.
+    const INDEXED_VALUES: [i16; 24] = [
+        0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50,
+        53, 60, 70, 80, 90, 100, 106, 120, 140, 158, 200, 211,
+    ];
+
+    /// Convert this `LineWeight` to a DWG 5-bit table index (0-31).
+    pub fn to_dwg_index(&self) -> u8 {
+        match self {
+            LineWeight::Default => 31,
+            LineWeight::ByBlock => 30,
+            LineWeight::ByLayer => 29,
+            LineWeight::Value(v) => {
+                Self::INDEXED_VALUES
+                    .iter()
+                    .position(|&w| w == *v)
+                    .map(|i| i as u8)
+                    .unwrap_or(31) // fall back to Default
+            }
+        }
+    }
+
+    /// Create a `LineWeight` from a DWG 5-bit table index (0-31).
+    pub fn from_dwg_index(index: u8) -> Self {
+        match index {
+            28 | 29 => LineWeight::ByLayer,
+            30 => LineWeight::ByBlock,
+            31 => LineWeight::Default,
+            i if (i as usize) < Self::INDEXED_VALUES.len() => {
+                LineWeight::Value(Self::INDEXED_VALUES[i as usize])
+            }
+            _ => LineWeight::Default,
+        }
+    }
+
     /// Get the line weight in millimeters
     pub fn millimeters(&self) -> Option<f64> {
         match self {
@@ -132,6 +178,31 @@ mod tests {
     #[test]
     fn test_default_line_weight() {
         assert_eq!(LineWeight::default(), LineWeight::ByLayer);
+    }
+
+    #[test]
+    fn test_dwg_index_roundtrip_special() {
+        // Default ↔ 31, ByBlock ↔ 30, ByLayer ↔ 29
+        assert_eq!(LineWeight::Default.to_dwg_index(), 31);
+        assert_eq!(LineWeight::ByBlock.to_dwg_index(), 30);
+        assert_eq!(LineWeight::ByLayer.to_dwg_index(), 29);
+
+        assert_eq!(LineWeight::from_dwg_index(31), LineWeight::Default);
+        assert_eq!(LineWeight::from_dwg_index(30), LineWeight::ByBlock);
+        assert_eq!(LineWeight::from_dwg_index(29), LineWeight::ByLayer);
+        assert_eq!(LineWeight::from_dwg_index(28), LineWeight::ByLayer); // 28 also maps to ByLayer
+    }
+
+    #[test]
+    fn test_dwg_index_roundtrip_standard() {
+        // Standard weight values → indices 0..23
+        assert_eq!(LineWeight::W0_00.to_dwg_index(), 0);
+        assert_eq!(LineWeight::W0_25.to_dwg_index(), 7);
+        assert_eq!(LineWeight::W2_11.to_dwg_index(), 23);
+
+        assert_eq!(LineWeight::from_dwg_index(0), LineWeight::W0_00);
+        assert_eq!(LineWeight::from_dwg_index(7), LineWeight::W0_25);
+        assert_eq!(LineWeight::from_dwg_index(23), LineWeight::W2_11);
     }
 }
 

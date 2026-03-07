@@ -86,28 +86,89 @@ pub const OBJ_GROUP: i16 = 72;
 pub const OBJ_MLINESTYLE: i16 = 73;
 pub const OBJ_OLE2FRAME: i16 = 74;
 
-// ── Non-fixed type codes (use class number, 500+) ───────────────────
+// ── Standard fixed entity/object types (75+) ────────────────────────
+//
+// These match ACadSharp's ObjectType enum values.  Types 77–82 are
+// fixed type codes in the ODA spec; class-based types (MESH, IMAGE,
+// MULTILEADER) always use class numbers ≥500 in the binary.
 
-pub const OBJ_LAYOUT: i16 = 0x52;          // 82
-pub const OBJ_DICTIONARYVAR: i16 = 0x68;   // 104
+pub const OBJ_LWPOLYLINE: i16 = 77;         // 0x4D — fixed entity
+pub const OBJ_HATCH: i16 = 78;              // 0x4E — fixed entity
+pub const OBJ_XRECORD: i16 = 79;            // 0x4F — fixed non-entity
+pub const OBJ_PLACEHOLDER: i16 = 80;        // 0x50 — fixed non-entity
+pub const OBJ_LAYOUT: i16 = 82;             // 0x52 — fixed non-entity
+
+// Class-based (UNLISTED) entity types — always use class number (500+)
+// in the binary stream.  Matched via dxf_name → type_code translation.
+pub const OBJ_IMAGE: i16 = -1;
+pub const OBJ_MESH: i16 = -2;
+pub const OBJ_MULTILEADER: i16 = -3;
+
+// Class-based non-entity objects — also resolved via class mapping for
+// portable type codes.  The values here match ACadSharp's ObjectType.
+pub const OBJ_DICTIONARYWDFLT: i16 = 0x78;  // 120
+pub const OBJ_DICTIONARYVAR: i16 = 0x79;    // 121
+pub const OBJ_PLOTSETTINGS: i16 = 0x7A;     // 122
+pub const OBJ_MLEADERSTYLE: i16 = 0x7B;     // 123
+pub const OBJ_IMAGEDEF: i16 = 0x7C;         // 124
+pub const OBJ_IMAGEDEFREACTOR: i16 = 0x7D;  // 125
+pub const OBJ_SCALE: i16 = 0x7E;            // 126
+pub const OBJ_SORTENTSTABLE: i16 = 0x7F;    // 127
+pub const OBJ_RASTERVARIABLES: i16 = 0x80;  // 128
+pub const OBJ_DBCOLOR: i16 = 0x81;          // 129
+pub const OBJ_WIPEOUTVARIABLES: i16 = 0x82; // 130
 pub const OBJ_TABLECONTENT: i16 = 0x69;     // 105
 pub const OBJ_TABLESTYLE: i16 = 0x6A;       // 106
-pub const OBJ_HATCH: i16 = 0x6C;           // 108
-pub const OBJ_DICTIONARYWDFLT: i16 = 0x6D; // 109
-pub const OBJ_PLACEHOLDER: i16 = 0x6E;     // 110
-pub const OBJ_LWPOLYLINE: i16 = 0x6F;      // 111
-pub const OBJ_IMAGE: i16 = 0x65;           // 101
-pub const OBJ_XRECORD: i16 = 0x70;         // 112
-pub const OBJ_MULTILEADER: i16 = 0x79;     // 121
-pub const OBJ_MLEADERSTYLE: i16 = 0x7B;    // 123
 
 /// Returns true if the type code is a graphical entity (not a table / object).
 pub fn is_entity_type(type_code: i16) -> bool {
-    // Entities are types 1–47, plus 74 (OLE2FRAME), plus non-fixed entity types ≥500
-    matches!(type_code, 1..=47 | 74) || type_code >= 500
+    // Fixed entity types: 1–47, 74 (OLE2FRAME), 77 (LWPOLYLINE), 78 (HATCH)
+    // Class-based entity sentinels: -3 (MULTILEADER), -2 (MESH), -1 (IMAGE)
+    // Class-based entity types: ≥500 (resolved from DXF class section)
+    matches!(type_code, -3..=-1 | 1..=47 | 74 | 77 | 78) || type_code >= 500
 }
 
 /// Returns true if the type code is a table control or entry.
 pub fn is_table_type(type_code: i16) -> bool {
     matches!(type_code, 48..=71)
+}
+
+/// Map a DXF class name to the internal OBJ_* type code constant.
+///
+/// This is used to translate class-based type codes (500+) read from the
+/// binary stream into the internal constants used by the document builder.
+pub fn dxf_name_to_type_code(dxf_name: &str) -> Option<i16> {
+    match dxf_name.to_uppercase().as_str() {
+        // Entities
+        "LWPOLYLINE" => Some(OBJ_LWPOLYLINE),
+        "HATCH" => Some(OBJ_HATCH),
+        "IMAGE" | "WIPEOUT" => Some(OBJ_IMAGE),
+        "MESH" => Some(OBJ_MESH),
+        "MULTILEADER" => Some(OBJ_MULTILEADER),
+        "OLE2FRAME" => Some(OBJ_OLE2FRAME),
+        // Non-entity objects
+        "ACDBDICTIONARYWDFLT" => Some(OBJ_DICTIONARYWDFLT),
+        "DICTIONARYVAR" => Some(OBJ_DICTIONARYVAR),
+        "LAYOUT" => Some(OBJ_LAYOUT),
+        "XRECORD" => Some(OBJ_XRECORD),
+        "ACDBPLACEHOLDER" => Some(OBJ_PLACEHOLDER),
+        "PLOTSETTINGS" => Some(OBJ_PLOTSETTINGS),
+        "MLEADERSTYLE" => Some(OBJ_MLEADERSTYLE),
+        "IMAGEDEF" => Some(OBJ_IMAGEDEF),
+        "IMAGEDEF_REACTOR" => Some(OBJ_IMAGEDEFREACTOR),
+        "SCALE" => Some(OBJ_SCALE),
+        "SORTENTSTABLE" => Some(OBJ_SORTENTSTABLE),
+        "RASTERVARIABLES" => Some(OBJ_RASTERVARIABLES),
+        "DBCOLOR" => Some(OBJ_DBCOLOR),
+        "WIPEOUTVARIABLES" => Some(OBJ_WIPEOUTVARIABLES),
+        "TABLECONTENT" => Some(OBJ_TABLECONTENT),
+        "TABLESTYLE" => Some(OBJ_TABLESTYLE),
+        _ => None,
+    }
+}
+
+/// Returns true if the given class represents a graphical entity based
+/// on its `is_an_entity` flag.
+pub fn is_class_entity(is_an_entity: bool) -> bool {
+    is_an_entity
 }

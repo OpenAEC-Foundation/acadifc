@@ -21,6 +21,7 @@ pub mod checksum;
 pub mod compression;
 pub mod compressor_ac21;
 pub mod crc;
+pub mod decompressor_ac18;
 pub mod decompressor_ac21;
 pub mod dwg21_metadata;
 pub mod dwg_document_builder;

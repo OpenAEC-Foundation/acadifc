@@ -1,4 +1,4 @@
-# acadrust 0.2.1
+# acadrust 0.2.2
 
 [![Crates.io](https://img.shields.io/crates/v/acadrust.svg)](https://crates.io/crates/acadrust)
 [![Documentation](https://docs.rs/acadrust/badge.svg)](https://docs.rs/acadrust)
@@ -33,7 +33,7 @@ acadrust provides comprehensive support for the DXF and DWG file formats with a 
 | AC1014 | R14 | ✅ | ✅ | ✅ | ✅ |
 | AC1015 | 2000 | ✅ | ✅ | ✅ | ✅ |
 | AC1018 | 2004 | ✅ | ✅ | ✅ | ✅ |
-| AC1021 | 2007 (UTF-8) | ✅ | ✅ | ✅ | ✅ |
+| AC1021 | 2007 | ✅ | ✅ | ✅ | ✅ |
 | AC1024 | 2010 | ✅ | ✅ | ✅ | ✅ |
 | AC1027 | 2013 | ✅ | ✅ | ✅ | ✅ |
 | AC1032 | 2018+ | ✅ | ✅ | ✅ | ✅ |
@@ -166,7 +166,7 @@ Add acadrust to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-acadrust = "0.2.1"
+acadrust = "0.2.2"
 ```
 
 Or install via cargo:

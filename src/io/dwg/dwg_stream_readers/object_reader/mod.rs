@@ -326,10 +326,10 @@ impl DwgObjectReader {
             // If not by-layer, would read linetype handle
         }
 
-        // Pre-R2004: Nolinks + prev/next
+        // Pre-R2004: Nolinks + prev/next (R13/R14 and R2000-R2002)
         let mut prev_entity_handle = None;
         let mut next_entity_handle = None;
-        if !self.version.r2004_plus() && self.version.r2000_plus() {
+        if !self.version.r2004_plus() {
             let nolinks = reader.read_bit();
             if !nolinks {
                 prev_entity_handle = Some(reader.read_handle());
@@ -349,6 +349,7 @@ impl DwgObjectReader {
         let linetype_scale = reader.read_bit_double();
 
         // R13-R14: invisibility + return early
+        // DXF group 60 convention (all DWG versions): 0 = visible, non-zero = invisible
         let invisible;
         if self.version.r13_14_only() {
             invisible = reader.read_bit_short() != 0;
@@ -400,9 +401,10 @@ impl DwgObjectReader {
         // Invisibility
         invisible = reader.read_bit_short() != 0;
 
-        // R2000+: Lineweight
+        // R2000+: Lineweight (5-bit DWG index → raw byte value)
         let line_weight = if self.version.r2000_plus() {
-            reader.read_byte()
+            let idx = reader.read_byte();
+            crate::types::LineWeight::from_dwg_index(idx).as_i16() as u8
         } else {
             0
         };

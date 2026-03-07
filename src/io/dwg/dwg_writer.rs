@@ -131,14 +131,23 @@ fn uses_paged_format(version: DxfVersion) -> bool {
 /// Correct the `handle_seed` (HANDSEED) so it exceeds the maximum handle
 /// in the object handle map.  AutoCAD rejects files where HANDSEED is ≤ the
 /// highest allocated handle.
+///
+/// Also updates EXTMIN/EXTMAX from the computed model-space extents so that
+/// "Zoom Extents" works correctly when the file is first opened.
 fn correct_handle_seed(
     header: &HeaderVariables,
     handle_map: &[(u64, u32)],
+    extents: &Option<crate::types::BoundingBox3D>,
 ) -> HeaderVariables {
     let max_handle = handle_map.iter().map(|&(h, _)| h).max().unwrap_or(0);
     let mut corrected = header.clone();
     if corrected.handle_seed <= max_handle {
         corrected.handle_seed = max_handle + 1;
+    }
+    // Update model-space extents from computed entity bounding boxes
+    if let Some(ref ext) = extents {
+        corrected.model_space_extents_min = ext.min;
+        corrected.model_space_extents_max = ext.max;
     }
     corrected
 }
@@ -156,11 +165,11 @@ fn write_ac15<W: Write + Seek>(
 
     // ── Phase 1: Compute objects FIRST to get handle map ──
     let obj_writer = DwgObjectWriter::new(document)?;
-    let (obj_data, handle_map_u32) = obj_writer.write();
+    let (obj_data, handle_map_u32, extents) = obj_writer.write();
 
-    // ── Phase 2: Compute correct HANDSEED ──
+    // ── Phase 2: Compute correct HANDSEED + EXTMIN/EXTMAX ──
     // AutoCAD rejects files where HANDSEED ≤ max(object handles).
-    let corrected_header = correct_handle_seed(&document.header, &handle_map_u32);
+    let corrected_header = correct_handle_seed(&document.header, &handle_map_u32, &extents);
 
     // ── Section: Header (uses corrected HANDSEED) ──
     let header_data = header_writer::write_header(version, &corrected_header);
@@ -224,10 +233,10 @@ fn write_ac18<W: Write + Seek>(
 
     // ── Phase 1: Compute objects FIRST to get handle map ──
     let obj_writer = DwgObjectWriter::new(document)?;
-    let (obj_data, handle_map_u32) = obj_writer.write();
+    let (obj_data, handle_map_u32, extents) = obj_writer.write();
 
-    // ── Phase 2: Compute correct HANDSEED ──
-    let corrected_header = correct_handle_seed(&document.header, &handle_map_u32);
+    // ── Phase 2: Compute correct HANDSEED + EXTMIN/EXTMAX ──
+    let corrected_header = correct_handle_seed(&document.header, &handle_map_u32, &extents);
 
     // ── Section: Header (uses corrected HANDSEED) ──
     let header_data = header_writer::write_header(version, &corrected_header);
@@ -318,10 +327,10 @@ fn write_ac21_impl<W: Write + Seek>(
 
     // ── Phase 1: Compute objects FIRST to get handle map ──
     let obj_writer = DwgObjectWriter::new(document)?;
-    let (obj_data, handle_map_u32) = obj_writer.write();
+    let (obj_data, handle_map_u32, extents) = obj_writer.write();
 
-    // ── Phase 2: Compute correct HANDSEED ──
-    let corrected_header = correct_handle_seed(&document.header, &handle_map_u32);
+    // ── Phase 2: Compute correct HANDSEED + EXTMIN/EXTMAX ──
+    let corrected_header = correct_handle_seed(&document.header, &handle_map_u32, &extents);
 
     // ── Sections in spec §5.1 stream order ──
     // AC21 add_section looks up encoding/encryption/page_size automatically

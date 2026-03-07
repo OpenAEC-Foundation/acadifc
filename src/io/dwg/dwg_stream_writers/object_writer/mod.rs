@@ -28,7 +28,7 @@ use crate::io::dwg::dwg_reference_type::DwgReferenceType;
 use crate::io::dwg::dwg_stream_writers::DwgMergedWriter;
 use crate::io::dwg::dwg_version::DwgVersion;
 use crate::tables::BlockRecord;
-use crate::types::{DxfVersion, Handle};
+use crate::types::{BoundingBox3D, DxfVersion, Handle, Vector2};
 
 // ── Public struct ───────────────────────────────────────────────────
 
@@ -56,6 +56,8 @@ pub struct DwgObjectWriter<'a> {
     pub(super) next_handle: Option<Handle>,
     /// Next handle value for allocating sub-entity handles (vertices, seqend)
     pub(super) next_alloc_handle: u64,
+    /// Computed model space extents for VPort view adjustment and header EXTMIN/EXTMAX
+    pub(crate) model_space_extents: Option<BoundingBox3D>,
 }
 
 impl<'a> DwgObjectWriter<'a> {
@@ -77,13 +79,17 @@ impl<'a> DwgObjectWriter<'a> {
             prev_handle: None,
             next_handle: None,
             next_alloc_handle: document.header.handle_seed,
+            model_space_extents: None,
         })
     }
 
     // ── Main entry point ────────────────────────────────────────────
 
-    /// Write all objects and return `(output_bytes, handle_map)`.
-    pub fn write(mut self) -> (Vec<u8>, Vec<(u64, u32)>) {
+    /// Write all objects and return `(output_bytes, handle_map, model_space_extents)`.
+    pub fn write(mut self) -> (Vec<u8>, Vec<(u64, u32)>, Option<BoundingBox3D>) {
+        // Compute model space extents for VPort view adjustment
+        self.model_space_extents = self.compute_model_space_extents();
+
         // R2004+: 0x0DCA marker at the start
         if self.version.r2004_plus() {
             self.output.extend_from_slice(&0x0DCAi32.to_le_bytes());
@@ -126,6 +132,11 @@ impl<'a> DwgObjectWriter<'a> {
         );
         self.write_dimstyle_control();
 
+        // R13-R2000 only: VPEntHdr control (viewport entity header table)
+        if self.version.r13_15_only() {
+            self.write_vpent_hdr_control();
+        }
+
         // ── Table entries ───────────────────────────────────────
         self.write_layer_entries();
         self.write_text_style_entries();
@@ -142,7 +153,21 @@ impl<'a> DwgObjectWriter<'a> {
         // ── Drain object queue ──────────────────────────────────
         self.write_objects();
 
-        (self.output, self.handle_map)
+        (self.output, self.handle_map, self.model_space_extents)
+    }
+
+    /// Compute the bounding box of all entities in the *Model_Space block.
+    fn compute_model_space_extents(&self) -> Option<BoundingBox3D> {
+        let ms_block = self.document.block_records.get("*Model_Space")?;
+        let mut extents: Option<BoundingBox3D> = None;
+        for entity in &ms_block.entities {
+            let bbox = entity.as_entity().bounding_box();
+            extents = Some(match extents {
+                Some(existing) => existing.merge(&bbox),
+                None => bbox,
+            });
+        }
+        extents
     }
 
     // ── Table control writers ───────────────────────────────────────
@@ -307,6 +332,22 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(table_handle);
     }
 
+    /// VPENT_HDR_CONTROL — R13-R2000 only.
+    /// Empty table control for the viewport entity header table.
+    /// The header section references this via hard-ownership handle.
+    fn write_vpent_hdr_control(&mut self) {
+        let table_handle = self.document.header.vpent_hdr_control_handle;
+        if table_handle.is_null() {
+            return;
+        }
+
+        self.write_table_control(
+            table_handle,
+            common::OBJ_VPENT_HDR_CONTROL,
+            &[], // no entries — always empty
+        );
+    }
+
     // ── Table entry writers ─────────────────────────────────────────
 
     fn write_layer_entries(&mut self) {
@@ -332,7 +373,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.write_xref_dependant_bit();
 
         if self.version.r2000_plus() {
-            let lw_index = layer.line_weight.as_i16();
+            let lw_index = layer.line_weight.to_dwg_index() as i16;
             let mut values: i16 = (lw_index & 0x1F) << 5; // lineweight in bits 5..9
 
             if layer.flags.frozen {
@@ -342,8 +383,9 @@ impl<'a> DwgObjectWriter<'a> {
             if layer.flags.off {
                 values |= 0b0010;
             }
-            // frozen in new VP
-            if layer.flags.frozen {
+            // frozen in new VP (bit 2) — always false for now
+            // (LayerFlags doesn't expose a separate frozen_in_new_vp flag)
+            if false {
                 values |= 0b0100;
             }
             if layer.flags.locked {
@@ -355,7 +397,7 @@ impl<'a> DwgObjectWriter<'a> {
             self.writer.write_bit_short(values);
         } else {
             self.writer.write_bit(layer.flags.frozen);
-            self.writer.write_bit(!layer.flags.off); // on flag
+            self.writer.write_bit(layer.flags.off); // off flag (0=on, 1=off, same as R2000+)
             self.writer.write_bit(false); // frozen in new VP
             self.writer.write_bit(layer.flags.locked);
         }
@@ -445,9 +487,9 @@ impl<'a> DwgObjectWriter<'a> {
         self.writer.write_variable_text(&style.big_font_file);
 
         // External reference block handle (hard pointer)
-        // C# ACadSharp writes the parent TextStyles table handle here
+        // Null for non-xref-dependent styles
         self.writer
-            .write_handle(DwgReferenceType::HardPointer, self.document.text_styles.handle().value());
+            .write_handle(DwgReferenceType::HardPointer, 0);
 
         self.register_object(style.handle);
     }
@@ -638,12 +680,40 @@ impl<'a> DwgObjectWriter<'a> {
     }
 
     fn write_vport_entries(&mut self) {
-        let entries: Vec<_> = self
+        let mut entries: Vec<_> = self
             .document
             .vports
             .iter()
             .map(|v| v.clone())
             .collect();
+
+        // If model space extents were computed and VPort has default view
+        // settings that would miss the entities, apply a "zoom extents"
+        // so entities are visible when the file is first opened.
+        if let Some(ref ext) = self.model_space_extents {
+            let center = ext.center();
+            let ext_height = ext.max.y - ext.min.y;
+            let ext_width = ext.max.x - ext.min.x;
+
+            for vp in &mut entries {
+                // Only adjust the *Active viewport (the main one)
+                if vp.name == "*Active" {
+                    let ar = if vp.aspect_ratio > 0.0 {
+                        vp.aspect_ratio
+                    } else {
+                        1.0
+                    };
+                    // Ensure the full extents fit, with 10% margin
+                    let vh = (ext_height.max(ext_width / ar)) * 1.1;
+                    vp.view_height = if vh > 0.0 { vh } else { 10.0 };
+                    // view_center is in DCS, whose origin = view_target.
+                    // Keep view_target at its default (origin) so
+                    // view_center acts as the WCS center directly.
+                    vp.view_center = Vector2::new(center.x, center.y);
+                }
+            }
+        }
+
         for vp in &entries {
             self.write_vport(vp);
         }
@@ -664,8 +734,10 @@ impl<'a> DwgObjectWriter<'a> {
 
         // View height BD 40
         self.writer.write_bit_double(vport.view_height);
-        // Aspect ratio BD 41 — stored as aspect_ratio * view_height (R13+ quirk)
-        self.writer.write_bit_double(vport.aspect_ratio * vport.view_height);
+        // Aspect ratio BD 41 — DWG stores aspect_ratio * view_height
+        // (R13 quirk; reader divides by view_height to get actual ratio)
+        self.writer
+            .write_bit_double(vport.aspect_ratio * vport.view_height);
         // View Center 2RD 12
         self.writer
             .write_2raw_double(crate::types::Vector2 {
@@ -730,10 +802,10 @@ impl<'a> DwgObjectWriter<'a> {
         // Fast zoom B 73
         self.writer.write_bit(true);
         // UCSICON X 74 — 2 individual bits
-        self.writer.write_bit(false); // bit 0 (OnLower)
-        self.writer.write_bit(false); // bit 1 (OnOrigin)
+        self.writer.write_bit(true); // bit 0: UCS icon display ON
+        self.writer.write_bit(true); // bit 1: UCS icon at origin
         // Grid on/off B 76
-        self.writer.write_bit(false);
+        self.writer.write_bit(true);
         // Grid spacing 2RD 15
         self.writer
             .write_2raw_double(crate::types::Vector2 {
@@ -1490,7 +1562,7 @@ mod tests {
     fn object_writer_writes_basic_document() {
         let doc = CadDocument::new();
         let writer = DwgObjectWriter::new(&doc).unwrap();
-        let (output, handle_map) = writer.write();
+        let (output, handle_map, _) = writer.write();
         // Should have produced some output (at least the 0x0DCA marker)
         assert!(!output.is_empty());
         // Should have recorded some handles (table controls + entries)
@@ -1501,7 +1573,7 @@ mod tests {
     fn object_writer_encodes_dca_marker() {
         let doc = CadDocument::new();
         let writer = DwgObjectWriter::new(&doc).unwrap();
-        let (output, _) = writer.write();
+        let (output, _, _) = writer.write();
         // First 4 bytes should be 0x0DCA as little-endian i32
         if output.len() >= 4 {
             let marker = i32::from_le_bytes([output[0], output[1], output[2], output[3]]);

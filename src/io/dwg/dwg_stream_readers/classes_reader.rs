@@ -49,7 +49,11 @@ pub fn read_classes(data: &[u8], version: DxfVersion) -> Result<DxfClassCollecti
     let section_size = i32::from_le_bytes([data[16], data[17], data[18], data[19]]) as usize;
 
     // Section data starts after sentinel (16) + size field (4)
-    let data_start = 20;
+    // R2018+ (AC1032+): extra 4 zero bytes after size field
+    let mut data_start = 20;
+    if version > DxfVersion::AC1027 {
+        data_start += 4;
+    }
     if data.len() < data_start + section_size + 2 + 16 {
         return Err(DxfError::Parse(
             "Classes section data truncated".to_string(),
@@ -62,11 +66,17 @@ pub fn read_classes(data: &[u8], version: DxfVersion) -> Result<DxfClassCollecti
 
     // R2007+: The section data has an RL prefix (total data size in bits)
     // from save_position_for_size. Text is INLINE (not in a separate stream).
-    // Sections do NOT use three-stream merge.
+    // R2007+: Set up text stream for three-stream merge.
+    // The writer puts text strings (dxf_name, cpp_class_name, application_name)
+    // in a separate text sub-stream. The RL stores the total bit count;
+    // the flag bit is at RL − 1 (same convention as per-object records).
     let end_bit;
     if version >= DxfVersion::AC1021 {
         let total_size_bits = reader.read_raw_long() as i64;
-        end_bit = total_size_bits;
+        let data_start = reader.position_in_bits();
+        let text_start = reader.set_position_by_flag(total_size_bits - 1);
+        reader.set_position_in_bits(data_start);
+        end_bit = text_start;
     } else {
         end_bit = (section_size * 8) as i64;
     }

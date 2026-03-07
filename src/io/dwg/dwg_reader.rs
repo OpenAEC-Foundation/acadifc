@@ -38,7 +38,9 @@ use crate::notification::{NotificationCollection, NotificationType};
 use crate::io::dwg::dwg_version::DwgVersion;
 use crate::io::dwg::dwg21_metadata::Dwg21CompressedMetadata;
 use crate::io::dwg::reed_solomon::reed_solomon_decode;
+use crate::io::dwg::decompressor_ac18::decompress_ac18;
 use crate::io::dwg::decompressor_ac21::decompress_ac21;
+use crate::io::dwg::checksum::{apply_mask, apply_magic_sequence};
 
 /// AC1021 file header offset (data pages start after this)
 const AC21_FILE_HEADER_SIZE: u64 = 0x480;
@@ -83,6 +85,17 @@ pub struct DwgFileHeaderInfo {
     pub page_records: HashMap<i32, (i64, i64)>,
     /// Section descriptors from the section map
     pub section_descriptors: Vec<DwgSectionInfo>,
+
+    // ── AC15-specific data ──
+
+    /// Section locator records for AC15 format: name → (file_offset, size)
+    pub section_locators: HashMap<String, (i64, i64)>,
+    /// Base file offset of AcDb:AcDbObjects section (AC15 only).
+    /// Handle offsets in AC15 are absolute; subtract this to get buffer-relative.
+    pub objects_base_offset: i64,
+    /// Whether this file uses AC18 format (R2004/R2010/R2013/R2018).
+    /// Determines which decompression path to use in `get_section_buffer`.
+    pub is_ac18_format: bool,
 }
 
 /// Information about a DWG section (from the section map).
@@ -271,7 +284,18 @@ impl<R: Read + Seek> DwgReader<R> {
         // 4. Read Handle Map (AcDb:Handles)
         let handle_map = if let Ok(handle_buf) = self.get_section_buffer("AcDb:Handles", &info) {
             match crate::io::dwg::dwg_stream_readers::handle_reader::read_handles(&handle_buf) {
-                Ok(hm) => hm,
+                Ok(mut hm) => {
+                    // AC15: Handle offsets are absolute file positions.
+                    // Convert to buffer-relative by subtracting the objects
+                    // section base offset.
+                    if info.objects_base_offset != 0 {
+                        let base = info.objects_base_offset;
+                        for offset in hm.values_mut() {
+                            *offset -= base;
+                        }
+                    }
+                    hm
+                },
                 Err(e) => {
                     self.notifications.notify(
                         NotificationType::Warning,
@@ -356,6 +380,9 @@ impl<R: Read + Seek> DwgReader<R> {
             ac21_compressed_data_crc: None,
             page_records: HashMap::new(),
             section_descriptors: Vec::new(),
+            section_locators: HashMap::new(),
+            objects_base_offset: 0,
+            is_ac18_format: false,
         };
 
         match version {
@@ -365,16 +392,11 @@ impl<R: Read + Seek> DwgReader<R> {
             }
             DwgVersion::AC18 | DwgVersion::AC24 => {
                 self.read_file_metadata(&mut info)?;
-                self.notifications.notify(
-                    NotificationType::Warning,
-                    format!("AC18-style header reading: CRC-32 checksums available (not CRC-64). Version: {:?}", version),
-                );
+                self.read_file_header_ac18(&mut info)?;
             }
             _ => {
-                self.notifications.notify(
-                    NotificationType::NotSupported,
-                    format!("Version {:?} does not use CRC-64 checksums", version),
-                );
+                // AC15 format (R13/R14/R2000) — linear file with section locator records
+                self.read_file_header_ac15(&mut info)?;
             }
         }
 
@@ -429,6 +451,351 @@ impl<R: Read + Seek> DwgReader<R> {
         // Skip 80 bytes of padding/unknown data
         let mut pad = [0u8; 80];
         self.stream.read_exact(&mut pad)?;
+
+        Ok(())
+    }
+
+    /// Read AC15 (R13/R14/R2000) file header with section locator records.
+    ///
+    /// The AC15 file header is 0x61 (97) bytes:
+    /// ```text
+    /// [0x00] Version string (6 bytes)
+    /// [0x06] Padding + maintenance version (7 bytes)
+    /// [0x0D] Preview seeker (4 bytes)
+    /// [0x11] Magic bytes (2 bytes: 0x1B, 0x19)
+    /// [0x13] Code page (2 bytes LE)
+    /// [0x15] Record count (4 bytes LE) — always 6
+    /// [0x19] 6 × Section locator records (9 bytes each)
+    /// [0x4F] CRC-16 (2 bytes)
+    /// [0x51] End sentinel (16 bytes)
+    /// [0x61] End of header → section data starts
+    /// ```
+    ///
+    /// Section numbers: 0=Header, 1=Classes, 2=Handles,
+    /// 3=ObjFreeSpace, 4=Template, 5=AuxHeader.
+    /// AcDbObjects is not in the locator table — its position is
+    /// inferred from the gap between AuxHeader end and Handles start.
+    fn read_file_header_ac15(&mut self, info: &mut DwgFileHeaderInfo) -> Result<(), DxfError> {
+        use crate::io::dwg::file_headers::section_definition::names;
+
+        // Seek past the version string (6 bytes already read)
+        self.stream.seek(SeekFrom::Start(6))?;
+
+        // 0x06: 5 zero bytes + maintenance version + 1 unknown byte (7 bytes total)
+        let mut pad = [0u8; 5];
+        self.stream.read_exact(&mut pad)?;
+        info.acad_maintenance_version = self.stream.read_u8()?;
+        let _unknown = self.stream.read_u8()?;
+
+        // 0x0D: Preview seeker (4 bytes LE)
+        info.preview_address = self.stream.read_i32::<LittleEndian>()?;
+
+        // 0x11: Magic bytes (2 bytes)
+        let _magic1 = self.stream.read_u8()?;
+        let _magic2 = self.stream.read_u8()?;
+
+        // 0x13: Code page (2 bytes LE)
+        info.code_page = self.stream.read_u16::<LittleEndian>()?;
+
+        // 0x15: Number of locator records (4 bytes LE) — should be 6
+        let record_count = self.stream.read_i32::<LittleEndian>()?;
+
+        // 0x19: Read locator records
+        // Each record: number(1) + seeker(4) + size(4) = 9 bytes
+        let section_name_for = |n: u8| -> &str {
+            match n {
+                0 => names::HEADER,
+                1 => names::CLASSES,
+                2 => names::HANDLES,
+                3 => names::OBJ_FREE_SPACE,
+                4 => names::TEMPLATE,
+                5 => names::AUX_HEADER,
+                _ => "Unknown",
+            }
+        };
+
+        let mut handles_seeker: i64 = 0;
+        let mut aux_header_end: i64 = 0;
+
+        for _ in 0..record_count.min(6) {
+            let number = self.stream.read_u8()?;
+            let seeker = self.stream.read_i32::<LittleEndian>()? as i64;
+            let size = self.stream.read_i32::<LittleEndian>()? as i64;
+
+            let name = section_name_for(number);
+            info.section_locators.insert(name.to_string(), (seeker, size));
+
+            // Track offsets for AcDbObjects position calculation
+            if number == 2 {
+                // Handles section
+                handles_seeker = seeker;
+            }
+            if number == 5 {
+                // AuxHeader — objects start right after this
+                aux_header_end = seeker + size;
+            }
+        }
+
+        // Calculate AcDbObjects position:
+        // It occupies the space between AuxHeader end and Handles start.
+        // If AuxHeader is missing (seeker=0, size=0), fall back to
+        // computing from the file header size + other section sizes.
+        if aux_header_end == 0 {
+            // Fallback: objects start at 0x61 + sum of all known sections before it
+            let file_header_size: i64 = 0x61;
+            let mut offset = file_header_size;
+            for &sect in &[names::HEADER, names::CLASSES, names::OBJ_FREE_SPACE, names::TEMPLATE, names::AUX_HEADER] {
+                if let Some(&(_, size)) = info.section_locators.get(sect) {
+                    offset += size;
+                }
+            }
+            aux_header_end = offset;
+        }
+
+        let objects_size = handles_seeker - aux_header_end;
+        if objects_size > 0 {
+            info.section_locators.insert(
+                names::ACDB_OBJECTS.to_string(),
+                (aux_header_end, objects_size),
+            );
+            info.objects_base_offset = aux_header_end;
+        }
+
+        self.notifications.notify(
+            NotificationType::Warning,
+            format!(
+                "AC15 file header: {} locator records, objects at offset {}, size {}",
+                record_count, aux_header_end, objects_size
+            ),
+        );
+
+        Ok(())
+    }
+
+    /// Read AC18 (R2004/R2010/R2013/R2018) inner file header, page map, and section map.
+    ///
+    /// The AC18 format stores a 0x6C-byte inner file header at file offset 0x80,
+    /// XOR'd with a magic sequence. This header contains pointers to the page map
+    /// and section map, which together describe the layout of all section pages.
+    fn read_file_header_ac18(&mut self, info: &mut DwgFileHeaderInfo) -> Result<(), DxfError> {
+        // Read the 0x6C-byte inner file header at offset 0x80
+        self.stream.seek(SeekFrom::Start(0x80))?;
+        let mut inner = [0u8; 0x6C];
+        self.stream.read_exact(&mut inner)?;
+
+        // XOR unmask with magic sequence
+        apply_magic_sequence(&mut inner);
+
+        // Verify identifier "AcFssFcAJMB\0"
+        if &inner[..12] != b"AcFssFcAJMB\0" {
+            return Err(DxfError::InvalidFormat(
+                "Invalid AC18 inner file header identifier".into(),
+            ));
+        }
+
+        // Parse inner file header fields
+        let mut cursor = Cursor::new(&inner[..]);
+        cursor.set_position(0x28);
+        let _last_page_id = cursor.read_i32::<LittleEndian>()?;
+        let _last_section_addr = cursor.read_u64::<LittleEndian>()?;
+        let _second_header_addr = cursor.read_u64::<LittleEndian>()?;
+        let _gap_amount = cursor.read_u32::<LittleEndian>()?;
+        let _section_amount = cursor.read_u32::<LittleEndian>()?;
+
+        cursor.set_position(0x50);
+        let _section_page_map_id = cursor.read_u32::<LittleEndian>()?;
+        let page_map_address_stored = cursor.read_u64::<LittleEndian>()?;
+        let section_map_id = cursor.read_u32::<LittleEndian>()?;
+
+        // The stored address is (actual - 0x100)
+        let page_map_address = page_map_address_stored + 0x100;
+
+        info.is_ac18_format = true;
+
+        self.notifications.notify(
+            NotificationType::Warning,
+            format!(
+                "AC18 inner header: page_map_address={:#X}, section_map_id={}",
+                page_map_address, section_map_id
+            ),
+        );
+
+        // Read page map (page_number → file_offset mapping)
+        self.read_page_map_ac18(info, page_map_address)?;
+
+        // Read section map (section descriptors with per-page info)
+        self.read_section_map_ac18(info, section_map_id as i32)?;
+
+        Ok(())
+    }
+
+    /// Read the AC18 page map from a known file offset.
+    ///
+    /// The page map is a system page (20-byte unmasked header + LZ77 data)
+    /// containing (page_number, page_size) pairs. File offsets are computed
+    /// by accumulating page sizes from offset 0x100.
+    fn read_page_map_ac18(
+        &mut self,
+        info: &mut DwgFileHeaderInfo,
+        page_map_address: u64,
+    ) -> Result<(), DxfError> {
+        self.stream.seek(SeekFrom::Start(page_map_address))?;
+
+        // Read 20-byte system page header (NOT XOR-masked)
+        let _section_type = self.stream.read_i32::<LittleEndian>()?;
+        let decomp_size = self.stream.read_i32::<LittleEndian>()?;
+        let comp_size = self.stream.read_i32::<LittleEndian>()?;
+        let compression = self.stream.read_i32::<LittleEndian>()?;
+        let _checksum = self.stream.read_u32::<LittleEndian>()?;
+
+        // Read compressed data
+        if comp_size <= 0 || comp_size > 10_000_000 {
+            return Err(DxfError::InvalidFormat(format!(
+                "Invalid AC18 page map compressed size: {}", comp_size
+            )));
+        }
+        let mut compressed = vec![0u8; comp_size as usize];
+        self.stream.read_exact(&mut compressed)?;
+
+        // Decompress
+        let decompressed = if compression == 2 {
+            decompress_ac18(&compressed, decomp_size as usize)
+        } else {
+            compressed
+        };
+
+        // Parse (page_number, page_size) pairs.
+        // Pages are written sequentially starting at file offset 0x100.
+        let mut cursor = Cursor::new(&decompressed);
+        let mut file_offset: i64 = 0x100;
+
+        while (cursor.position() as usize) + 8 <= decompressed.len() {
+            let page_number = cursor.read_i32::<LittleEndian>()?;
+            let page_size = cursor.read_i32::<LittleEndian>()?;
+
+            if page_number > 0 && page_size > 0 {
+                info.page_records.insert(page_number, (file_offset, page_size as i64));
+            }
+            file_offset += page_size as i64;
+        }
+
+        self.notifications.notify(
+            NotificationType::Warning,
+            format!(
+                "AC18: Read {} page records from page map",
+                info.page_records.len()
+            ),
+        );
+
+        Ok(())
+    }
+
+    /// Read the AC18 section map from a system page.
+    ///
+    /// The section map page describes all logical sections (Header, Classes,
+    /// Handles, Objects, etc.) with their compression settings and per-page info.
+    fn read_section_map_ac18(
+        &mut self,
+        info: &mut DwgFileHeaderInfo,
+        section_map_id: i32,
+    ) -> Result<(), DxfError> {
+        let &(page_offset, _) = info.page_records.get(&section_map_id)
+            .ok_or_else(|| DxfError::InvalidFormat(format!(
+                "AC18 section map page {} not found in page records", section_map_id
+            )))?;
+
+        self.stream.seek(SeekFrom::Start(page_offset as u64))?;
+
+        // Read 20-byte system page header (NOT XOR-masked)
+        let _section_type = self.stream.read_i32::<LittleEndian>()?;
+        let decomp_size = self.stream.read_i32::<LittleEndian>()?;
+        let comp_size = self.stream.read_i32::<LittleEndian>()?;
+        let compression = self.stream.read_i32::<LittleEndian>()?;
+        let _checksum = self.stream.read_u32::<LittleEndian>()?;
+
+        // Read compressed data
+        if comp_size <= 0 || comp_size > 10_000_000 {
+            return Err(DxfError::InvalidFormat(format!(
+                "Invalid AC18 section map compressed size: {}", comp_size
+            )));
+        }
+        let mut compressed = vec![0u8; comp_size as usize];
+        self.stream.read_exact(&mut compressed)?;
+
+        // Decompress
+        let decompressed = if compression == 2 {
+            decompress_ac18(&compressed, decomp_size as usize)
+        } else {
+            compressed
+        };
+
+        // Parse section descriptors
+        let mut cursor = Cursor::new(&decompressed);
+
+        // Header: numDescriptions(4), 0x02(4), 0x7400(4), 0x00(4), numDescriptions(4)
+        let num_descriptions = cursor.read_i32::<LittleEndian>()?;
+        let _marker = cursor.read_i32::<LittleEndian>()?; // 0x02
+        let _max_decomp = cursor.read_i32::<LittleEndian>()?; // 0x7400
+        let _unknown = cursor.read_i32::<LittleEndian>()?; // 0x00
+        let _num_desc2 = cursor.read_i32::<LittleEndian>()?; // repeat
+
+        for _ in 0..num_descriptions {
+            // Per-descriptor: size(8), pageCount(4), maxDecompSize(4),
+            //   unknown(4), compressedCode(4), sectionId(4), encrypted(4), name(64)
+            let data_size = cursor.read_u64::<LittleEndian>()?;
+            let page_count = cursor.read_i32::<LittleEndian>()?;
+            let max_decomp_page_size = cursor.read_i32::<LittleEndian>()?;
+            let _unknown = cursor.read_i32::<LittleEndian>()?;
+            let compressed_code = cursor.read_i32::<LittleEndian>()?;
+            let _section_id = cursor.read_i32::<LittleEndian>()?;
+            let encrypted = cursor.read_i32::<LittleEndian>()?;
+
+            // Section name (64 bytes, zero-padded)
+            let mut name_buf = [0u8; 64];
+            cursor.read_exact(&mut name_buf)?;
+            let name = String::from_utf8_lossy(&name_buf)
+                .trim_end_matches('\0')
+                .to_string();
+
+            // Per-page entries: pageNumber(4), compressedSize(4), offset(8)
+            let mut pages = Vec::new();
+            for _ in 0..page_count {
+                let page_number = cursor.read_i32::<LittleEndian>()?;
+                let page_compressed_size = cursor.read_i32::<LittleEndian>()?;
+                let page_offset_in_section = cursor.read_u64::<LittleEndian>()?;
+
+                pages.push(DwgPageCrcInfo {
+                    page_number: page_number as i64,
+                    offset: page_offset_in_section,
+                    size: 0,
+                    decompressed_size: max_decomp_page_size as u64,
+                    compressed_size: page_compressed_size as u64,
+                    checksum: 0,
+                    crc: 0,
+                });
+            }
+
+            if !name.is_empty() {
+                info.section_descriptors.push(DwgSectionInfo {
+                    name: name.clone(),
+                    compressed_size: data_size,
+                    decompressed_size: max_decomp_page_size as u64,
+                    encrypted: encrypted as u64,
+                    hash_code: 0,
+                    encoding: compressed_code as u64,
+                    page_count: page_count as u64,
+                    pages,
+                });
+            }
+        }
+
+        self.notifications.notify(
+            NotificationType::Warning,
+            format!(
+                "AC18: Read {} section descriptors from section map",
+                info.section_descriptors.len()
+            ),
+        );
 
         Ok(())
     }
@@ -827,6 +1194,33 @@ impl<R: Read + Seek> DwgReader<R> {
     ) -> Result<Vec<u8>, DxfError> {
         let failsafe = self.options.failsafe;
 
+        // ── AC15 path: direct read from section locators ──
+        // If we have section_locators (AC15 format), read raw bytes
+        // directly from the file at the recorded offset.
+        if !info.section_locators.is_empty() {
+            if let Some(&(offset, size)) = info.section_locators.get(section_name) {
+                if size <= 0 {
+                    return Err(DxfError::Parse(
+                        format!("Section '{}' has zero size", section_name)
+                    ));
+                }
+                self.stream.seek(SeekFrom::Start(offset as u64))?;
+                let mut buf = vec![0u8; size as usize];
+                self.stream.read_exact(&mut buf)?;
+                return Ok(buf);
+            } else {
+                return Err(DxfError::Parse(
+                    format!("Section '{}' not found in AC15 locator records", section_name)
+                ));
+            }
+        }
+
+        // ── AC18 path: page-based with LZ77 AC18 compression ──
+        if info.is_ac18_format {
+            return self.get_section_buffer_ac18(section_name, info);
+        }
+
+        // ── AC21 path: page-based section descriptors ──
         // Find the section descriptor
         let section = info.section_descriptors.iter()
             .find(|s| s.name == section_name)
@@ -922,6 +1316,87 @@ impl<R: Read + Seek> DwgReader<R> {
 
         // Truncate to the declared section size (last page may be padded)
         result.truncate(total_size);
+
+        Ok(result)
+    }
+
+    /// Get the merged decompressed buffer for a named section (AC18).
+    ///
+    /// Reads data pages for the given section, XOR-unmasks their 32-byte
+    /// headers, and decompresses the LZ77 AC18 data.
+    fn get_section_buffer_ac18(
+        &mut self,
+        section_name: &str,
+        info: &DwgFileHeaderInfo,
+    ) -> Result<Vec<u8>, DxfError> {
+        let section = info.section_descriptors.iter()
+            .find(|s| s.name == section_name)
+            .ok_or_else(|| DxfError::Parse(
+                format!("Section '{}' not found in AC18 file", section_name)
+            ))?;
+
+        // compressed_size field actually holds the total uncompressed section data size
+        let total_size = section.compressed_size as usize;
+        let is_compressed = section.encoding == 2;
+        let max_page_size = section.decompressed_size as usize;
+
+        let mut result = vec![0u8; total_size];
+
+        for page in &section.pages {
+            let page_number = page.page_number as i32;
+
+            let &(page_file_offset, _page_total_size) = info.page_records.get(&page_number)
+                .ok_or_else(|| DxfError::Parse(
+                    format!("AC18 page {} not found in page records for section '{}'",
+                            page_number, section_name)
+                ))?;
+
+            self.stream.seek(SeekFrom::Start(page_file_offset as u64))?;
+
+            // Read 32-byte data section header (XOR-masked)
+            let mut header = [0u8; 32];
+            self.stream.read_exact(&mut header)?;
+
+            // XOR unmask using the page's file position
+            apply_mask(&mut header, page_file_offset as u64);
+
+            // Parse header fields
+            let mut hcursor = Cursor::new(&header[..]);
+            let _section_type = hcursor.read_i32::<LittleEndian>()?;
+            let _section_id = hcursor.read_i32::<LittleEndian>()?;
+            let data_compressed_size = hcursor.read_i32::<LittleEndian>()?;
+            let _page_size = hcursor.read_i32::<LittleEndian>()?;
+            let data_offset = hcursor.read_i64::<LittleEndian>()?;
+
+            // Read compressed data
+            if data_compressed_size <= 0 || data_compressed_size > 10_000_000 {
+                self.notifications.notify(
+                    NotificationType::Warning,
+                    format!(
+                        "AC18: Invalid compressed size {} for page {} in section '{}'",
+                        data_compressed_size, page_number, section_name
+                    ),
+                );
+                continue;
+            }
+            let mut compressed = vec![0u8; data_compressed_size as usize];
+            self.stream.read_exact(&mut compressed)?;
+
+            // Decompress
+            let decompressed = if is_compressed {
+                decompress_ac18(&compressed, max_page_size)
+            } else {
+                compressed
+            };
+
+            // Copy to result at the correct offset within the section data
+            let dst_start = data_offset as usize;
+            if dst_start < total_size {
+                let copy_len = decompressed.len().min(total_size - dst_start);
+                result[dst_start..dst_start + copy_len]
+                    .copy_from_slice(&decompressed[..copy_len]);
+            }
+        }
 
         Ok(result)
     }
