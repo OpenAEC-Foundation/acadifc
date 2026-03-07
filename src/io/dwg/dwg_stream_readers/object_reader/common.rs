@@ -123,9 +123,10 @@ pub const OBJ_TABLESTYLE: i16 = 0x6A;       // 106
 /// Returns true if the type code is a graphical entity (not a table / object).
 pub fn is_entity_type(type_code: i16) -> bool {
     // Fixed entity types: 1–47, 74 (OLE2FRAME), 77 (LWPOLYLINE), 78 (HATCH)
+    // EXCEPT: 42 (OBJ_DICTIONARY) is a non-graphical object, not an entity.
     // Class-based entity sentinels: -3 (MULTILEADER), -2 (MESH), -1 (IMAGE)
     // Class-based entity types: ≥500 (resolved from DXF class section)
-    matches!(type_code, -3..=-1 | 1..=47 | 74 | 77 | 78) || type_code >= 500
+    matches!(type_code, -3..=-1 | 1..=41 | 43..=47 | 74 | 77 | 78) || type_code >= 500
 }
 
 /// Returns true if the type code is a table control or entry.

@@ -709,6 +709,81 @@ impl DwgDocumentBuilder {
                     let _ = document.add_entity(EntityType::MultiLeader(e));
                 },
 
+                // ── Attribute entities ─────────────────────────────
+                OBJ_ATTDEF => {
+                    let data = entities::read_attribute_definition(
+                        &mut reader, self.obj_reader.version(), self.obj_reader.dxf_version(),
+                    );
+                    let mut e = AttributeDefinition::new(
+                        data.tag.clone(),
+                        String::new(), // prompt (consumed by reader, not returned separately)
+                        data.text_data.value.clone(),
+                    );
+                    e.common = entity_common;
+                    e.insertion_point = data.text_data.insertion_point;
+                    e.height = data.text_data.height;
+                    e.rotation = data.text_data.rotation;
+                    let _ = document.add_entity(EntityType::AttributeDefinition(e));
+                },
+                OBJ_ATTRIB => {
+                    let data = entities::read_attribute_entity(
+                        &mut reader, self.obj_reader.version(), self.obj_reader.dxf_version(),
+                    );
+                    let mut e = AttributeEntity::new(
+                        data.tag.clone(),
+                        data.text_data.value.clone(),
+                    );
+                    e.common = entity_common;
+                    e.insertion_point = data.text_data.insertion_point;
+                    e.height = data.text_data.height;
+                    e.rotation = data.text_data.rotation;
+                    let _ = document.add_entity(EntityType::AttributeEntity(e));
+                },
+
+                // ── Structural markers (BLOCK / ENDBLK / SEQEND) ──
+                // These are DWG-internal structural entities. They mark
+                // block boundaries and sequence terminators. They are
+                // silently consumed — their information is already
+                // represented by BlockRecord table entries.
+                OBJ_BLOCK => {
+                    // BLOCK entity has no entity-specific data beyond common.
+                    // The block name comes from the BlockRecord (Pass 1).
+                    // We intentionally do NOT add it as an entity.
+                },
+                OBJ_ENDBLK => {
+                    // ENDBLK marks the end of a block definition.
+                    // Silently skip.
+                },
+                OBJ_SEQEND => {
+                    // SEQEND terminates a polyline vertex or INSERT
+                    // attribute sequence. Silently skip.
+                    entities::read_seqend(&mut reader);
+                },
+
+                // ── Vertex child entities ──────────────────────────
+                // Vertex records are children of POLYLINE_2D,
+                // POLYLINE_3D, POLYLINE_PFACE, or POLYLINE_MESH.
+                // In the current architecture, polylines are read as
+                // standalone header records, and vertices are separate
+                // objects.  We read and discard them here because the
+                // parent–child assembly happens in resolve_references.
+                OBJ_VERTEX_2D => {
+                    let _data = entities::read_vertex2d(
+                        &mut reader, self.obj_reader.version(),
+                    );
+                },
+                OBJ_VERTEX_3D | OBJ_VERTEX_MESH => {
+                    let _data = entities::read_vertex3d(&mut reader);
+                },
+                OBJ_VERTEX_PFACE => {
+                    let _data = entities::read_vertex3d(&mut reader);
+                },
+                OBJ_VERTEX_PFACE_FACE => {
+                    // Face record — just vertex indices, consumed by
+                    // read_vertex3d (same binary layout: flags + point).
+                    let _data = entities::read_vertex3d(&mut reader);
+                },
+
                 // ── Catch-all ──────────────────────────────────────
                 _ => {
                     let mut e = UnknownEntity::new(format!("DWG_TYPE_{}", type_code));
