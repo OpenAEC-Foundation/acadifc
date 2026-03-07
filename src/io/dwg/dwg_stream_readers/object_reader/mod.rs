@@ -232,12 +232,13 @@ impl DwgObjectReader {
             );
             handle_reader.set_position_in_bits(handle_start);
 
-            let reader = DwgMergedReader::from_readers(
+            let mut reader = DwgMergedReader::from_readers(
                 main_reader,
                 Some(text_reader),
                 Some(handle_reader),
                 self.dxf_version,
             );
+            reader.set_handle_bits(handle_bits);
             return Ok((type_code, reader));
         }
 

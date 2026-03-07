@@ -1,20 +1,26 @@
 //! Unknown entity type for round-trip preservation.
 //!
 //! When the reader encounters an entity type that is not directly supported,
-//! it can still capture the common entity properties (handle, layer, color, …)
-//! wrapped in this type.  The entity-specific codes are discarded — this
-//! matches the ACadSharp `UnknownEntity` behavior.
+//! it captures the common entity properties (handle, layer, color, …) and
+//! the raw record data so the entity can be written back losslessly.
 //!
-//! Unknown entities are **never written back** to DXF output, following the
-//! same convention as ACadSharp.
+//! For DWG files, the entire merged-stream record is stored in
+//! [`raw_dwg_data`](UnknownEntity::raw_dwg_data) together with the
+//! original DWG type code.  The writer emits these bytes verbatim,
+//! preserving the entity exactly as it was in the source file.
+//!
+//! For DXF files, the entity-specific group-code pairs are stored in
+//! [`raw_dxf_codes`](UnknownEntity::raw_dxf_codes) so they can be
+//! written back alongside the common entity data.
 
 use crate::entities::{Entity, EntityCommon};
 use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transform, Transparency, Vector3};
 
 /// An entity whose type is not directly supported by the library.
 ///
-/// Preserves the DXF type name (e.g. `"ACAD_PROXY_ENTITY"`) and common entity
-/// properties.  Entity-specific codes are discarded.
+/// Preserves the DXF/DWG type name and common entity properties.
+/// When raw data is available (DWG `raw_dwg_data` or DXF
+/// `raw_dxf_codes`), the entity is written back losslessly.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct UnknownEntity {
@@ -22,6 +28,29 @@ pub struct UnknownEntity {
     pub common: EntityCommon,
     /// The DXF type name as it appeared in the file (e.g. `"ACAD_PROXY_ENTITY"`).
     pub dxf_name: String,
+    /// DWG object type code (from the binary record header).
+    /// `0` if the entity did not come from a DWG file.
+    pub dwg_type_code: i16,
+    /// Raw DWG merged-stream record bytes.
+    ///
+    /// This is the exact payload between the ModularShort length prefix
+    /// and the CRC-16 trailer.  When present the writer emits these
+    /// bytes verbatim (with fresh framing) so the entity survives a
+    /// roundtrip without any data loss.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub raw_dwg_data: Option<Vec<u8>>,
+    /// Handle-stream bit count for R2010+ DWG records.
+    ///
+    /// Stored alongside `raw_dwg_data` because R2010+ records require
+    /// a ModularChar(handle_bits) field in the framing header.
+    pub dwg_handle_bits: i64,
+    /// Raw DXF entity-specific group-code pairs.
+    ///
+    /// Each entry is `(group_code, value_string)`.  When present the
+    /// DXF writer emits the common entity header followed by these
+    /// pairs, reproducing the original entity content.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub raw_dxf_codes: Option<Vec<(i32, String)>>,
 }
 
 impl UnknownEntity {
@@ -30,6 +59,10 @@ impl UnknownEntity {
         Self {
             common: EntityCommon::new(),
             dxf_name: dxf_name.into(),
+            dwg_type_code: 0,
+            raw_dwg_data: None,
+            dwg_handle_bits: 0,
+            raw_dxf_codes: None,
         }
     }
 }

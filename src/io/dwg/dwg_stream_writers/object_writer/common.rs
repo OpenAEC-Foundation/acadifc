@@ -200,6 +200,38 @@ impl<'a> DwgObjectWriter<'a> {
         self.writer.reset();
     }
 
+    /// Write a raw (pre-encoded) object record verbatim.
+    ///
+    /// Used for unknown entities that carry the original merged-stream
+    /// bytes from the source file.  The raw data is the exact payload
+    /// that was between `[ModularShort(size)]` and `[CRC16]` in the
+    /// original file.  We re-frame it with a fresh MS prefix and CRC.
+    pub fn register_raw_object(&mut self, handle: Handle, raw_data: &[u8], handle_bits: i64) {
+        let pos = self.output.len() as u32;
+
+        // MS (size)
+        write_modular_short_bytes(&mut self.output, raw_data.len());
+
+        // R2010+: MC (handle bits) — reproduce the original value
+        if self.version.r2010_plus() {
+            write_modular_char_bytes(&mut self.output, handle_bits as usize);
+        }
+
+        // Merged data bytes
+        self.output.extend_from_slice(raw_data);
+
+        // CRC-16
+        let crc_val = crc::crc16(crc::CRC16_SEED, &self.output[pos as usize..]);
+        self.output.extend_from_slice(&crc_val.to_le_bytes());
+
+        // Handle → offset mapping
+        if !handle.is_null() {
+            self.handle_map.push((handle.value(), pos));
+        }
+
+        // No need to reset writer — we didn't use it
+    }
+
     // ── write_common_data ───────────────────────────────────────────
     /// Object type + handle + extended-data preamble shared by
     /// every object (entities AND non-graphical objects).

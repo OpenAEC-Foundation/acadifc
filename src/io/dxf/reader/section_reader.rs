@@ -2052,18 +2052,25 @@ impl<'a> SectionReader<'a> {
         Ok(())
     }
 
-    /// Read an unknown entity, capturing only common entity data.
-    ///
-    /// Entity-specific codes are discarded (matching ACadSharp behavior).
+    /// Read an unknown entity, capturing common data and preserving
+    /// entity-specific group codes for round-trip fidelity.
     fn read_unknown_entity(&mut self, dxf_name: &str) -> Result<UnknownEntity> {
         let mut entity = UnknownEntity::new(dxf_name);
+        let mut raw_codes: Vec<(i32, String)> = Vec::new();
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 {
                 self.reader.push_back(pair);
                 break;
             }
-            // Try to read common entity codes; ignore entity-specific ones
-            let _ = self.try_read_common_entity_code(&pair, &mut entity.common)?;
+            // Try common entity codes first
+            let consumed = self.try_read_common_entity_code(&pair, &mut entity.common)?;
+            if !consumed {
+                // Entity-specific code → store for round-trip
+                raw_codes.push((pair.code, pair.value_string.clone()));
+            }
+        }
+        if !raw_codes.is_empty() {
+            entity.raw_dxf_codes = Some(raw_codes);
         }
         Ok(entity)
     }

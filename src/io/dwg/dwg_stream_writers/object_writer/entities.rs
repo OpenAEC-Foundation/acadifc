@@ -61,9 +61,15 @@ impl<'a> DwgObjectWriter<'a> {
             | EntityType::Region(_)
             | EntityType::Body(_)
             | EntityType::Table(_)
-            | EntityType::Underlay(_)
-            | EntityType::Unknown(_) => {
+            | EntityType::Underlay(_) => {
                 // Not yet supported — silently skip
+            }
+            EntityType::Unknown(e) => {
+                // Write raw DWG data verbatim if available
+                if let Some(ref raw_data) = e.raw_dwg_data {
+                    self.register_raw_object(e.common.handle, raw_data, e.dwg_handle_bits);
+                }
+                // else: no raw data → silently skip (DXF-only unknown)
             }
         }
     }

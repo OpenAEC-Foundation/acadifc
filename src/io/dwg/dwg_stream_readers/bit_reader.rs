@@ -109,6 +109,14 @@ impl DwgBitReader {
         self.data.len()
     }
 
+    /// Clone the entire underlying data buffer.
+    ///
+    /// Used to extract the raw merged-stream record bytes for
+    /// round-trip preservation of unknown entities.
+    pub fn data_bytes(&self) -> Vec<u8> {
+        self.data.clone()
+    }
+
     /// Set the stream position (byte-level) and reset bit shift.
     pub fn set_position(&mut self, pos: usize) {
         self.position = pos;

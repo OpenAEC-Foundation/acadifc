@@ -1191,6 +1191,9 @@ impl DwgDocumentBuilder {
                 _ => {
                     let mut e = UnknownEntity::new(format!("DWG_TYPE_{}", type_code));
                     e.common = entity_common;
+                    e.dwg_type_code = type_code;
+                    e.dwg_handle_bits = reader.get_handle_bits();
+                    e.raw_dwg_data = Some(reader.raw_merged_data());
                     let _ = document.add_entity(EntityType::Unknown(e));
                 }
             }

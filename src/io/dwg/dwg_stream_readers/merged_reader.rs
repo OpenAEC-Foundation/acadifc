@@ -46,6 +46,9 @@ pub struct DwgMergedReader {
     dxf_version: DxfVersion,
     /// Raw data (kept for lazy text/handle setup in ThreeStream mode)
     raw_data: Option<Vec<u8>>,
+    /// Handle-stream bit count from the R2010+ MC framing field.
+    /// Stored so unknown entities can reproduce the correct framing on write.
+    handle_bits: i64,
 }
 
 impl DwgMergedReader {
@@ -97,6 +100,7 @@ impl DwgMergedReader {
                     _mode: mode,
                     dxf_version,
                     raw_data: None,
+                    handle_bits: 0,
                 }
             }
             MergeMode::ThreeStream => {
@@ -114,6 +118,7 @@ impl DwgMergedReader {
                     _mode: mode,
                     dxf_version,
                     raw_data: Some(data),
+                    handle_bits: 0,
                 }
             }
         }
@@ -141,6 +146,7 @@ impl DwgMergedReader {
             _mode: mode,
             dxf_version,
             raw_data: None,
+            handle_bits: 0,
         }
     }
 
@@ -175,6 +181,25 @@ impl DwgMergedReader {
             handle_reader.set_position_in_bits(handle_start);
             self.handle = Some(handle_reader);
         }
+    }
+
+    /// Return a clone of the full merged-stream record bytes.
+    ///
+    /// The bytes represent the complete payload between the
+    /// ModularShort length prefix and the CRC-16 trailer.
+    /// Used to preserve raw data for unknown entity round-trips.
+    pub fn raw_merged_data(&self) -> Vec<u8> {
+        self.main.data_bytes()
+    }
+
+    /// Set the handle-bits value (from R2010+ MC framing).
+    pub fn set_handle_bits(&mut self, bits: i64) {
+        self.handle_bits = bits;
+    }
+
+    /// Get the handle-bits value stored by the reader.
+    pub fn get_handle_bits(&self) -> i64 {
+        self.handle_bits
     }
 
     // ════════════════════════════════════════════════════════════════════════

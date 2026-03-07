@@ -852,7 +852,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             EntityType::Seqend(e) => self.write_seqend(e, owner),
             EntityType::Ole2Frame(e) => self.write_ole2frame(e, owner),
             EntityType::PolygonMesh(e) => self.write_polygon_mesh(e, owner),
-            EntityType::Unknown(_) => Ok(()), // Unknown entities are never written back
+            EntityType::Unknown(e) => self.write_unknown_entity(e, owner),
         }
     }
 
@@ -898,6 +898,27 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         }
 
         Ok(())
+    }
+
+    /// Write an unknown entity, preserving raw group codes if available.
+    fn write_unknown_entity(
+        &mut self,
+        entity: &crate::entities::UnknownEntity,
+        owner: Handle,
+    ) -> Result<()> {
+        if let Some(ref codes) = entity.raw_dxf_codes {
+            // Write the original DXF type name (e.g. "ACAD_PROXY_ENTITY")
+            self.writer.write_entity_type(&entity.dxf_name)?;
+            self.write_common_entity_data(&entity.common, owner)?;
+            // Write preserved entity-specific codes
+            for (code, value) in codes {
+                self.writer.write_string(*code, value)?;
+            }
+            Ok(())
+        } else {
+            // No raw data — skip this entity
+            Ok(())
+        }
     }
 
     /// Write POINT entity
