@@ -763,9 +763,30 @@ fn has_nan_vec3(v: &acadrust::types::Vector3) -> bool {
     v.x.is_nan() || v.y.is_nan() || v.z.is_nan()
 }
 
-/// Returns true if the normal/extrusion is the default (0,0,1) — WCS aligned.
-fn is_default_normal(v: &acadrust::types::Vector3) -> bool {
-    v.x == 0.0 && v.y == 0.0 && (v.z == 1.0 || v.z == 0.0)
+/// Extracts the extrusion/normal vector from entities that have one (OCS support).
+fn get_entity_extrusion(entity: &EntityType) -> Option<acadrust::types::Vector3> {
+    match entity {
+        EntityType::Line(e) => Some(e.normal),
+        EntityType::Circle(e) => Some(e.normal),
+        EntityType::Arc(e) => Some(e.normal),
+        EntityType::Ellipse(e) => Some(e.normal),
+        EntityType::Point(e) => Some(e.normal),
+        EntityType::Text(e) => Some(e.normal),
+        EntityType::MText(e) => Some(e.normal),
+        EntityType::LwPolyline(e) => Some(e.normal),
+        EntityType::Polyline2D(e) => Some(e.normal),
+        EntityType::Polyline3D(e) => Some(e.normal),
+        EntityType::Solid(e) => Some(e.normal),
+        EntityType::Hatch(e) => Some(e.normal),
+        EntityType::Leader(e) => Some(e.normal),
+        EntityType::MLine(e) => Some(e.normal),
+        EntityType::Shape(e) => Some(e.normal),
+        EntityType::Spline(e) => Some(e.normal),
+        EntityType::Dimension(d) => Some(d.base().normal),
+        EntityType::Insert(e) => Some(e.normal),
+        EntityType::PolyfaceMesh(e) => Some(e.normal),
+        _ => None,
+    }
 }
 
 fn fmt_vec3(v: &acadrust::types::Vector3) -> String {
@@ -783,33 +804,33 @@ fn format_entity_data(entity: &EntityType) -> String {
     let handle = format!("{:#X}", common.handle.value());
     let layer = &common.layer;
 
-    // Common properties beyond handle/layer
+    // Always show: handle, layer, color, lineweight, visibility
     let mut common_parts: Vec<String> = Vec::new();
-    match common.color {
-        acadrust::types::Color::ByLayer => {}
-        ref c => common_parts.push(format!("color={}", c)),
+    common_parts.push(format!("color={}", common.color));
+    common_parts.push(format!("lw={}", common.line_weight));
+    if common.invisible {
+        common_parts.push("INVISIBLE".to_string());
     }
-    match common.line_weight {
-        acadrust::types::LineWeight::ByLayer => {}
-        ref lw => common_parts.push(format!("lw={}", lw)),
+    if common.transparency != acadrust::types::Transparency::OPAQUE {
+        common_parts.push(format!("transp={}", common.transparency));
     }
-    let common_suffix = if common_parts.is_empty() {
-        String::new()
-    } else {
-        format!(" | {}", common_parts.join(", "))
-    };
+    if !common.owner_handle.is_null() {
+        common_parts.push(format!("owner={:#X}", common.owner_handle.value()));
+    }
+    let common_suffix = format!(" | {}", common_parts.join(", "));
+
+    // Get extrusion direction for this entity (OCS normal)
+    let extrusion = get_entity_extrusion(entity);
 
     let data = match entity {
         EntityType::Line(l) => {
             let mut s = format!("start={} end={}", fmt_vec3(&l.start), fmt_vec3(&l.end));
             if l.thickness != 0.0 { s.push_str(&format!(" thickness={}", l.thickness)); }
-            if !is_default_normal(&l.normal) { s.push_str(&format!(" normal={}", fmt_vec3(&l.normal))); }
             s
         }
         EntityType::Circle(c) => {
             let mut s = format!("center={} r={:.4}", fmt_vec3(&c.center), c.radius);
             if c.thickness != 0.0 { s.push_str(&format!(" thickness={}", c.thickness)); }
-            if !is_default_normal(&c.normal) { s.push_str(&format!(" extrusion={}", fmt_vec3(&c.normal))); }
             s
         }
         EntityType::Arc(a) => {
@@ -817,14 +838,12 @@ fn format_entity_data(entity: &EntityType) -> String {
                 fmt_vec3(&a.center), a.radius,
                 a.start_angle.to_degrees(), a.end_angle.to_degrees());
             if a.thickness != 0.0 { s.push_str(&format!(" thickness={}", a.thickness)); }
-            if !is_default_normal(&a.normal) { s.push_str(&format!(" extrusion={}", fmt_vec3(&a.normal))); }
             s
         }
         EntityType::Ellipse(e) => {
-            let mut s = format!("center={} major={} ratio={:.4} param=[{:.2}..{:.2}]",
+            let s = format!("center={} major={} ratio={:.4} param=[{:.2}..{:.2}]",
                 fmt_vec3(&e.center), fmt_vec3(&e.major_axis),
                 e.minor_axis_ratio, e.start_parameter, e.end_parameter);
-            if !is_default_normal(&e.normal) { s.push_str(&format!(" extrusion={}", fmt_vec3(&e.normal))); }
             s
         }
         EntityType::Point(p) => {
@@ -838,7 +857,6 @@ fn format_entity_data(entity: &EntityType) -> String {
             if t.width_factor != 1.0 { s.push_str(&format!(" wfactor={:.2}", t.width_factor)); }
             if t.oblique_angle != 0.0 { s.push_str(&format!(" oblique={:.1}°", t.oblique_angle.to_degrees())); }
             s.push_str(&format!(" style=\"{}\"", t.style));
-            if !is_default_normal(&t.normal) { s.push_str(&format!(" extrusion={}", fmt_vec3(&t.normal))); }
             s
         }
         EntityType::MText(m) => {
@@ -849,7 +867,6 @@ fn format_entity_data(entity: &EntityType) -> String {
             if m.rotation != 0.0 { s.push_str(&format!(" rot={:.1}°", m.rotation.to_degrees())); }
             s.push_str(&format!(" attach={:?} dir={:?} style=\"{}\"", m.attachment_point, m.drawing_direction, m.style));
             if m.line_spacing_factor != 1.0 { s.push_str(&format!(" lsf={:.2}", m.line_spacing_factor)); }
-            if !is_default_normal(&m.normal) { s.push_str(&format!(" extrusion={}", fmt_vec3(&m.normal))); }
             s
         }
         EntityType::Spline(s) => {
@@ -901,7 +918,6 @@ fn format_entity_data(entity: &EntityType) -> String {
             if lw.constant_width != 0.0 { s.push_str(&format!(" width={:.2}", lw.constant_width)); }
             if lw.elevation != 0.0 { s.push_str(&format!(" elev={:.2}", lw.elevation)); }
             if lw.thickness != 0.0 { s.push_str(&format!(" thickness={:.2}", lw.thickness)); }
-            if !is_default_normal(&lw.normal) { s.push_str(&format!(" extrusion={}", fmt_vec3(&lw.normal))); }
             s
         }
         EntityType::Polyline2D(p) => {
@@ -925,7 +941,6 @@ fn format_entity_data(entity: &EntityType) -> String {
                 s.push_str(&format!(" rows={} cols={} rspace={:.2} cspace={:.2}",
                     ins.row_count, ins.column_count, ins.row_spacing, ins.column_spacing));
             }
-            if !is_default_normal(&ins.normal) { s.push_str(&format!(" extrusion={}", fmt_vec3(&ins.normal))); }
             s
         }
         EntityType::Ray(r) => {
@@ -976,7 +991,6 @@ fn format_entity_data(entity: &EntityType) -> String {
                         pl.offset.x, pl.offset.y, pl.dash_lengths.len()));
                 }
             }
-            if !is_default_normal(&h.normal) { s.push_str(&format!(" extrusion={}", fmt_vec3(&h.normal))); }
             s
         }
         EntityType::Leader(l) => {
@@ -1046,7 +1060,6 @@ fn format_entity_data(entity: &EntityType) -> String {
                         fmt_vec3(&dord.feature_location), fmt_vec3(&dord.leader_endpoint), dord.is_ordinate_type_x));
                 }
             }
-            if !is_default_normal(&base.normal) { s.push_str(&format!(" extrusion={}", fmt_vec3(&base.normal))); }
             s
         }
         EntityType::Solid3D(s) => {
@@ -1105,7 +1118,12 @@ fn format_entity_data(entity: &EntityType) -> String {
         }
     };
 
-    format!("{} [h={}, layer=\"{}\"{}] {}", ty, handle, layer, common_suffix, data)
+    // Append extrusion direction (always, for OCS-aware entities)
+    let extrusion_str = match extrusion {
+        Some(n) => format!(" extrusion={}", fmt_vec3(&n)),
+        None => String::new(),
+    };
+    format!("{} [h={}, layer=\"{}\"{}] {}{}", ty, handle, layer, common_suffix, data, extrusion_str)
 }
 
 fn truncate_str(s: &str, max: usize) -> String {
