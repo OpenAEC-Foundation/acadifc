@@ -27,6 +27,21 @@ use crate::io::dwg::dwg_stream_readers::object_reader::entities;
 use crate::io::dwg::dwg_stream_readers::object_reader::objects;
 use crate::io::dwg::dwg_stream_readers::object_reader::tables;
 
+/// Pending vertex data collected during Pass 2, keyed by owner (parent polyline) handle.
+enum PendingVertex {
+    V2D(entities::Vertex2DData),
+    V3D(entities::Vertex3DData),
+    PfaceFace(entities::PfaceFaceData),
+}
+
+/// Pending polyline entities awaiting vertex assembly.
+struct PendingPolylines {
+    /// Vertex data keyed by owner (parent polyline) handle.
+    vertices: HashMap<u64, Vec<PendingVertex>>,
+    /// Polyline entities awaiting vertex assembly, keyed by their handle.
+    polylines: Vec<(u64, EntityType)>,
+}
+
 /// Handle-to-name resolution maps built from table entries.
 struct HandleMaps {
     /// handle → layer name
@@ -60,7 +75,6 @@ impl HandleMaps {
         self.blocks.get(&handle).cloned().unwrap_or_else(|| format!("*U{}", handle))
     }
 
-    #[allow(dead_code)]
     fn style_name(&self, handle: u64) -> String {
         self.text_styles.get(&handle).cloned().unwrap_or_else(|| "STANDARD".to_string())
     }
@@ -106,7 +120,12 @@ impl DwgDocumentBuilder {
     ///
     /// Returns collected notifications (skipped records, warnings).
     pub fn build(mut self, document: &mut CadDocument) -> NotificationCollection {
-        let handles = self.obj_reader.handles();
+        let mut handles = self.obj_reader.handles();
+        // Sort handles numerically so that entity records are processed in
+        // allocation order.  This ensures polyline vertex records are
+        // encountered in the correct sequence (the writer allocates
+        // sequential handles for child entities).
+        handles.sort_unstable();
         let mut skipped_pass1 = 0u32;
         let mut skipped_pass2 = 0u32;
         let total_handles = handles.len();
@@ -222,6 +241,10 @@ impl DwgDocumentBuilder {
         }
 
         // ── Pass 2: Read entities and non-table objects ────────────────
+        let mut pending = PendingPolylines {
+            vertices: HashMap::new(),
+            polylines: Vec::new(),
+        };
         for &handle in &handles {
             let offset = match self.obj_reader.offset_for(handle) {
                 Some(o) if o >= 0 => o,
@@ -236,9 +259,9 @@ impl DwgDocumentBuilder {
             // Wrap per-object processing in catch_unwind to survive
             // corrupt or misaligned records without crashing the entire read.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.process_pass2_record(handle, type_code, reader, document, &maps);
+                self.process_pass2_record(handle, type_code, reader, document, &maps, &mut pending);
             }));
-            if result.is_err() {
+            if let Err(ref _e) = result {
                 skipped_pass2 += 1;
                 self.notifications.notify(
                     NotificationType::Error,
@@ -249,6 +272,73 @@ impl DwgDocumentBuilder {
                 );
                 continue;
             }
+        }
+
+        // ── Post-pass: Assemble polyline vertices and add to document ──
+        for (poly_handle, mut entity) in pending.polylines {
+            if let Some(verts) = pending.vertices.remove(&poly_handle) {
+                match &mut entity {
+                    EntityType::Polyline2D(ref mut e) => {
+                        e.vertices = verts.into_iter().filter_map(|v| {
+                            if let PendingVertex::V2D(d) = v {
+                                Some(crate::entities::polyline::Vertex2D {
+                                    location: crate::types::Vector3::new(d.x, d.y, d.z),
+                                    flags: crate::entities::polyline::VertexFlags::from_bits(d.flags),
+                                    start_width: d.start_width,
+                                    end_width: d.end_width,
+                                    bulge: d.bulge,
+                                    curve_tangent: d.tangent_dir,
+                                    id: d.vertex_id,
+                                })
+                            } else { None }
+                        }).collect();
+                    }
+                    EntityType::Polyline3D(ref mut e) => {
+                        e.vertices = verts.into_iter().filter_map(|v| {
+                            if let PendingVertex::V3D(d) = v {
+                                Some(crate::entities::polyline3d::Vertex3DPolyline {
+                                    handle: Handle::NULL,
+                                    layer: String::new(),
+                                    position: d.position,
+                                    flags: d.flags as i32,
+                                })
+                            } else { None }
+                        }).collect();
+                    }
+                    EntityType::PolyfaceMesh(ref mut e) => {
+                        for v in verts {
+                            match v {
+                                PendingVertex::V3D(d) => {
+                                    e.vertices.push(crate::entities::polyface_mesh::PolyfaceVertex {
+                                        common: EntityCommon::default(),
+                                        location: d.position,
+                                        flags: crate::entities::polyface_mesh::PolyfaceVertexFlags::POLYFACE_MESH,
+                                        bulge: 0.0,
+                                        start_width: 0.0,
+                                        end_width: 0.0,
+                                        curve_tangent: 0.0,
+                                        id: 0,
+                                    });
+                                }
+                                PendingVertex::PfaceFace(f) => {
+                                    e.faces.push(crate::entities::polyface_mesh::PolyfaceFace {
+                                        common: EntityCommon::default(),
+                                        flags: crate::entities::polyface_mesh::PolyfaceVertexFlags::NONE,
+                                        index1: f.index1,
+                                        index2: f.index2,
+                                        index3: f.index3,
+                                        index4: f.index4,
+                                        color: None,
+                                    });
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let _ = document.add_entity(entity);
         }
 
         // Summary notification
@@ -278,6 +368,7 @@ impl DwgDocumentBuilder {
         mut reader: crate::io::dwg::dwg_stream_readers::merged_reader::DwgMergedReader,
         document: &mut CadDocument,
         maps: &HandleMaps,
+        pending: &mut PendingPolylines,
     ) {
         if is_entity_type(type_code) {
             let entity_data = self.obj_reader.read_common_entity_data(&mut reader, type_code);
@@ -417,6 +508,7 @@ impl DwgDocumentBuilder {
                     e.thickness = data.thickness;
                     e.constant_width = data.constant_width;
                     e.normal = data.normal;
+                    e.is_closed = (data.flag & 0x200) != 0;
                     let _ = document.add_entity(EntityType::LwPolyline(e));
                 },
                 OBJ_SPLINE => {
@@ -457,6 +549,7 @@ impl DwgDocumentBuilder {
                         3 => TextVerticalAlignment::Top,
                         _ => TextVerticalAlignment::Baseline,
                     };
+                    e.style = maps.style_name(data.style_handle);
                     let _ = document.add_entity(EntityType::Text(e));
                 },
                 OBJ_MTEXT => {
@@ -486,6 +579,10 @@ impl DwgDocumentBuilder {
                         3 => DrawingDirection::ByStyle,
                         _ => DrawingDirection::LeftToRight,
                     };
+                    // Compute rotation from x_direction vector
+                    e.rotation = data.x_direction.y.atan2(data.x_direction.x);
+                    e.line_spacing_factor = data.linespacing_factor;
+                    e.style = maps.style_name(data.style_handle);
                     let _ = document.add_entity(EntityType::MText(e));
                 },
                 OBJ_LEADER => {
@@ -522,6 +619,67 @@ impl DwgDocumentBuilder {
                     e.is_double = data.is_double;
                     e.pattern_angle = data.pattern_angle;
                     e.pattern_scale = data.pattern_scale;
+                    // Convert DWG boundary paths to entity BoundaryPath
+                    e.paths = data.paths.into_iter().map(|hp| {
+                        use crate::entities::hatch::*;
+                        let mut bp = BoundaryPath::with_flags(
+                            BoundaryPathFlags::from_bits(hp.flags as u32),
+                        );
+                        // Polyline boundary path
+                        if !hp.polyline_vertices.is_empty() {
+                            let pe = PolylineEdge {
+                                vertices: hp.polyline_vertices.iter()
+                                    .map(|(pt, bulge)| crate::types::Vector3::new(pt.x, pt.y, *bulge))
+                                    .collect(),
+                                is_closed: hp.polyline_closed,
+                            };
+                            bp.add_edge(BoundaryEdge::Polyline(pe));
+                        }
+                        // Edge-type boundary path
+                        for edge in hp.edges {
+                            match edge {
+                                crate::io::dwg::dwg_stream_readers::object_reader::entities::HatchEdge::Line(l) => {
+                                    bp.add_edge(BoundaryEdge::Line(LineEdge {
+                                        start: l.start,
+                                        end: l.end,
+                                    }));
+                                }
+                                crate::io::dwg::dwg_stream_readers::object_reader::entities::HatchEdge::Arc(a) => {
+                                    bp.add_edge(BoundaryEdge::CircularArc(CircularArcEdge {
+                                        center: a.center,
+                                        radius: a.radius,
+                                        start_angle: a.start_angle,
+                                        end_angle: a.end_angle,
+                                        counter_clockwise: a.ccw,
+                                    }));
+                                }
+                                crate::io::dwg::dwg_stream_readers::object_reader::entities::HatchEdge::Ellipse(el) => {
+                                    bp.add_edge(BoundaryEdge::EllipticArc(EllipticArcEdge {
+                                        center: el.center,
+                                        major_axis_endpoint: el.major_endpoint,
+                                        minor_axis_ratio: el.minor_ratio,
+                                        start_angle: el.start_angle,
+                                        end_angle: el.end_angle,
+                                        counter_clockwise: el.ccw,
+                                    }));
+                                }
+                                crate::io::dwg::dwg_stream_readers::object_reader::entities::HatchEdge::Spline(s) => {
+                                    bp.add_edge(BoundaryEdge::Spline(SplineEdge {
+                                        degree: s.degree,
+                                        rational: s.rational,
+                                        periodic: s.periodic,
+                                        knots: s.knots,
+                                        control_points: s.control_points,
+                                        fit_points: s.fit_points,
+                                        start_tangent: s.start_tangent,
+                                        end_tangent: s.end_tangent,
+                                    }));
+                                }
+                            }
+                        }
+                        bp
+                    }).collect();
+                    e.seed_points = data.seed_points;
                     let _ = document.add_entity(EntityType::Hatch(e));
                 },
                 OBJ_VIEWPORT => {
@@ -552,13 +710,16 @@ impl DwgDocumentBuilder {
                     e.normal = data.normal;
                     e.start_width = data.start_width;
                     e.end_width = data.end_width;
-                    let _ = document.add_entity(EntityType::Polyline2D(e));
+                    let h = e.common.handle.value();
+                    pending.polylines.push((h, EntityType::Polyline2D(e)));
                 },
                 OBJ_POLYLINE_3D => {
-                    let _data = entities::read_polyline3d(&mut reader, self.obj_reader.version());
+                    let data = entities::read_polyline3d(&mut reader, self.obj_reader.version());
                     let mut e = Polyline3D::new();
                     e.common = entity_common;
-                    let _ = document.add_entity(EntityType::Polyline3D(e));
+                    e.flags.closed = (data.closed_flag & 1) != 0;
+                    let h = e.common.handle.value();
+                    pending.polylines.push((h, EntityType::Polyline3D(e)));
                 },
 
                 // ── Dimension types ────────────────────────────────
@@ -678,6 +839,20 @@ impl DwgDocumentBuilder {
                     e.start_point = data.start_point;
                     e.normal = data.normal;
                     e.style_element_count = data.lines_in_style as usize;
+                    // Populate vertices from parsed data
+                    e.vertices = data.vertices.into_iter().map(|vd| {
+                        use crate::entities::mline::{MLineVertex, MLineSegment};
+                        let mut mv = MLineVertex::new(vd.position);
+                        mv.direction = vd.direction;
+                        mv.miter = vd.miter;
+                        mv.segments = vd.segments.into_iter().map(|sd| {
+                            MLineSegment {
+                                parameters: sd.parameters,
+                                area_fill_parameters: sd.area_fill_parameters,
+                            }
+                        }).collect();
+                        mv
+                    }).collect();
                     let _ = document.add_entity(EntityType::MLine(e));
                 },
 
@@ -687,7 +862,8 @@ impl DwgDocumentBuilder {
                     );
                     let mut e = PolyfaceMesh::new();
                     e.common = entity_common;
-                    let _ = document.add_entity(EntityType::PolyfaceMesh(e));
+                    let h = e.common.handle.value();
+                    pending.polylines.push((h, EntityType::PolyfaceMesh(e)));
                 },
 
                 OBJ_MESH => {
@@ -763,25 +939,33 @@ impl DwgDocumentBuilder {
                 // ── Vertex child entities ──────────────────────────
                 // Vertex records are children of POLYLINE_2D,
                 // POLYLINE_3D, POLYLINE_PFACE, or POLYLINE_MESH.
-                // In the current architecture, polylines are read as
-                // standalone header records, and vertices are separate
-                // objects.  We read and discard them here because the
-                // parent–child assembly happens in resolve_references.
+                // Collect vertex data and attach to parent polylines
+                // in the post-processing step after Pass 2.
                 OBJ_VERTEX_2D => {
-                    let _data = entities::read_vertex2d(
+                    let data = entities::read_vertex2d(
                         &mut reader, self.obj_reader.version(),
                     );
+                    pending.vertices.entry(entity_data.owner_handle)
+                        .or_default()
+                        .push(PendingVertex::V2D(data));
                 },
                 OBJ_VERTEX_3D | OBJ_VERTEX_MESH => {
-                    let _data = entities::read_vertex3d(&mut reader);
+                    let data = entities::read_vertex3d(&mut reader);
+                    pending.vertices.entry(entity_data.owner_handle)
+                        .or_default()
+                        .push(PendingVertex::V3D(data));
                 },
                 OBJ_VERTEX_PFACE => {
-                    let _data = entities::read_vertex3d(&mut reader);
+                    let data = entities::read_vertex3d(&mut reader);
+                    pending.vertices.entry(entity_data.owner_handle)
+                        .or_default()
+                        .push(PendingVertex::V3D(data));
                 },
                 OBJ_VERTEX_PFACE_FACE => {
-                    // Face record — just vertex indices, consumed by
-                    // read_vertex3d (same binary layout: flags + point).
-                    let _data = entities::read_vertex3d(&mut reader);
+                    let data = entities::read_pface_face(&mut reader);
+                    pending.vertices.entry(entity_data.owner_handle)
+                        .or_default()
+                        .push(PendingVertex::PfaceFace(data));
                 },
 
                 // ── Catch-all ──────────────────────────────────────

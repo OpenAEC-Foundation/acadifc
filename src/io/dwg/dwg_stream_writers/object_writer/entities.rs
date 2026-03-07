@@ -421,29 +421,35 @@ impl<'a> DwgObjectWriter<'a> {
                 self.writer.write_raw_double(e.first_corner.z);
             }
 
-            // 2nd corner 3DD (default = 1st corner) — always includes Z
+            // 2nd corner 3DD (default = 1st corner)
             self.writer
                 .write_bit_double_with_default(e.second_corner.x, e.first_corner.x);
             self.writer
                 .write_bit_double_with_default(e.second_corner.y, e.first_corner.y);
-            self.writer
-                .write_bit_double_with_default(e.second_corner.z, e.first_corner.z);
+            if !z_is_zero {
+                self.writer
+                    .write_bit_double_with_default(e.second_corner.z, e.first_corner.z);
+            }
 
             // 3rd corner 3DD (default = 2nd corner)
             self.writer
                 .write_bit_double_with_default(e.third_corner.x, e.second_corner.x);
             self.writer
                 .write_bit_double_with_default(e.third_corner.y, e.second_corner.y);
-            self.writer
-                .write_bit_double_with_default(e.third_corner.z, e.second_corner.z);
+            if !z_is_zero {
+                self.writer
+                    .write_bit_double_with_default(e.third_corner.z, e.second_corner.z);
+            }
 
             // 4th corner 3DD (default = 3rd corner)
             self.writer
                 .write_bit_double_with_default(e.fourth_corner.x, e.third_corner.x);
             self.writer
                 .write_bit_double_with_default(e.fourth_corner.y, e.third_corner.y);
-            self.writer
-                .write_bit_double_with_default(e.fourth_corner.z, e.third_corner.z);
+            if !z_is_zero {
+                self.writer
+                    .write_bit_double_with_default(e.fourth_corner.z, e.third_corner.z);
+            }
 
             if !has_no_flags {
                 self.writer

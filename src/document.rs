@@ -1261,7 +1261,15 @@ impl CadDocument {
             entity.as_entity_mut().set_handle(h);
             h
         } else {
-            entity.common().handle
+            let h = entity.common().handle;
+            // Ensure the handle counter stays above this handle so
+            // future allocations (e.g., vertex sub-entities) don't
+            // collide with it.
+            if h.value() >= self.next_handle {
+                self.next_handle = h.value() + 1;
+                self.header.handle_seed = self.next_handle;
+            }
+            h
         };
 
         // Set owner to *Model_Space block record if not already set

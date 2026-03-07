@@ -916,6 +916,20 @@ pub struct Vertex3DData {
 }
 
 #[derive(Debug, Clone)]
+pub struct MLineVertexData {
+    pub position: Vector3,
+    pub direction: Vector3,
+    pub miter: Vector3,
+    pub segments: Vec<MLineSegmentData>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MLineSegmentData {
+    pub parameters: Vec<f64>,
+    pub area_fill_parameters: Vec<f64>,
+}
+
+#[derive(Debug, Clone)]
 pub struct MLineData {
     pub scale_factor: f64,
     pub justification: u8,
@@ -924,6 +938,7 @@ pub struct MLineData {
     pub openclosed: i16,
     pub lines_in_style: u8,
     pub vertex_count: i16,
+    pub vertices: Vec<MLineVertexData>,
     pub style_handle: u64,
 }
 
@@ -1321,6 +1336,7 @@ pub fn read_viewport(reader: &mut DwgMergedReader, version: DwgVersion, _dxf_ver
 
 pub fn read_polyline2d(reader: &mut DwgMergedReader, version: DwgVersion) -> Polyline2DData {
     let flags = reader.read_bit_short();
+    let _smooth_surface = reader.read_bit_short(); // BS 75: curves and smooth surface type
     let start_width = reader.read_bit_double();
     let end_width = reader.read_bit_double();
     let thickness = reader.read_bit_thickness();
@@ -1368,6 +1384,24 @@ pub fn read_polyface_mesh(reader: &mut DwgMergedReader, version: DwgVersion) -> 
     (num_verts, num_faces, owned_count)
 }
 
+/// Face record data from OBJ_VERTEX_PFACE_FACE (type 14).
+pub struct PfaceFaceData {
+    pub index1: i16,
+    pub index2: i16,
+    pub index3: i16,
+    pub index4: i16,
+}
+
+/// Read a VERTEX_PFACE_FACE record (type code 14).
+/// Format: 4 × BS (vertex indices), no flags byte.
+pub fn read_pface_face(reader: &mut DwgMergedReader) -> PfaceFaceData {
+    let index1 = reader.read_bit_short();
+    let index2 = reader.read_bit_short();
+    let index3 = reader.read_bit_short();
+    let index4 = reader.read_bit_short();
+    PfaceFaceData { index1, index2, index3, index4 }
+}
+
 pub fn read_polygon_mesh(reader: &mut DwgMergedReader, version: DwgVersion) -> (i16, i16, i16, i16, i16, i16, i32) {
     let flags = reader.read_bit_short();
     let smooth_type = reader.read_bit_short();
@@ -1393,21 +1427,27 @@ pub fn read_mline(reader: &mut DwgMergedReader) -> MLineData {
     let vertex_count = reader.read_bit_short();
 
     // Read vertices (position + direction + miter + segments)
+    let mut vertices = Vec::with_capacity(vertex_count as usize);
     for _ in 0..vertex_count {
-        let _pos = reader.read_3bit_double();
-        let _dir = reader.read_3bit_double();
-        let _miter = reader.read_3bit_double();
+        let pos = reader.read_3bit_double();
+        let dir = reader.read_3bit_double();
+        let miter = reader.read_3bit_double();
+        let mut segments = Vec::with_capacity(lines_in_style as usize);
         for _ in 0..lines_in_style {
             let num_params = reader.read_bit_short();
-            for _ in 0..num_params { let _p = reader.read_bit_double(); }
+            let mut params = Vec::with_capacity(num_params as usize);
+            for _ in 0..num_params { params.push(reader.read_bit_double()); }
             let num_area = reader.read_bit_short();
-            for _ in 0..num_area { let _p = reader.read_bit_double(); }
+            let mut area_params = Vec::with_capacity(num_area as usize);
+            for _ in 0..num_area { area_params.push(reader.read_bit_double()); }
+            segments.push(MLineSegmentData { parameters: params, area_fill_parameters: area_params });
         }
+        vertices.push(MLineVertexData { position: pos, direction: dir, miter, segments });
     }
 
     let style_handle = reader.read_handle();
 
-    MLineData { scale_factor, justification, start_point, normal, openclosed, lines_in_style, vertex_count, style_handle }
+    MLineData { scale_factor, justification, start_point, normal, openclosed, lines_in_style, vertex_count, vertices, style_handle }
 }
 
 pub fn read_mesh(reader: &mut DwgMergedReader) -> MeshData {

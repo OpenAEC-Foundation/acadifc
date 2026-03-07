@@ -166,30 +166,52 @@ impl DwgObjectReader {
         }
         let merged_data = self.data[pos..pos + size].to_vec();
 
-        // 4. For R2007 (ThreeStream, non-R2010): read type_code and
-        //    total_size_bits from a temp reader first, then manually
-        //    construct the three-stream readers with correct positions.
-        //    The ThreeStream constructor in DwgMergedReader::new reads
-        //    from position 0 expecting a BL, but position 0 has BS(type_code).
-        if self.version.r2007_plus() && !self.version.r2010_plus() {
+        // 4. For R2007+ (ThreeStream): read type_code from a temp reader,
+        //    then manually construct the three sub-readers with correct
+        //    stream positions.
+        //
+        //    R2007 (AC1021): record contains an RL (total_size_bits) field
+        //      after the type code.  Stream positions are derived from RL.
+        //
+        //    R2010+ (AC1024+): NO embedded RL field.  Stream positions are
+        //      computed from handle_bits (MC in the record framing).
+        //      handle_start = total_data_bits - handle_bits
+        //      flag_position = handle_start - 1
+        if self.version.r2007_plus() {
             let dwg = DwgVersion::from_dxf_version(self.dxf_version)
                 .unwrap_or(DwgVersion::AC15);
 
-            // Read type_code + total_size_bits from temp reader
+            // Read type_code from temp reader
             let mut temp = crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::new(
                 merged_data.clone(), dwg, self.dxf_version,
             );
             let type_code = temp.read_object_type();
-            let _saved_pos = temp.position_in_bits(); // position of the RL
-            let total_size_bits = temp.read_raw_long() as i64;
-            let data_start_bits = temp.position_in_bits();
 
-            // Per-object RL convention (matches ACadSharp):
-            // RL = absolute bit position of handle stream start (from bit 0).
-            // Flag bit is at RL - 1.  Handles start at bit RL (NOT byte-aligned).
-            let flag_position = total_size_bits - 1;
+            // Compute flag_position and handle_start
+            let (flag_position, handle_start, data_start_bits);
 
-            // Main reader: starts at data_start_bits (after type_code + RL)
+            if !self.version.r2010_plus() {
+                // R2007: RL is embedded after type_code
+                let _saved_pos = temp.position_in_bits();
+                let total_size_bits = temp.read_raw_long() as i64;
+                data_start_bits = temp.position_in_bits();
+
+                // Per-object RL convention (matches ACadSharp):
+                // RL = absolute bit position of handle stream start (from bit 0).
+                // Flag bit is at RL - 1.  Handles start at bit RL (NOT byte-aligned).
+                flag_position = total_size_bits - 1;
+                handle_start = total_size_bits;
+            } else {
+                // R2010+: No RL field.  Compute from handle_bits (MC).
+                // handle_bits = total_data_bits - handle_start_bits (writer formula)
+                // So: handle_start = total_data_bits - handle_bits
+                data_start_bits = temp.position_in_bits();
+                let total_data_bits = (size as i64) * 8;
+                handle_start = total_data_bits - handle_bits;
+                flag_position = handle_start - 1;
+            }
+
+            // Main reader: starts at data_start_bits (after type_code [+ RL])
             let mut main_reader = crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::new(
                 merged_data.clone(), dwg, self.dxf_version,
             );
@@ -201,12 +223,11 @@ impl DwgObjectReader {
             );
             text_reader.set_position_by_flag(flag_position);
 
-            // Handle reader: starts at bit position total_size_bits (NOT byte-aligned).
-            // This matches ACadSharp's convention for per-object records.
+            // Handle reader: starts at bit position handle_start (NOT byte-aligned).
             let mut handle_reader = crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::new(
                 merged_data.clone(), dwg, self.dxf_version,
             );
-            handle_reader.set_position_in_bits(total_size_bits);
+            handle_reader.set_position_in_bits(handle_start);
 
             let reader = DwgMergedReader::from_readers(
                 main_reader,
@@ -217,11 +238,53 @@ impl DwgObjectReader {
             return Ok((type_code, reader));
         }
 
-        // 5. Create merged reader (R2010+ or pre-R2007)
-        let reader = DwgMergedReader::new(merged_data, self.dxf_version, handle_bits);
+        // 5. Create merged reader (pre-R2007, TwoStream)
+        //
+        //    For R2000–R2004 the merged data layout is:
+        //        [BS type_code][RL main_size_bits][H handle][xdata]
+        //        [...entity/object data...][handle references]
+        //    The RL value (main_size_bits) tells us the bit position
+        //    where the handle references begin in the merged data.
+        //    The writer writes handle bytes at this exact bit position
+        //    (which may NOT be byte-aligned).
+        //
+        //    For R13–R14 there is no top-level RL; we pass 0 and
+        //    handle reads fall back to position 0.
+        let dwg = DwgVersion::from_dxf_version(self.dxf_version)
+            .unwrap_or(DwgVersion::AC15);
+
+        let handle_start_bits = if self.version.r2000_plus() {
+            // Read BS + RL from a disposable temp reader to discover
+            // the split point without consuming from the final reader.
+            let mut temp = crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::new(
+                merged_data.clone(), dwg, self.dxf_version,
+            );
+            let _tc = temp.read_object_type(); // BS
+            temp.read_raw_long() as i64 // RL = main_size_bits
+        } else {
+            // R13–R14: no top-level RL.
+            0
+        };
+
+        // Create main reader (reads from bit 0)
+        let main_reader = crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::new(
+            merged_data.clone(), dwg, self.dxf_version,
+        );
+
+        // Create handle reader positioned at handle_start_bits
+        let mut handle_reader = crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::new(
+            merged_data, dwg, self.dxf_version,
+        );
+        handle_reader.set_position_in_bits(handle_start_bits);
+
+        let mut reader = DwgMergedReader::from_readers(
+            main_reader,
+            None, // no text stream for pre-R2007
+            Some(handle_reader),
+            self.dxf_version,
+        );
 
         // 6. Read the type code from the reader
-        let mut reader = reader;
         let type_code = reader.read_object_type();
 
         Ok((type_code, reader))
