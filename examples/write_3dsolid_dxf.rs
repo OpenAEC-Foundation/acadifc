@@ -15,8 +15,8 @@ fn main() -> acadrust::Result<()> {
     // ── 1. Build the SAT document describing a 10×10×10 box ──────────
     let mut sat = SatDocument::new_body();
 
-    // The body record is at index 1 (index 0 = asmheader).
-    let body_idx = SatPointer::new(1);
+    // The body record is at index 0 (no asmheader in DXF SAT).
+    let body_idx = SatPointer::new(0);
 
     // ────────────── Geometry (surfaces + curves + points) ────────────
 
@@ -74,18 +74,19 @@ fn main() -> acadrust::Result<()> {
 
     // Edges: 12 edges. Coedge pointer set to NULL (patched later by
     // referencing from coedges — ACIS resolves via the coedge→edge link).
-    let e0  = sat.add_edge(SatPointer::new(v0), SatPointer::new(v1), SatPointer::NULL, SatPointer::new(crv_b0), Sense::Forward); // bottom: p0→p1
-    let e1  = sat.add_edge(SatPointer::new(v1), SatPointer::new(v2), SatPointer::NULL, SatPointer::new(crv_b1), Sense::Forward); // bottom: p1→p2
-    let e2  = sat.add_edge(SatPointer::new(v2), SatPointer::new(v3), SatPointer::NULL, SatPointer::new(crv_b2), Sense::Forward); // bottom: p2→p3
-    let e3  = sat.add_edge(SatPointer::new(v3), SatPointer::new(v0), SatPointer::NULL, SatPointer::new(crv_b3), Sense::Forward); // bottom: p3→p0
-    let e4  = sat.add_edge(SatPointer::new(v4), SatPointer::new(v5), SatPointer::NULL, SatPointer::new(crv_t0), Sense::Forward); // top: p4→p5
-    let e5  = sat.add_edge(SatPointer::new(v5), SatPointer::new(v6), SatPointer::NULL, SatPointer::new(crv_t1), Sense::Forward); // top: p5→p6
-    let e6  = sat.add_edge(SatPointer::new(v6), SatPointer::new(v7), SatPointer::NULL, SatPointer::new(crv_t2), Sense::Forward); // top: p6→p7
-    let e7  = sat.add_edge(SatPointer::new(v7), SatPointer::new(v4), SatPointer::NULL, SatPointer::new(crv_t3), Sense::Forward); // top: p7→p4
-    let e8  = sat.add_edge(SatPointer::new(v0), SatPointer::new(v4), SatPointer::NULL, SatPointer::new(crv_v0), Sense::Forward); // vert: p0→p4
-    let e9  = sat.add_edge(SatPointer::new(v1), SatPointer::new(v5), SatPointer::NULL, SatPointer::new(crv_v1), Sense::Forward); // vert: p1→p5
-    let e10 = sat.add_edge(SatPointer::new(v2), SatPointer::new(v6), SatPointer::NULL, SatPointer::new(crv_v2), Sense::Forward); // vert: p2→p6
-    let e11 = sat.add_edge(SatPointer::new(v3), SatPointer::new(v7), SatPointer::NULL, SatPointer::new(crv_v3), Sense::Forward); // vert: p3→p7
+    // v700 edge format: start_vertex, start_param, end_vertex, end_param, coedge, curve, sense
+    let e0  = sat.add_edge(SatPointer::new(v0), 0.0, SatPointer::new(v1), 10.0, SatPointer::NULL, SatPointer::new(crv_b0), Sense::Forward); // bottom: p0→p1
+    let e1  = sat.add_edge(SatPointer::new(v1), 0.0, SatPointer::new(v2), 10.0, SatPointer::NULL, SatPointer::new(crv_b1), Sense::Forward); // bottom: p1→p2
+    let e2  = sat.add_edge(SatPointer::new(v2), 0.0, SatPointer::new(v3), 10.0, SatPointer::NULL, SatPointer::new(crv_b2), Sense::Forward); // bottom: p2→p3
+    let e3  = sat.add_edge(SatPointer::new(v3), 0.0, SatPointer::new(v0), 10.0, SatPointer::NULL, SatPointer::new(crv_b3), Sense::Forward); // bottom: p3→p0
+    let e4  = sat.add_edge(SatPointer::new(v4), 0.0, SatPointer::new(v5), 10.0, SatPointer::NULL, SatPointer::new(crv_t0), Sense::Forward); // top: p4→p5
+    let e5  = sat.add_edge(SatPointer::new(v5), 0.0, SatPointer::new(v6), 10.0, SatPointer::NULL, SatPointer::new(crv_t1), Sense::Forward); // top: p5→p6
+    let e6  = sat.add_edge(SatPointer::new(v6), 0.0, SatPointer::new(v7), 10.0, SatPointer::NULL, SatPointer::new(crv_t2), Sense::Forward); // top: p6→p7
+    let e7  = sat.add_edge(SatPointer::new(v7), 0.0, SatPointer::new(v4), 10.0, SatPointer::NULL, SatPointer::new(crv_t3), Sense::Forward); // top: p7→p4
+    let e8  = sat.add_edge(SatPointer::new(v0), 0.0, SatPointer::new(v4), 10.0, SatPointer::NULL, SatPointer::new(crv_v0), Sense::Forward); // vert: p0→p4
+    let e9  = sat.add_edge(SatPointer::new(v1), 0.0, SatPointer::new(v5), 10.0, SatPointer::NULL, SatPointer::new(crv_v1), Sense::Forward); // vert: p1→p5
+    let e10 = sat.add_edge(SatPointer::new(v2), 0.0, SatPointer::new(v6), 10.0, SatPointer::NULL, SatPointer::new(crv_v2), Sense::Forward); // vert: p2→p6
+    let e11 = sat.add_edge(SatPointer::new(v3), 0.0, SatPointer::new(v7), 10.0, SatPointer::NULL, SatPointer::new(crv_v3), Sense::Forward); // vert: p3→p7
 
     // ── Reserve indices for coedges, loops, faces, shell, lump ──────
     // We need to pre-calculate indices to set up circular references.
@@ -114,10 +115,28 @@ fn main() -> acadrust::Result<()> {
     let co1 = co_base + 1;
     let co2 = co_base + 2;
     let co3 = co_base + 3;
-    sat.add_coedge(ptr(co1), ptr(co3), ptr(co0 + 24), ptr(e0), Sense::Reversed, ptr(loop_base));       // will be partner'd by front face
-    sat.add_coedge(ptr(co2), ptr(co0), ptr(co1 + 24), ptr(e3), Sense::Reversed, ptr(loop_base));       // partner'd by left face
-    sat.add_coedge(ptr(co3), ptr(co1), ptr(co2 + 24), ptr(e2), Sense::Reversed, ptr(loop_base));       // partner'd by back face
-    sat.add_coedge(ptr(co0), ptr(co2), ptr(co3 + 24), ptr(e1), Sense::Reversed, ptr(loop_base));       // partner'd by right face
+    // Partners: co0↔co8(front/e0), co1↔co20(left/e3), co2↔co12(back/e2), co3↔co16(right/e1)
+    let co8  = co_base + 8;
+    let co9  = co_base + 9;
+    let co10 = co_base + 10;
+    let co11 = co_base + 11;
+    let co12 = co_base + 12;
+    let co13 = co_base + 13;
+    let co14 = co_base + 14;
+    let co15 = co_base + 15;
+    let co16 = co_base + 16;
+    let co17 = co_base + 17;
+    let co18 = co_base + 18;
+    let co19 = co_base + 19;
+    let co20 = co_base + 20;
+    let co21 = co_base + 21;
+    let co22 = co_base + 22;
+    let co23 = co_base + 23;
+
+    sat.add_coedge(ptr(co1), ptr(co3), ptr(co8),  ptr(e0), Sense::Reversed, ptr(loop_base));       // partner = front co8
+    sat.add_coedge(ptr(co2), ptr(co0), ptr(co20), ptr(e3), Sense::Reversed, ptr(loop_base));       // partner = left co20
+    sat.add_coedge(ptr(co3), ptr(co1), ptr(co12), ptr(e2), Sense::Reversed, ptr(loop_base));       // partner = back co12
+    sat.add_coedge(ptr(co0), ptr(co2), ptr(co16), ptr(e1), Sense::Reversed, ptr(loop_base));       // partner = right co16
 
     // ── Top face (Z = +5): normal = (0,0,1)
     //    Loop: e4(fwd) → e5(fwd) → e6(fwd) → e7(fwd)
@@ -126,42 +145,30 @@ fn main() -> acadrust::Result<()> {
     let co5 = co_base + 5;
     let co6 = co_base + 6;
     let co7 = co_base + 7;
-    sat.add_coedge(ptr(co5), ptr(co7), ptr(co4 + 24), ptr(e4), Sense::Forward, ptr(loop_base + 1));    // partner'd by front face
-    sat.add_coedge(ptr(co6), ptr(co4), ptr(co5 + 24), ptr(e5), Sense::Forward, ptr(loop_base + 1));    // partner'd by right face
-    sat.add_coedge(ptr(co7), ptr(co5), ptr(co6 + 24), ptr(e6), Sense::Forward, ptr(loop_base + 1));    // partner'd by back face
-    sat.add_coedge(ptr(co4), ptr(co6), ptr(co7 + 24), ptr(e7), Sense::Forward, ptr(loop_base + 1));    // partner'd by left face
+    sat.add_coedge(ptr(co5), ptr(co7), ptr(co10), ptr(e4), Sense::Forward, ptr(loop_base + 1));    // partner = front co10
+    sat.add_coedge(ptr(co6), ptr(co4), ptr(co18), ptr(e5), Sense::Forward, ptr(loop_base + 1));    // partner = right co18
+    sat.add_coedge(ptr(co7), ptr(co5), ptr(co14), ptr(e6), Sense::Forward, ptr(loop_base + 1));    // partner = back co14
+    sat.add_coedge(ptr(co4), ptr(co6), ptr(co22), ptr(e7), Sense::Forward, ptr(loop_base + 1));    // partner = left co22
 
     // ── Front face (Y = -5): normal = (0,-1,0)
     //    Loop: e0(fwd) → e9(fwd) → e4(rev) → e8(rev)
     //    coedges: co_base+8..11
-    let co8  = co_base + 8;
-    let co9  = co_base + 9;
-    let co10 = co_base + 10;
-    let co11 = co_base + 11;
-    sat.add_coedge(ptr(co9),  ptr(co11), ptr(co0),          ptr(e0), Sense::Forward,  ptr(loop_base + 2)); // partner = bottom co0
-    sat.add_coedge(ptr(co10), ptr(co8),  ptr(co9  + 24-8),  ptr(e9), Sense::Forward,  ptr(loop_base + 2)); // partner'd by right face
-    sat.add_coedge(ptr(co11), ptr(co9),  ptr(co4),          ptr(e4), Sense::Reversed, ptr(loop_base + 2)); // partner = top co4
-    sat.add_coedge(ptr(co8),  ptr(co10), ptr(co11 + 24-8),  ptr(e8), Sense::Reversed, ptr(loop_base + 2)); // partner'd by left face
+    sat.add_coedge(ptr(co9),  ptr(co11), ptr(co0),  ptr(e0), Sense::Forward,  ptr(loop_base + 2)); // partner = bottom co0
+    sat.add_coedge(ptr(co10), ptr(co8),  ptr(co19), ptr(e9), Sense::Forward,  ptr(loop_base + 2)); // partner = right co19
+    sat.add_coedge(ptr(co11), ptr(co9),  ptr(co4),  ptr(e4), Sense::Reversed, ptr(loop_base + 2)); // partner = top co4
+    sat.add_coedge(ptr(co8),  ptr(co10), ptr(co21), ptr(e8), Sense::Reversed, ptr(loop_base + 2)); // partner = left co21
 
     // ── Back face (Y = +5): normal = (0,1,0)
     //    Loop: e2(fwd) → e11(fwd) → e6(rev) → e10(rev)
     //    coedges: co_base+12..15
-    let co12 = co_base + 12;
-    let co13 = co_base + 13;
-    let co14 = co_base + 14;
-    let co15 = co_base + 15;
-    sat.add_coedge(ptr(co13), ptr(co15), ptr(co2),         ptr(e2),  Sense::Forward,  ptr(loop_base + 3)); // partner = bottom co2
-    sat.add_coedge(ptr(co14), ptr(co12), ptr(co13 + 24 - 12), ptr(e11), Sense::Forward,  ptr(loop_base + 3)); // partner'd by left face
-    sat.add_coedge(ptr(co15), ptr(co13), ptr(co6),         ptr(e6),  Sense::Reversed, ptr(loop_base + 3)); // partner = top co6
-    sat.add_coedge(ptr(co12), ptr(co14), ptr(co15 + 24 - 12), ptr(e10), Sense::Reversed, ptr(loop_base + 3)); // partner'd by right face
+    sat.add_coedge(ptr(co13), ptr(co15), ptr(co2),  ptr(e2),  Sense::Forward,  ptr(loop_base + 3)); // partner = bottom co2
+    sat.add_coedge(ptr(co14), ptr(co12), ptr(co23), ptr(e11), Sense::Forward,  ptr(loop_base + 3)); // partner = left co23
+    sat.add_coedge(ptr(co15), ptr(co13), ptr(co6),  ptr(e6),  Sense::Reversed, ptr(loop_base + 3)); // partner = top co6
+    sat.add_coedge(ptr(co12), ptr(co14), ptr(co17), ptr(e10), Sense::Reversed, ptr(loop_base + 3)); // partner = right co17
 
     // ── Right face (X = +5): normal = (1,0,0)
     //    Loop: e1(fwd) → e10(fwd) → e5(rev) → e9(rev)
     //    coedges: co_base+16..19
-    let co16 = co_base + 16;
-    let co17 = co_base + 17;
-    let co18 = co_base + 18;
-    let co19 = co_base + 19;
     sat.add_coedge(ptr(co17), ptr(co19), ptr(co3),  ptr(e1),  Sense::Forward,  ptr(loop_base + 4)); // partner = bottom co3
     sat.add_coedge(ptr(co18), ptr(co16), ptr(co15), ptr(e10), Sense::Forward,  ptr(loop_base + 4)); // partner = back co15
     sat.add_coedge(ptr(co19), ptr(co17), ptr(co5),  ptr(e5),  Sense::Reversed, ptr(loop_base + 4)); // partner = top co5
@@ -170,10 +177,6 @@ fn main() -> acadrust::Result<()> {
     // ── Left face (X = -5): normal = (-1,0,0)
     //    Loop: e3(fwd) → e8(fwd) → e7(rev) → e11(rev)
     //    coedges: co_base+20..23
-    let co20 = co_base + 20;
-    let co21 = co_base + 21;
-    let co22 = co_base + 22;
-    let co23 = co_base + 23;
     sat.add_coedge(ptr(co21), ptr(co23), ptr(co1),  ptr(e3),  Sense::Forward,  ptr(loop_base + 5)); // partner = bottom co1
     sat.add_coedge(ptr(co22), ptr(co20), ptr(co11), ptr(e8),  Sense::Forward,  ptr(loop_base + 5)); // partner = front co11
     sat.add_coedge(ptr(co23), ptr(co21), ptr(co7),  ptr(e7),  Sense::Reversed, ptr(loop_base + 5)); // partner = top co7
@@ -199,9 +202,9 @@ fn main() -> acadrust::Result<()> {
     sat.add_shell(ptr(face_base), ptr(lump_idx));
     sat.add_lump(ptr(shell_idx), body_idx);
 
-    // Patch the body record to point to the lump
-    if let Some(body_rec) = sat.record_mut(1) {
-        body_rec.tokens[0] = SatToken::Pointer(ptr(lump_idx));
+    // Patch the body record to point to the lump (lump is at tokens[1] in v700 format)
+    if let Some(body_rec) = sat.record_mut(0) {
+        body_rec.tokens[1] = SatToken::Pointer(ptr(lump_idx));
     }
 
     // Print the generated SAT text for inspection

@@ -12,11 +12,16 @@ impl SatWriter {
     pub fn write(doc: &SatDocument) -> String {
         let mut output = String::new();
 
-        // Header line 1: version, num_records, num_bodies, has_history
+        // Header line 1: version, num_records (always 0 for v7+), num_bodies, has_history
+        let num_records_out = if doc.header.version.has_explicit_indices() {
+            0 // ACIS 7.0+ always writes 0 for record count
+        } else {
+            doc.header.num_records
+        };
         output.push_str(&format!(
             "{} {} {} {}\n",
             doc.header.version.sat_version_number(),
-            doc.header.num_records,
+            num_records_out,
             doc.header.num_bodies,
             if doc.header.has_history { 1 } else { 0 }
         ));
@@ -47,11 +52,20 @@ impl SatWriter {
         }
 
         // Header line 3: tolerances
-        output.push_str(&format!(
-            "{} {}\n",
-            format_float(doc.header.spatial_resolution),
-            format_float(doc.header.normal_tolerance),
-        ));
+        if let Some(resfit) = doc.header.resfit_tolerance {
+            output.push_str(&format!(
+                "{} {} {}\n",
+                format_float(doc.header.spatial_resolution),
+                format_float(doc.header.normal_tolerance),
+                format_float(resfit),
+            ));
+        } else {
+            output.push_str(&format!(
+                "{} {}\n",
+                format_float(doc.header.spatial_resolution),
+                format_float(doc.header.normal_tolerance),
+            ));
+        }
 
         // Entity records
         for record in &doc.records {
@@ -66,20 +80,17 @@ impl SatWriter {
 
     /// Write a single entity record.
     fn write_record(output: &mut String, record: &SatRecord, version: &SatVersion) {
-        // If raw text is preserved and we want roundtrip fidelity, use it
-        // (but we always regenerate for correctness)
-
-        // Record index (ACIS 7.0+ uses explicit negative indices)
-        if version.has_explicit_indices() {
-            output.push_str(&format!("-{} ", record.index));
-        }
-
-        // Entity type
+        // Entity type (no explicit index prefix — ACIS 7.0+ doesn't use them in DXF)
         output.push_str(&record.entity_type);
         output.push(' ');
 
         // Attribute pointer
         output.push_str(&format!("{}", record.attribute));
+
+        // Subtype/ID field (only present in ACIS 7.0+ / SAT version 700+)
+        if version.major >= 7 {
+            output.push_str(&format!(" {}", record.subtype_id));
+        }
 
         // Remaining tokens
         for token in &record.tokens {
@@ -112,11 +123,41 @@ impl SatWriter {
 }
 
 /// Format a float value for SAT output, preserving precision.
+///
+/// Uses scientific notation (e.g. `9.9999999999999995e-007`) for very
+/// small or very large values, matching the ACIS convention.
 fn format_float(v: f64) -> String {
     if v == 0.0 {
         "0".to_string()
     } else if v.fract() == 0.0 && v.abs() < 1e15 && !v.is_infinite() && !v.is_nan() {
         format!("{}", v as i64)
+    } else if v.abs() < 1e-3 || v.abs() >= 1e15 {
+        // Scientific notation with 3-digit exponent to match ACIS convention.
+        // Rust's {:e} gives e.g. "1e-6"; we need "1e-006".
+        let s = format!("{:e}", v);
+        // Parse exponent part and reformat with 3-digit exponent
+        if let Some(pos) = s.find('e') {
+            let mantissa = &s[..pos];
+            let exp_str = &s[pos + 1..];
+            let exp: i32 = exp_str.parse().unwrap_or(0);
+            // Trim trailing zeros from mantissa (keep at least one digit
+            // after decimal point if present), but strip the point
+            // entirely if there is no fractional part.
+            let mantissa = if mantissa.contains('.') {
+                let trimmed = mantissa.trim_end_matches('0');
+                let trimmed = trimmed.trim_end_matches('.');
+                trimmed
+            } else {
+                mantissa
+            };
+            if exp < 0 {
+                format!("{}e-{:03}", mantissa, -exp)
+            } else {
+                format!("{}e+{:03}", mantissa, exp)
+            }
+        } else {
+            s
+        }
     } else {
         // Use full precision
         format!("{}", v)
@@ -130,33 +171,15 @@ fn format_float(v: f64) -> String {
 impl SatDocument {
     /// Create a new SAT document for a simple body with ACIS 7.0 format.
     ///
-    /// Sets up the `asmheader` and `body` records.
+    /// Sets up the `body` record at index 0 (no asmheader needed for DXF SAT).
     pub fn new_body() -> Self {
         let mut doc = Self::new();
         doc.header.num_bodies = 1;
 
-        // Add asmheader (required for v7+)
-        let mut asm = SatRecord::new(0, "asmheader");
-        asm.attribute = SatPointer::NULL;
-        asm.tokens.push(SatToken::Integer(-1));
-        asm.tokens.push(SatToken::String(format!(
-            "{} {} {} {}",
-            doc.header.version.sat_version_number(),
-            doc.header.version.major,
-            doc.header.version.minor,
-            doc.header.version.patch
-        )));
-        asm.tokens.push(SatToken::String("ACIS".to_string()));
-        asm.tokens.push(SatToken::String(format!(
-            "{}.{}",
-            doc.header.version.major, doc.header.version.minor
-        )));
-        asm.tokens.push(SatToken::String(doc.header.date.clone()));
-        doc.records.push(asm);
-
-        // Add body
-        let mut body = SatRecord::new(1, "body");
+        // Add body (index 0 — SAT in DXF does not use asmheader)
+        let mut body = SatRecord::new(0, "body");
         body.attribute = SatPointer::NULL;
+        body.tokens.push(SatToken::Pointer(SatPointer::NULL)); // next_body
         body.tokens.push(SatToken::Pointer(SatPointer::NULL)); // lump
         body.tokens.push(SatToken::Pointer(SatPointer::NULL)); // wire
         body.tokens.push(SatToken::Pointer(SatPointer::NULL)); // transform
@@ -176,6 +199,7 @@ impl SatDocument {
         let index = self.records.len() as i32;
         let mut record = SatRecord::new(index, "transform");
         record.attribute = SatPointer::NULL;
+        record.tokens.push(SatToken::Pointer(SatPointer::NULL)); // v700 unknown (always $-1)
 
         // 3x3 rotation matrix
         for row in &rotation {
@@ -202,6 +226,7 @@ impl SatDocument {
         let index = self.records.len() as i32;
         let mut record = SatRecord::new(index, "point");
         record.attribute = SatPointer::NULL;
+        record.tokens.push(SatToken::Pointer(SatPointer::NULL)); // v700 unknown (always $-1)
         record.tokens.push(SatToken::Float(x));
         record.tokens.push(SatToken::Float(y));
         record.tokens.push(SatToken::Float(z));
@@ -220,6 +245,7 @@ impl SatDocument {
         let index = self.records.len() as i32;
         let mut record = SatRecord::new(index, "plane-surface");
         record.attribute = SatPointer::NULL;
+        record.tokens.push(SatToken::Pointer(SatPointer::NULL)); // v700 unknown (always $-1)
         for &v in &root {
             record.tokens.push(SatToken::Float(v));
         }
@@ -248,6 +274,7 @@ impl SatDocument {
         let index = self.records.len() as i32;
         let mut record = SatRecord::new(index, "straight-curve");
         record.attribute = SatPointer::NULL;
+        record.tokens.push(SatToken::Pointer(SatPointer::NULL)); // v700 unknown (always $-1)
         for &v in &root {
             record.tokens.push(SatToken::Float(v));
         }
@@ -274,6 +301,7 @@ impl SatDocument {
         let index = self.records.len() as i32;
         let mut record = SatRecord::new(index, "cone-surface");
         record.attribute = SatPointer::NULL;
+        record.tokens.push(SatToken::Pointer(SatPointer::NULL)); // v700 unknown (always $-1)
         for &v in &center {
             record.tokens.push(SatToken::Float(v));
         }
@@ -307,6 +335,7 @@ impl SatDocument {
         let index = self.records.len() as i32;
         let mut record = SatRecord::new(index, "sphere-surface");
         record.attribute = SatPointer::NULL;
+        record.tokens.push(SatToken::Pointer(SatPointer::NULL)); // v700 unknown (always $-1)
         for &v in &center {
             record.tokens.push(SatToken::Float(v));
         }
@@ -339,6 +368,7 @@ impl SatDocument {
         let index = self.records.len() as i32;
         let mut record = SatRecord::new(index, "torus-surface");
         record.attribute = SatPointer::NULL;
+        record.tokens.push(SatToken::Pointer(SatPointer::NULL)); // v700 unknown (always $-1)
         for &v in &center {
             record.tokens.push(SatToken::Float(v));
         }
@@ -371,6 +401,7 @@ impl SatDocument {
         let index = self.records.len() as i32;
         let mut record = SatRecord::new(index, "ellipse-curve");
         record.attribute = SatPointer::NULL;
+        record.tokens.push(SatToken::Pointer(SatPointer::NULL)); // v700 unknown (always $-1)
         for &v in &center {
             record.tokens.push(SatToken::Float(v));
         }
@@ -393,6 +424,7 @@ impl SatDocument {
         let index = self.records.len() as i32;
         let mut record = SatRecord::new(index, "vertex");
         record.attribute = SatPointer::NULL;
+        record.tokens.push(SatToken::Pointer(SatPointer::NULL)); // v700 unknown (always $-1)
         record.tokens.push(SatToken::Pointer(edge));
         record.tokens.push(SatToken::Pointer(point));
         self.records.push(record);
@@ -401,10 +433,15 @@ impl SatDocument {
     }
 
     /// Add an edge record and return its index.
+    ///
+    /// The v700 edge format:
+    /// `edge $attr -1 $-1 $start_v start_param $end_v end_param $coedge $curve sense @7 unknown`
     pub fn add_edge(
         &mut self,
         start_vertex: SatPointer,
+        start_param: f64,
         end_vertex: SatPointer,
+        end_param: f64,
         coedge: SatPointer,
         curve: SatPointer,
         sense: Sense,
@@ -412,11 +449,15 @@ impl SatDocument {
         let index = self.records.len() as i32;
         let mut record = SatRecord::new(index, "edge");
         record.attribute = SatPointer::NULL;
+        record.tokens.push(SatToken::Pointer(SatPointer::NULL)); // v700 unknown (always $-1)
         record.tokens.push(SatToken::Pointer(start_vertex));
+        record.tokens.push(SatToken::Float(start_param));
         record.tokens.push(SatToken::Pointer(end_vertex));
+        record.tokens.push(SatToken::Float(end_param));
         record.tokens.push(SatToken::Pointer(coedge));
         record.tokens.push(SatToken::Pointer(curve));
         record.tokens.push(SatToken::Enum(sense.as_str().to_string()));
+        record.tokens.push(SatToken::String("unknown".to_string()));
         self.records.push(record);
         self.header.num_records = self.records.len();
         index
@@ -435,12 +476,14 @@ impl SatDocument {
         let index = self.records.len() as i32;
         let mut record = SatRecord::new(index, "coedge");
         record.attribute = SatPointer::NULL;
+        record.tokens.push(SatToken::Pointer(SatPointer::NULL)); // v700 unknown (always $-1)
         record.tokens.push(SatToken::Pointer(next));
         record.tokens.push(SatToken::Pointer(prev));
         record.tokens.push(SatToken::Pointer(partner));
         record.tokens.push(SatToken::Pointer(edge));
         record.tokens.push(SatToken::Enum(sense.as_str().to_string()));
         record.tokens.push(SatToken::Pointer(owner_loop));
+        record.tokens.push(SatToken::Pointer(SatPointer::NULL)); // pcurve (always $-1)
         self.records.push(record);
         self.header.num_records = self.records.len();
         index
@@ -457,6 +500,7 @@ impl SatDocument {
         let mut record = SatRecord::new(index, "loop");
         record.attribute = SatPointer::NULL;
         record.tokens.push(SatToken::Pointer(next_loop));
+        record.tokens.push(SatToken::Pointer(SatPointer::NULL)); // unknown (always $-1)
         record.tokens.push(SatToken::Pointer(first_coedge));
         record.tokens.push(SatToken::Pointer(face));
         self.records.push(record);
@@ -477,6 +521,7 @@ impl SatDocument {
         let index = self.records.len() as i32;
         let mut record = SatRecord::new(index, "face");
         record.attribute = SatPointer::NULL;
+        record.tokens.push(SatToken::Pointer(SatPointer::NULL)); // unknown (always $-1)
         record.tokens.push(SatToken::Pointer(next_face));
         record.tokens.push(SatToken::Pointer(first_loop));
         record.tokens.push(SatToken::Pointer(shell));
@@ -500,6 +545,7 @@ impl SatDocument {
         record.attribute = SatPointer::NULL;
         record.tokens.push(SatToken::Pointer(SatPointer::NULL)); // next_shell
         record.tokens.push(SatToken::Pointer(SatPointer::NULL)); // subshell
+        record.tokens.push(SatToken::Pointer(SatPointer::NULL)); // unknown (always $-1)
         record.tokens.push(SatToken::Pointer(first_face));
         record.tokens.push(SatToken::Pointer(SatPointer::NULL)); // wire
         record.tokens.push(SatToken::Pointer(lump));
@@ -518,6 +564,7 @@ impl SatDocument {
         let mut record = SatRecord::new(index, "lump");
         record.attribute = SatPointer::NULL;
         record.tokens.push(SatToken::Pointer(SatPointer::NULL)); // next_lump
+        record.tokens.push(SatToken::Pointer(SatPointer::NULL)); // unknown (always $-1)
         record.tokens.push(SatToken::Pointer(shell));
         record.tokens.push(SatToken::Pointer(body));
         self.records.push(record);
@@ -540,7 +587,6 @@ mod tests {
         let output = doc.to_sat_string();
 
         assert!(output.contains("700"));
-        assert!(output.contains("asmheader"));
         assert!(output.contains("body"));
         assert!(output.contains("End-of-ACIS-data"));
     }
@@ -614,7 +660,7 @@ mod tests {
     #[test]
     fn test_build_topology() {
         let mut doc = SatDocument::new_body();
-        let body_idx = 1; // body is at index 1
+        let body_idx = 0; // body is at index 0
 
         // Build minimal topology
         let point_idx = doc.add_point(1.0, 2.0, 3.0);
@@ -641,7 +687,7 @@ mod tests {
         assert_eq!(format_float(0.0), "0");
         assert_eq!(format_float(1.0), "1");
         assert_eq!(format_float(-5.0), "-5");
-        assert_eq!(format_float(1e-06), "0.000001");
+        assert_eq!(format_float(1e-06), "1e-006");
     }
 
     #[test]

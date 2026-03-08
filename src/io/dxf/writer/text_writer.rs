@@ -5,9 +5,20 @@ use crate::error::Result;
 use crate::types::Handle;
 use super::stream_writer::DxfStreamWriter;
 
-/// ASCII DXF stream writer
+/// ASCII DXF stream writer.
+///
+/// Uses CR/LF (`\r\n`) line endings as required by the DXF text format
+/// specification.
 pub struct DxfTextWriter<W: Write> {
     writer: W,
+}
+
+/// Write a line with CR/LF terminator to the underlying writer.
+macro_rules! write_crlf {
+    ($dst:expr, $($arg:tt)*) => {{
+        write!($dst, $($arg)*)?;
+        $dst.write_all(b"\r\n")
+    }};
 }
 
 impl<W: Write> DxfTextWriter<W> {
@@ -19,11 +30,11 @@ impl<W: Write> DxfTextWriter<W> {
     /// Write a DXF code with proper formatting (right-aligned in 3-character field)
     fn write_code(&mut self, code: i32) -> Result<()> {
         if code < 10 {
-            writeln!(self.writer, "  {}", code)?;
+            write_crlf!(self.writer, "  {}", code)?;
         } else if code < 100 {
-            writeln!(self.writer, " {}", code)?;
+            write_crlf!(self.writer, " {}", code)?;
         } else {
-            writeln!(self.writer, "{}", code)?;
+            write_crlf!(self.writer, "{}", code)?;
         }
         Ok(())
     }
@@ -37,31 +48,31 @@ impl<W: Write> DxfTextWriter<W> {
 impl<W: Write> DxfStreamWriter for DxfTextWriter<W> {
     fn write_string(&mut self, code: i32, value: &str) -> Result<()> {
         self.write_code(code)?;
-        writeln!(self.writer, "{}", value)?;
+        write_crlf!(self.writer, "{}", value)?;
         Ok(())
     }
     
     fn write_byte(&mut self, code: i32, value: u8) -> Result<()> {
         self.write_code(code)?;
-        writeln!(self.writer, "{}", value)?;
+        write_crlf!(self.writer, "{}", value)?;
         Ok(())
     }
     
     fn write_i16(&mut self, code: i32, value: i16) -> Result<()> {
         self.write_code(code)?;
-        writeln!(self.writer, "{}", value)?;
+        write_crlf!(self.writer, "{:>6}", value)?;
         Ok(())
     }
     
     fn write_i32(&mut self, code: i32, value: i32) -> Result<()> {
         self.write_code(code)?;
-        writeln!(self.writer, "{}", value)?;
+        write_crlf!(self.writer, "{:>6}", value)?;
         Ok(())
     }
     
     fn write_i64(&mut self, code: i32, value: i64) -> Result<()> {
         self.write_code(code)?;
-        writeln!(self.writer, "{}", value)?;
+        write_crlf!(self.writer, "{}", value)?;
         Ok(())
     }
     
@@ -70,7 +81,7 @@ impl<W: Write> DxfStreamWriter for DxfTextWriter<W> {
         // Format with sufficient precision, trimming unnecessary trailing zeros
         // but always including at least one decimal place
         if value == value.trunc() {
-            writeln!(self.writer, "{:.1}", value)?;
+            write_crlf!(self.writer, "{:.1}", value)?;
         } else {
             // Use enough precision for CAD data
             let formatted = format!("{:.15}", value);
@@ -80,20 +91,20 @@ impl<W: Write> DxfStreamWriter for DxfTextWriter<W> {
             } else {
                 trimmed.to_string()
             };
-            writeln!(self.writer, "{}", trimmed)?;
+            write_crlf!(self.writer, "{}", trimmed)?;
         }
         Ok(())
     }
     
     fn write_bool(&mut self, code: i32, value: bool) -> Result<()> {
         self.write_code(code)?;
-        writeln!(self.writer, "{}", if value { 1 } else { 0 })?;
+        write_crlf!(self.writer, "{:>6}", if value { 1 } else { 0 })?;
         Ok(())
     }
     
     fn write_handle(&mut self, code: i32, handle: Handle) -> Result<()> {
         self.write_code(code)?;
-        writeln!(self.writer, "{:X}", handle.value())?;
+        write_crlf!(self.writer, "{:X}", handle.value())?;
         Ok(())
     }
     
@@ -102,7 +113,7 @@ impl<W: Write> DxfStreamWriter for DxfTextWriter<W> {
         for byte in data {
             write!(self.writer, "{:02X}", byte)?;
         }
-        writeln!(self.writer)?;
+        self.writer.write_all(b"\r\n")?;
         Ok(())
     }
     
@@ -126,7 +137,7 @@ mod tests {
             writer.write_string(0, "LINE").unwrap();
         }
         let output = String::from_utf8(buf).unwrap();
-        assert_eq!(output, "  0\nLINE\n");
+        assert_eq!(output, "  0\r\nLINE\r\n");
     }
     
     #[test]
@@ -140,9 +151,9 @@ mod tests {
         }
         let output = String::from_utf8(buf).unwrap();
         // Codes should be right-aligned in 3-character field
-        assert!(output.starts_with("  5\n"));
-        assert!(output.contains(" 62\n"));
-        assert!(output.contains("100\n"));
+        assert!(output.starts_with("  5\r\n"));
+        assert!(output.contains(" 62\r\n"));
+        assert!(output.contains("100\r\n"));
     }
     
     #[test]
@@ -153,12 +164,12 @@ mod tests {
             writer.write_point3d(10, Vector3::new(1.0, 2.0, 3.0)).unwrap();
         }
         let output = String::from_utf8(buf).unwrap();
-        assert!(output.contains(" 10\n"));
-        assert!(output.contains("1.0\n"));
-        assert!(output.contains(" 20\n"));
-        assert!(output.contains("2.0\n"));
-        assert!(output.contains(" 30\n"));
-        assert!(output.contains("3.0\n"));
+        assert!(output.contains(" 10\r\n"));
+        assert!(output.contains("1.0\r\n"));
+        assert!(output.contains(" 20\r\n"));
+        assert!(output.contains("2.0\r\n"));
+        assert!(output.contains(" 30\r\n"));
+        assert!(output.contains("3.0\r\n"));
     }
     
     #[test]
@@ -169,7 +180,7 @@ mod tests {
             writer.write_handle(5, Handle::new(255)).unwrap();
         }
         let output = String::from_utf8(buf).unwrap();
-        assert!(output.contains("FF\n"));
+        assert!(output.contains("FF\r\n"));
     }
 }
 

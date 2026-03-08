@@ -1186,13 +1186,13 @@ mod tests {
         let sat_text = "700 0 1 0\n\
             @8 acadrust @8 ACIS 7.0 @24 Thu Jan 01 00:00:00 2023\n\
             1e-06 9.9999999999999995e-07\n\
-            -0 asmheader $-1 -1 @12 700 7 0 0 @5 ACIS @3 7.0 @24 Thu Jan 01 00:00:00 2023 #\n\
-            -1 body $-1 $2 $-1 $-1 #\n\
-            -2 lump $-1 $-1 $3 $1 #\n\
-            -3 shell $-1 $-1 $-1 $4 $-1 $2 #\n\
-            -4 face $-1 $-1 $5 $3 $-1 $6 forward single #\n\
-            -5 loop $-1 $-1 $-1 $4 #\n\
-            -6 plane-surface $-1 0 0 5 0 0 1 1 0 0 forward_v I I I I #\n\
+            asmheader $-1 -1 @12 700 7 0 0 @5 ACIS @3 7.0 @24 Thu Jan 01 00:00:00 2023 #\n\
+            body $-1 -1 $-1 $2 $-1 $-1 #\n\
+            lump $-1 -1 $-1 $-1 $3 $1 #\n\
+            shell $-1 -1 $-1 $-1 $-1 $4 $-1 $2 #\n\
+            face $-1 -1 $-1 $-1 $5 $3 $-1 $6 forward single #\n\
+            loop $-1 -1 $-1 $-1 $-1 $4 #\n\
+            plane-surface $-1 -1 $-1 0 0 5 0 0 1 1 0 0 forward_v I I I I #\n\
             End-of-ACIS-data\n";
 
         let solid = Solid3D::from_sat(sat_text);

@@ -113,6 +113,8 @@ pub struct SatHeader {
     pub spatial_resolution: f64,
     /// Normal tolerance (angular tolerance in radians, typically ~1e-07).
     pub normal_tolerance: f64,
+    /// Fit tolerance for approximation (ACIS 7.0+, typically 1e-10).
+    pub resfit_tolerance: Option<f64>,
 }
 
 impl SatHeader {
@@ -126,8 +128,9 @@ impl SatHeader {
             product_id: "acadrust".to_string(),
             product_version: "ACIS 7.0".to_string(),
             date: "Thu Jan 01 00:00:00 2023".to_string(),
-            spatial_resolution: 1e-06,
+            spatial_resolution: 10.0,
             normal_tolerance: 9.9999999999999995e-07,
+            resfit_tolerance: Some(1e-10),
         }
     }
 
@@ -312,7 +315,9 @@ pub struct SatRecord {
     pub sub_type: Option<String>,
     /// Attribute pointer (first pointer after entity type).
     pub attribute: SatPointer,
-    /// Remaining tokens in the record (after entity type and attribute).
+    /// Subtype/ID field (integer after attribute, always -1 for standard entities).
+    pub subtype_id: i32,
+    /// Remaining tokens in the record (after entity type, attribute, and subtype_id).
     pub tokens: Vec<SatToken>,
     /// Raw text of the record (preserved for roundtrip fidelity).
     pub raw_text: Option<String>,
@@ -326,6 +331,7 @@ impl SatRecord {
             entity_type: entity_type.to_string(),
             sub_type: None,
             attribute: SatPointer::NULL,
+            subtype_id: -1,
             tokens: Vec::new(),
             raw_text: None,
         }
@@ -459,7 +465,7 @@ impl Default for Sidedness {
 
 /// Accessor for a `body` entity record.
 ///
-/// Body record layout: `body $<attrib> $<lump> $<wire> $<transform>`
+/// Body record layout: `body $<attrib> <id> $<next_body> $<lump> $<wire> $<transform>`
 #[derive(Debug, Clone)]
 pub struct SatBody<'a> {
     record: &'a SatRecord,
@@ -475,25 +481,30 @@ impl<'a> SatBody<'a> {
         }
     }
 
+    /// Pointer to the next body.
+    pub fn next_body(&self) -> SatPointer {
+        self.record.token_pointer(0).unwrap_or(SatPointer::NULL)
+    }
+
     /// Pointer to the first lump.
     pub fn lump(&self) -> SatPointer {
-        self.record.token_pointer(0).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(1).unwrap_or(SatPointer::NULL)
     }
 
     /// Pointer to the wire body (if any).
     pub fn wire_body(&self) -> SatPointer {
-        self.record.token_pointer(1).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(2).unwrap_or(SatPointer::NULL)
     }
 
     /// Pointer to the transform.
     pub fn transform(&self) -> SatPointer {
-        self.record.token_pointer(2).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(3).unwrap_or(SatPointer::NULL)
     }
 }
 
 /// Accessor for a `lump` entity record.
 ///
-/// Lump record layout: `lump $<attrib> $<next_lump> $<shell> $<body>`
+/// Lump record layout: `lump $<attrib> <id> $<next_lump> $<unknown> $<shell> $<body>`
 #[derive(Debug, Clone)]
 pub struct SatLump<'a> {
     record: &'a SatRecord,
@@ -516,18 +527,18 @@ impl<'a> SatLump<'a> {
 
     /// Pointer to the shell.
     pub fn shell(&self) -> SatPointer {
-        self.record.token_pointer(1).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(2).unwrap_or(SatPointer::NULL)
     }
 
     /// Pointer to the owner body.
     pub fn body(&self) -> SatPointer {
-        self.record.token_pointer(2).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(3).unwrap_or(SatPointer::NULL)
     }
 }
 
 /// Accessor for a `shell` entity record.
 ///
-/// Shell record layout: `shell $<attrib> $<next_shell> $<subshell> $<face> $<wire> $<lump>`
+/// Shell record layout: `shell $<attrib> <id> $<next_shell> $<subshell> $<unknown> $<face> $<wire> $<lump>`
 #[derive(Debug, Clone)]
 pub struct SatShell<'a> {
     record: &'a SatRecord,
@@ -555,23 +566,23 @@ impl<'a> SatShell<'a> {
 
     /// Pointer to the first face.
     pub fn face(&self) -> SatPointer {
-        self.record.token_pointer(2).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(3).unwrap_or(SatPointer::NULL)
     }
 
     /// Pointer to the wire.
     pub fn wire(&self) -> SatPointer {
-        self.record.token_pointer(3).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(4).unwrap_or(SatPointer::NULL)
     }
 
     /// Pointer to the owner lump.
     pub fn lump(&self) -> SatPointer {
-        self.record.token_pointer(4).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(5).unwrap_or(SatPointer::NULL)
     }
 }
 
 /// Accessor for a `face` entity record.
 ///
-/// Face record layout: `face $<attrib> $<next_face> $<loop> $<shell> $<subshell> $<surface> <sense> <sidedness>`
+/// Face record layout: `face $<attrib> <id> $<unknown> $<next_face> $<loop> $<shell> $<subshell> $<surface> <sense> <sidedness>`
 #[derive(Debug, Clone)]
 pub struct SatFace<'a> {
     record: &'a SatRecord,
@@ -589,33 +600,33 @@ impl<'a> SatFace<'a> {
 
     /// Pointer to the next face.
     pub fn next_face(&self) -> SatPointer {
-        self.record.token_pointer(0).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(1).unwrap_or(SatPointer::NULL)
     }
 
     /// Pointer to the first loop.
     pub fn first_loop(&self) -> SatPointer {
-        self.record.token_pointer(1).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(2).unwrap_or(SatPointer::NULL)
     }
 
     /// Pointer to the owner shell.
     pub fn shell(&self) -> SatPointer {
-        self.record.token_pointer(2).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(3).unwrap_or(SatPointer::NULL)
     }
 
     /// Pointer to the subshell.
     pub fn subshell(&self) -> SatPointer {
-        self.record.token_pointer(3).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(4).unwrap_or(SatPointer::NULL)
     }
 
     /// Pointer to the surface geometry.
     pub fn surface(&self) -> SatPointer {
-        self.record.token_pointer(4).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(5).unwrap_or(SatPointer::NULL)
     }
 
     /// Surface sense.
     pub fn sense(&self) -> Sense {
         self.record
-            .token_string(5)
+            .token_string(6)
             .map(Sense::from_str)
             .unwrap_or_default()
     }
@@ -623,7 +634,7 @@ impl<'a> SatFace<'a> {
     /// Surface sidedness.
     pub fn sidedness(&self) -> Sidedness {
         self.record
-            .token_string(6)
+            .token_string(7)
             .map(Sidedness::from_str)
             .unwrap_or_default()
     }
@@ -631,7 +642,7 @@ impl<'a> SatFace<'a> {
 
 /// Accessor for a `loop` entity record.
 ///
-/// Loop record layout: `loop $<attrib> $<next_loop> $<coedge> $<face>`
+/// Loop record layout: `loop $<attrib> <id> $<next_loop> $<unknown> $<coedge> $<face>`
 #[derive(Debug, Clone)]
 pub struct SatLoop<'a> {
     record: &'a SatRecord,
@@ -654,12 +665,12 @@ impl<'a> SatLoop<'a> {
 
     /// Pointer to the first coedge.
     pub fn first_coedge(&self) -> SatPointer {
-        self.record.token_pointer(1).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(2).unwrap_or(SatPointer::NULL)
     }
 
     /// Pointer to the owner face.
     pub fn face(&self) -> SatPointer {
-        self.record.token_pointer(2).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(3).unwrap_or(SatPointer::NULL)
     }
 }
 
@@ -683,35 +694,35 @@ impl<'a> SatCoedge<'a> {
 
     /// Pointer to the next coedge in the loop.
     pub fn next(&self) -> SatPointer {
-        self.record.token_pointer(0).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(1).unwrap_or(SatPointer::NULL)
     }
 
     /// Pointer to the previous coedge in the loop.
     pub fn prev(&self) -> SatPointer {
-        self.record.token_pointer(1).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(2).unwrap_or(SatPointer::NULL)
     }
 
     /// Pointer to the partner coedge (on adjacent face).
     pub fn partner(&self) -> SatPointer {
-        self.record.token_pointer(2).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(3).unwrap_or(SatPointer::NULL)
     }
 
     /// Pointer to the edge.
     pub fn edge(&self) -> SatPointer {
-        self.record.token_pointer(3).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(4).unwrap_or(SatPointer::NULL)
     }
 
     /// Sense of this coedge relative to the edge.
     pub fn sense(&self) -> Sense {
         self.record
-            .token_string(4)
+            .token_string(5)
             .map(Sense::from_str)
             .unwrap_or_default()
     }
 
     /// Pointer to the owner loop.
     pub fn owner_loop(&self) -> SatPointer {
-        self.record.token_pointer(5).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(6).unwrap_or(SatPointer::NULL)
     }
 }
 
@@ -735,28 +746,38 @@ impl<'a> SatEdge<'a> {
 
     /// Pointer to the start vertex.
     pub fn start_vertex(&self) -> SatPointer {
-        self.record.token_pointer(0).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(1).unwrap_or(SatPointer::NULL)
+    }
+
+    /// Start parameter along the curve.
+    pub fn start_param(&self) -> f64 {
+        self.record.token_float(2).unwrap_or(0.0)
     }
 
     /// Pointer to the end vertex.
     pub fn end_vertex(&self) -> SatPointer {
-        self.record.token_pointer(1).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(3).unwrap_or(SatPointer::NULL)
+    }
+
+    /// End parameter along the curve.
+    pub fn end_param(&self) -> f64 {
+        self.record.token_float(4).unwrap_or(0.0)
     }
 
     /// Pointer to the first coedge using this edge.
     pub fn coedge(&self) -> SatPointer {
-        self.record.token_pointer(2).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(5).unwrap_or(SatPointer::NULL)
     }
 
     /// Pointer to the curve geometry.
     pub fn curve(&self) -> SatPointer {
-        self.record.token_pointer(3).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(6).unwrap_or(SatPointer::NULL)
     }
 
     /// Edge sense.
     pub fn sense(&self) -> Sense {
         self.record
-            .token_string(4)
+            .token_string(7)
             .map(Sense::from_str)
             .unwrap_or_default()
     }
@@ -782,12 +803,12 @@ impl<'a> SatVertex<'a> {
 
     /// Pointer to the edge.
     pub fn edge(&self) -> SatPointer {
-        self.record.token_pointer(0).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(1).unwrap_or(SatPointer::NULL)
     }
 
     /// Pointer to the point geometry.
     pub fn point(&self) -> SatPointer {
-        self.record.token_pointer(1).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(2).unwrap_or(SatPointer::NULL)
     }
 }
 
@@ -815,9 +836,9 @@ impl<'a> SatPoint<'a> {
 
     /// Returns the coordinates as (x, y, z).
     pub fn position(&self) -> (f64, f64, f64) {
-        let x = self.record.token_float(0).unwrap_or(0.0);
-        let y = self.record.token_float(1).unwrap_or(0.0);
-        let z = self.record.token_float(2).unwrap_or(0.0);
+        let x = self.record.token_float(1).unwrap_or(0.0);
+        let y = self.record.token_float(2).unwrap_or(0.0);
+        let z = self.record.token_float(3).unwrap_or(0.0);
         (x, y, z)
     }
 }
@@ -842,17 +863,17 @@ impl<'a> SatStraightCurve<'a> {
 
     /// Root point (position on the line).
     pub fn root_point(&self) -> (f64, f64, f64) {
-        let x = self.record.token_float(0).unwrap_or(0.0);
-        let y = self.record.token_float(1).unwrap_or(0.0);
-        let z = self.record.token_float(2).unwrap_or(0.0);
+        let x = self.record.token_float(1).unwrap_or(0.0);
+        let y = self.record.token_float(2).unwrap_or(0.0);
+        let z = self.record.token_float(3).unwrap_or(0.0);
         (x, y, z)
     }
 
     /// Direction vector.
     pub fn direction(&self) -> (f64, f64, f64) {
-        let x = self.record.token_float(3).unwrap_or(0.0);
-        let y = self.record.token_float(4).unwrap_or(0.0);
-        let z = self.record.token_float(5).unwrap_or(1.0);
+        let x = self.record.token_float(4).unwrap_or(0.0);
+        let y = self.record.token_float(5).unwrap_or(0.0);
+        let z = self.record.token_float(6).unwrap_or(1.0);
         (x, y, z)
     }
 }
@@ -877,31 +898,31 @@ impl<'a> SatEllipseCurve<'a> {
 
     /// Center point.
     pub fn center(&self) -> (f64, f64, f64) {
-        let x = self.record.token_float(0).unwrap_or(0.0);
-        let y = self.record.token_float(1).unwrap_or(0.0);
-        let z = self.record.token_float(2).unwrap_or(0.0);
+        let x = self.record.token_float(1).unwrap_or(0.0);
+        let y = self.record.token_float(2).unwrap_or(0.0);
+        let z = self.record.token_float(3).unwrap_or(0.0);
         (x, y, z)
     }
 
     /// Normal vector.
     pub fn normal(&self) -> (f64, f64, f64) {
-        let x = self.record.token_float(3).unwrap_or(0.0);
-        let y = self.record.token_float(4).unwrap_or(0.0);
-        let z = self.record.token_float(5).unwrap_or(1.0);
+        let x = self.record.token_float(4).unwrap_or(0.0);
+        let y = self.record.token_float(5).unwrap_or(0.0);
+        let z = self.record.token_float(6).unwrap_or(1.0);
         (x, y, z)
     }
 
     /// Major axis direction.
     pub fn major_axis(&self) -> (f64, f64, f64) {
-        let x = self.record.token_float(6).unwrap_or(1.0);
-        let y = self.record.token_float(7).unwrap_or(0.0);
-        let z = self.record.token_float(8).unwrap_or(0.0);
+        let x = self.record.token_float(7).unwrap_or(1.0);
+        let y = self.record.token_float(8).unwrap_or(0.0);
+        let z = self.record.token_float(9).unwrap_or(0.0);
         (x, y, z)
     }
 
     /// Ratio of minor to major axis.
     pub fn ratio(&self) -> f64 {
-        self.record.token_float(9).unwrap_or(1.0)
+        self.record.token_float(10).unwrap_or(1.0)
     }
 }
 
@@ -925,25 +946,25 @@ impl<'a> SatPlaneSurface<'a> {
 
     /// Root point on the plane.
     pub fn root_point(&self) -> (f64, f64, f64) {
-        let x = self.record.token_float(0).unwrap_or(0.0);
-        let y = self.record.token_float(1).unwrap_or(0.0);
-        let z = self.record.token_float(2).unwrap_or(0.0);
+        let x = self.record.token_float(1).unwrap_or(0.0);
+        let y = self.record.token_float(2).unwrap_or(0.0);
+        let z = self.record.token_float(3).unwrap_or(0.0);
         (x, y, z)
     }
 
     /// Normal vector.
     pub fn normal(&self) -> (f64, f64, f64) {
-        let x = self.record.token_float(3).unwrap_or(0.0);
-        let y = self.record.token_float(4).unwrap_or(0.0);
-        let z = self.record.token_float(5).unwrap_or(1.0);
+        let x = self.record.token_float(4).unwrap_or(0.0);
+        let y = self.record.token_float(5).unwrap_or(0.0);
+        let z = self.record.token_float(6).unwrap_or(1.0);
         (x, y, z)
     }
 
     /// U direction on the surface.
     pub fn u_direction(&self) -> (f64, f64, f64) {
-        let x = self.record.token_float(6).unwrap_or(1.0);
-        let y = self.record.token_float(7).unwrap_or(0.0);
-        let z = self.record.token_float(8).unwrap_or(0.0);
+        let x = self.record.token_float(7).unwrap_or(1.0);
+        let y = self.record.token_float(8).unwrap_or(0.0);
+        let z = self.record.token_float(9).unwrap_or(0.0);
         (x, y, z)
     }
 }
@@ -968,41 +989,41 @@ impl<'a> SatConeSurface<'a> {
 
     /// Center point (apex or center of base circle).
     pub fn center(&self) -> (f64, f64, f64) {
-        let x = self.record.token_float(0).unwrap_or(0.0);
-        let y = self.record.token_float(1).unwrap_or(0.0);
-        let z = self.record.token_float(2).unwrap_or(0.0);
+        let x = self.record.token_float(1).unwrap_or(0.0);
+        let y = self.record.token_float(2).unwrap_or(0.0);
+        let z = self.record.token_float(3).unwrap_or(0.0);
         (x, y, z)
     }
 
     /// Axis direction.
     pub fn axis(&self) -> (f64, f64, f64) {
-        let x = self.record.token_float(3).unwrap_or(0.0);
-        let y = self.record.token_float(4).unwrap_or(0.0);
-        let z = self.record.token_float(5).unwrap_or(1.0);
+        let x = self.record.token_float(4).unwrap_or(0.0);
+        let y = self.record.token_float(5).unwrap_or(0.0);
+        let z = self.record.token_float(6).unwrap_or(1.0);
         (x, y, z)
     }
 
     /// Major radius direction.
     pub fn major_axis(&self) -> (f64, f64, f64) {
-        let x = self.record.token_float(6).unwrap_or(1.0);
-        let y = self.record.token_float(7).unwrap_or(0.0);
-        let z = self.record.token_float(8).unwrap_or(0.0);
+        let x = self.record.token_float(7).unwrap_or(1.0);
+        let y = self.record.token_float(8).unwrap_or(0.0);
+        let z = self.record.token_float(9).unwrap_or(0.0);
         (x, y, z)
     }
 
     /// Ratio of minor to major radius.
     pub fn ratio(&self) -> f64 {
-        self.record.token_float(9).unwrap_or(1.0)
+        self.record.token_float(10).unwrap_or(1.0)
     }
 
     /// Cosine of half angle.
     pub fn cos_half_angle(&self) -> f64 {
-        self.record.token_float(10).unwrap_or(0.0)
+        self.record.token_float(11).unwrap_or(0.0)
     }
 
     /// Sine of half angle.
     pub fn sin_half_angle(&self) -> f64 {
-        self.record.token_float(11).unwrap_or(1.0)
+        self.record.token_float(12).unwrap_or(1.0)
     }
 }
 
@@ -1026,30 +1047,30 @@ impl<'a> SatSphereSurface<'a> {
 
     /// Center point.
     pub fn center(&self) -> (f64, f64, f64) {
-        let x = self.record.token_float(0).unwrap_or(0.0);
-        let y = self.record.token_float(1).unwrap_or(0.0);
-        let z = self.record.token_float(2).unwrap_or(0.0);
+        let x = self.record.token_float(1).unwrap_or(0.0);
+        let y = self.record.token_float(2).unwrap_or(0.0);
+        let z = self.record.token_float(3).unwrap_or(0.0);
         (x, y, z)
     }
 
     /// Radius.
     pub fn radius(&self) -> f64 {
-        self.record.token_float(3).unwrap_or(1.0)
+        self.record.token_float(4).unwrap_or(1.0)
     }
 
     /// U direction.
     pub fn u_direction(&self) -> (f64, f64, f64) {
-        let x = self.record.token_float(4).unwrap_or(1.0);
-        let y = self.record.token_float(5).unwrap_or(0.0);
-        let z = self.record.token_float(6).unwrap_or(0.0);
+        let x = self.record.token_float(5).unwrap_or(1.0);
+        let y = self.record.token_float(6).unwrap_or(0.0);
+        let z = self.record.token_float(7).unwrap_or(0.0);
         (x, y, z)
     }
 
     /// Pole direction.
     pub fn pole(&self) -> (f64, f64, f64) {
-        let x = self.record.token_float(7).unwrap_or(0.0);
-        let y = self.record.token_float(8).unwrap_or(0.0);
-        let z = self.record.token_float(9).unwrap_or(1.0);
+        let x = self.record.token_float(8).unwrap_or(0.0);
+        let y = self.record.token_float(9).unwrap_or(0.0);
+        let z = self.record.token_float(10).unwrap_or(1.0);
         (x, y, z)
     }
 }
@@ -1074,35 +1095,35 @@ impl<'a> SatTorusSurface<'a> {
 
     /// Center point.
     pub fn center(&self) -> (f64, f64, f64) {
-        let x = self.record.token_float(0).unwrap_or(0.0);
-        let y = self.record.token_float(1).unwrap_or(0.0);
-        let z = self.record.token_float(2).unwrap_or(0.0);
+        let x = self.record.token_float(1).unwrap_or(0.0);
+        let y = self.record.token_float(2).unwrap_or(0.0);
+        let z = self.record.token_float(3).unwrap_or(0.0);
         (x, y, z)
     }
 
     /// Normal (axis of revolution).
     pub fn normal(&self) -> (f64, f64, f64) {
-        let x = self.record.token_float(3).unwrap_or(0.0);
-        let y = self.record.token_float(4).unwrap_or(0.0);
-        let z = self.record.token_float(5).unwrap_or(1.0);
+        let x = self.record.token_float(4).unwrap_or(0.0);
+        let y = self.record.token_float(5).unwrap_or(0.0);
+        let z = self.record.token_float(6).unwrap_or(1.0);
         (x, y, z)
     }
 
     /// Major radius (distance from center to tube center).
     pub fn major_radius(&self) -> f64 {
-        self.record.token_float(6).unwrap_or(1.0)
+        self.record.token_float(7).unwrap_or(1.0)
     }
 
     /// Minor radius (tube radius).
     pub fn minor_radius(&self) -> f64 {
-        self.record.token_float(7).unwrap_or(0.5)
+        self.record.token_float(8).unwrap_or(0.5)
     }
 
     /// U direction.
     pub fn u_direction(&self) -> (f64, f64, f64) {
-        let x = self.record.token_float(8).unwrap_or(1.0);
-        let y = self.record.token_float(9).unwrap_or(0.0);
-        let z = self.record.token_float(10).unwrap_or(0.0);
+        let x = self.record.token_float(9).unwrap_or(1.0);
+        let y = self.record.token_float(10).unwrap_or(0.0);
+        let z = self.record.token_float(11).unwrap_or(0.0);
         (x, y, z)
     }
 }
@@ -1129,42 +1150,42 @@ impl<'a> SatTransform<'a> {
     /// Rotation matrix row 0 (X axis).
     pub fn row0(&self) -> (f64, f64, f64) {
         (
-            self.record.token_float(0).unwrap_or(1.0),
-            self.record.token_float(1).unwrap_or(0.0),
+            self.record.token_float(1).unwrap_or(1.0),
             self.record.token_float(2).unwrap_or(0.0),
+            self.record.token_float(3).unwrap_or(0.0),
         )
     }
 
     /// Rotation matrix row 1 (Y axis).
     pub fn row1(&self) -> (f64, f64, f64) {
         (
-            self.record.token_float(3).unwrap_or(0.0),
-            self.record.token_float(4).unwrap_or(1.0),
-            self.record.token_float(5).unwrap_or(0.0),
+            self.record.token_float(4).unwrap_or(0.0),
+            self.record.token_float(5).unwrap_or(1.0),
+            self.record.token_float(6).unwrap_or(0.0),
         )
     }
 
     /// Rotation matrix row 2 (Z axis).
     pub fn row2(&self) -> (f64, f64, f64) {
         (
-            self.record.token_float(6).unwrap_or(0.0),
             self.record.token_float(7).unwrap_or(0.0),
-            self.record.token_float(8).unwrap_or(1.0),
+            self.record.token_float(8).unwrap_or(0.0),
+            self.record.token_float(9).unwrap_or(1.0),
         )
     }
 
     /// Translation vector.
     pub fn translation(&self) -> (f64, f64, f64) {
         (
-            self.record.token_float(9).unwrap_or(0.0),
             self.record.token_float(10).unwrap_or(0.0),
             self.record.token_float(11).unwrap_or(0.0),
+            self.record.token_float(12).unwrap_or(0.0),
         )
     }
 
     /// Scale factor.
     pub fn scale(&self) -> f64 {
-        self.record.token_float(12).unwrap_or(1.0)
+        self.record.token_float(13).unwrap_or(1.0)
     }
 }
 

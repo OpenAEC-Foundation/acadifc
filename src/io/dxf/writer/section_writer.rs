@@ -3117,10 +3117,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
         self.writer.write_subclass("AcDb3dSolid")?;
 
-        // History handle
-        if let Some(h) = solid.history_handle {
-            self.writer.write_handle(350, h)?;
-        }
+        // History handle (always written, 0 = no history)
+        let h = solid.history_handle.unwrap_or(Handle::NULL);
+        self.writer.write_handle(350, h)?;
 
         Ok(())
     }
@@ -3158,10 +3157,10 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     /// Write ACIS data (shared by Solid3D, Region, Body)
     ///
     /// SAT text is split by newlines; each line becomes a separate DXF
-    /// group-code entry.  All lines except the last use group code 1;
-    /// the final line uses group code 3.  Lines longer than 255 characters
-    /// are further subdivided into 255-char chunks (all code 1 except the
-    /// very last overall chunk which uses code 3).
+    /// group-code entry using group code 1.  Lines longer than 255
+    /// characters are subdivided into 255-char sub-chunks: the first
+    /// sub-chunk uses group code 1 and continuation sub-chunks use
+    /// group code 3.
     fn write_acis_data(&mut self, acis: &AcisData) -> Result<()> {
         let data = &acis.sat_data;
         if data.is_empty() {
@@ -3175,34 +3174,33 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             _ => data.clone(),
         };
 
-        // Collect all chunks: split SAT text by newlines, then split
-        // any line longer than 255 characters into sub-chunks.
-        let mut chunks: Vec<&str> = Vec::new();
+        let mut any_written = false;
         for line in encoded.lines() {
             if line.len() <= 255 {
-                chunks.push(line);
+                // Whole line fits in one chunk → group code 1
+                self.writer.write_string(1, line)?;
             } else {
+                // Split into 255-char sub-chunks:
+                // first sub-chunk → gc 1, continuations → gc 3
                 let mut remaining = line;
+                let mut first = true;
                 while !remaining.is_empty() {
                     let end = remaining.len().min(255);
                     let (chunk, rest) = remaining.split_at(end);
-                    chunks.push(chunk);
+                    if first {
+                        self.writer.write_string(1, chunk)?;
+                        first = false;
+                    } else {
+                        self.writer.write_string(3, chunk)?;
+                    }
                     remaining = rest;
                 }
             }
+            any_written = true;
         }
 
-        if chunks.is_empty() {
+        if !any_written {
             self.writer.write_string(1, "")?;
-        } else if chunks.len() == 1 {
-            self.writer.write_string(1, chunks[0])?;
-        } else {
-            // All chunks except the last use group code 1
-            for chunk in &chunks[..chunks.len() - 1] {
-                self.writer.write_string(1, chunk)?;
-            }
-            // Last chunk uses group code 3
-            self.writer.write_string(3, chunks[chunks.len() - 1])?;
         }
 
         Ok(())
