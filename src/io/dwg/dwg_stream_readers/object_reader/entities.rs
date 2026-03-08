@@ -8,6 +8,7 @@ use crate::io::dwg::dwg_stream_readers::merged_reader::DwgMergedReader;
 use crate::io::dwg::dwg_version::DwgVersion;
 use crate::types::{Color, Handle, Vector2, Vector3, DxfVersion};
 use crate::entities::multileader::*;
+use crate::entities::solid3d::{Wire, WireType, Silhouette};
 use super::safe_count;
 
 // ════════════════════════════════════════════════════════════════════════
@@ -2077,6 +2078,10 @@ pub struct AcisEntityData {
     pub point: Vector3,
     /// Whether the entity has a history handle (3DSOLID only, R2007+).
     pub has_history: bool,
+    /// Wireframe edges for visualization.
+    pub wires: Vec<Wire>,
+    /// Silhouette data for viewports.
+    pub silhouettes: Vec<Silhouette>,
 }
 
 /// Decrypt SAT text encoded in a DWG stream.
@@ -2110,6 +2115,8 @@ pub fn read_acis_entity(
             version: 0,
             point: Vector3::ZERO,
             has_history: false,
+            wires: Vec::new(),
+            silhouettes: Vec::new(),
         };
     }
 
@@ -2156,67 +2163,135 @@ pub fn read_acis_entity(
     // Wireframe data
     let wireframe_present = reader.read_bit();
     let mut point = Vector3::ZERO;
+    let mut wires = Vec::new();
 
     if wireframe_present {
         point = reader.read_3bit_double();
         let num_isolines = safe_count(reader.read_bit_long());
         for _ in 0..num_isolines {
-            // Each isoline: acis_index (BL), wire_type (RC),
-            // selection_marker (BL), color (BL), num_points (BL),
-            // 3BD × num_points, has_transform (B), if has_transform: transform data
-            let _acis_index = reader.read_bit_long();
-            let _wire_type = reader.read_byte();
-            let _selection_marker = reader.read_bit_long();
-            let _color = reader.read_bit_long();
+            let acis_index = reader.read_bit_long();
+            let wire_type_raw = reader.read_byte();
+            let selection_marker = reader.read_bit_long();
+            let color_val = reader.read_bit_long();
             let num_pts = safe_count(reader.read_bit_long());
+            let mut pts = Vec::with_capacity(num_pts as usize);
             for _ in 0..num_pts {
-                let _pt = reader.read_3bit_double();
+                pts.push(reader.read_3bit_double());
             }
             let has_transform = reader.read_bit();
+            let (mut x_axis, mut y_axis, mut z_axis) =
+                (Vector3::UNIT_X, Vector3::UNIT_Y, Vector3::UNIT_Z);
+            let mut translation = Vector3::ZERO;
+            let mut scale = 1.0;
+            let (mut has_rotation, mut has_reflection, mut has_shear) =
+                (false, false, false);
             if has_transform {
-                let _x_axis = reader.read_3bit_double();
-                let _y_axis = reader.read_3bit_double();
-                let _z_axis = reader.read_3bit_double();
-                let _translation = reader.read_3bit_double();
-                let _scale = reader.read_bit_double();
-                let _has_rotation = reader.read_bit();
-                let _has_reflection = reader.read_bit();
-                let _has_shear = reader.read_bit();
+                x_axis = reader.read_3bit_double();
+                y_axis = reader.read_3bit_double();
+                z_axis = reader.read_3bit_double();
+                translation = reader.read_3bit_double();
+                scale = reader.read_bit_double();
+                has_rotation = reader.read_bit();
+                has_reflection = reader.read_bit();
+                has_shear = reader.read_bit();
             }
+            let color = if color_val == 256 {
+                Color::ByLayer
+            } else if color_val == 0 {
+                Color::ByBlock
+            } else {
+                Color::Index(color_val as u8)
+            };
+            wires.push(Wire {
+                acis_index,
+                wire_type: WireType::from(wire_type_raw),
+                selection_marker,
+                color,
+                points: pts,
+                has_transform,
+                has_rotation,
+                has_reflection,
+                has_shear,
+                scale,
+                translation,
+                x_axis,
+                y_axis,
+                z_axis,
+            });
         }
     }
 
     // Silhouettes (R2007+)
+    let mut silhouettes = Vec::new();
     if version.r2007_plus() {
         let num_silhouettes = safe_count(reader.read_bit_long());
         for _ in 0..num_silhouettes {
-            let _viewport_id = reader.read_bit_long();
-            let _view_direction = reader.read_3bit_double();
-            let _up_vector = reader.read_3bit_double();
-            let _target = reader.read_3bit_double();
-            let _is_perspective = reader.read_bit();
+            let viewport_id = reader.read_bit_long() as i64;
+            let view_direction = reader.read_3bit_double();
+            let up_vector = reader.read_3bit_double();
+            let target = reader.read_3bit_double();
+            let is_perspective = reader.read_bit();
             let num_wires = safe_count(reader.read_bit_long());
+            let mut sil_wires = Vec::with_capacity(num_wires as usize);
             for _ in 0..num_wires {
-                let _acis_index = reader.read_bit_long();
-                let _wire_type = reader.read_byte();
-                let _selection_marker = reader.read_bit_long();
-                let _color = reader.read_bit_long();
+                let acis_index = reader.read_bit_long();
+                let wire_type_raw = reader.read_byte();
+                let selection_marker = reader.read_bit_long();
+                let color_val = reader.read_bit_long();
                 let num_pts = safe_count(reader.read_bit_long());
+                let mut pts = Vec::with_capacity(num_pts as usize);
                 for _ in 0..num_pts {
-                    let _pt = reader.read_3bit_double();
+                    pts.push(reader.read_3bit_double());
                 }
                 let has_transform = reader.read_bit();
+                let (mut x_axis, mut y_axis, mut z_axis) =
+                    (Vector3::UNIT_X, Vector3::UNIT_Y, Vector3::UNIT_Z);
+                let mut translation = Vector3::ZERO;
+                let mut scale = 1.0;
+                let (mut has_rotation, mut has_reflection, mut has_shear) =
+                    (false, false, false);
                 if has_transform {
-                    let _x_axis = reader.read_3bit_double();
-                    let _y_axis = reader.read_3bit_double();
-                    let _z_axis = reader.read_3bit_double();
-                    let _translation = reader.read_3bit_double();
-                    let _scale = reader.read_bit_double();
-                    let _has_rotation = reader.read_bit();
-                    let _has_reflection = reader.read_bit();
-                    let _has_shear = reader.read_bit();
+                    x_axis = reader.read_3bit_double();
+                    y_axis = reader.read_3bit_double();
+                    z_axis = reader.read_3bit_double();
+                    translation = reader.read_3bit_double();
+                    scale = reader.read_bit_double();
+                    has_rotation = reader.read_bit();
+                    has_reflection = reader.read_bit();
+                    has_shear = reader.read_bit();
                 }
+                let color = if color_val == 256 {
+                    Color::ByLayer
+                } else if color_val == 0 {
+                    Color::ByBlock
+                } else {
+                    Color::Index(color_val as u8)
+                };
+                sil_wires.push(Wire {
+                    acis_index,
+                    wire_type: WireType::from(wire_type_raw),
+                    selection_marker,
+                    color,
+                    points: pts,
+                    has_transform,
+                    has_rotation,
+                    has_reflection,
+                    has_shear,
+                    scale,
+                    translation,
+                    x_axis,
+                    y_axis,
+                    z_axis,
+                });
             }
+            silhouettes.push(Silhouette {
+                viewport_id,
+                view_direction,
+                up_vector,
+                target,
+                is_perspective,
+                wires: sil_wires,
+            });
         }
     }
 
@@ -2228,6 +2303,8 @@ pub fn read_acis_entity(
         version: acis_version,
         point,
         has_history: false, // caller sets this for 3DSOLID
+        wires,
+        silhouettes,
     }
 }
 

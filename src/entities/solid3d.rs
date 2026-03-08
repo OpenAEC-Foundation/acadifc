@@ -320,6 +320,39 @@ impl AcisData {
     }
 }
 
+impl AcisData {
+    /// Encode plaintext SAT for DXF storage (Version 1 cipher).
+    ///
+    /// AutoCAD DXF files (R2004 / AC1018 and later) store ACIS SAT data
+    /// using a simple symmetric character cipher: every printable ASCII
+    /// character except space is mapped to `(159 - c)`.  Spaces, newlines,
+    /// and non-ASCII bytes are passed through unchanged.
+    ///
+    /// Because the cipher is symmetric (`encode(encode(x)) == x`), the
+    /// same function works for both encoding and decoding.
+    pub fn encode_sat(text: &str) -> String {
+        text.chars()
+            .map(|c| {
+                let b = c as u32;
+                if b >= 0x21 && b <= 0x7E {
+                    // Safety: 159 - b is in 0x21..=0x7E, always valid.
+                    char::from_u32(159 - b).unwrap_or(c)
+                } else {
+                    c
+                }
+            })
+            .collect()
+    }
+
+    /// Decode DXF-encoded SAT text (Version 1 cipher).
+    ///
+    /// The cipher is symmetric, so this is identical to [`encode_sat`].
+    #[inline]
+    pub fn decode_sat(text: &str) -> String {
+        Self::encode_sat(text)
+    }
+}
+
 impl Default for AcisData {
     fn default() -> Self {
         Self::new()

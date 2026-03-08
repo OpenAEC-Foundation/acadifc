@@ -796,14 +796,6 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             }
         }
 
-        // Also write standalone entities (owned by model space by default)
-        let model_space_handle = document.block_records.get("*Model_Space")
-            .map(|b| b.handle())
-            .unwrap_or(Handle::new(0x1F));
-        for entity in document.entities() {
-            self.write_entity_with_owner(entity, model_space_handle)?;
-        }
-
         self.writer.write_section_end()?;
         Ok(())
     }
@@ -3164,28 +3156,53 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     }
 
     /// Write ACIS data (shared by Solid3D, Region, Body)
+    ///
+    /// SAT text is split by newlines; each line becomes a separate DXF
+    /// group-code entry.  All lines except the last use group code 1;
+    /// the final line uses group code 3.  Lines longer than 255 characters
+    /// are further subdivided into 255-char chunks (all code 1 except the
+    /// very last overall chunk which uses code 3).
     fn write_acis_data(&mut self, acis: &AcisData) -> Result<()> {
-        // Write ACIS data as 255-byte chunks using group code 1
-        // Final chunk uses group code 3
         let data = &acis.sat_data;
-        let chunk_size = 255;
-        let chunks: Vec<&str> = data.as_bytes()
-            .chunks(chunk_size)
-            .map(|c| std::str::from_utf8(c).unwrap_or(""))
-            .collect();
+        if data.is_empty() {
+            self.writer.write_string(1, "")?;
+            return Ok(());
+        }
+
+        // Version 1: apply the DXF character cipher to SAT text.
+        let encoded = match acis.version {
+            AcisVersion::Version1 => AcisData::encode_sat(data),
+            _ => data.clone(),
+        };
+
+        // Collect all chunks: split SAT text by newlines, then split
+        // any line longer than 255 characters into sub-chunks.
+        let mut chunks: Vec<&str> = Vec::new();
+        for line in encoded.lines() {
+            if line.len() <= 255 {
+                chunks.push(line);
+            } else {
+                let mut remaining = line;
+                while !remaining.is_empty() {
+                    let end = remaining.len().min(255);
+                    let (chunk, rest) = remaining.split_at(end);
+                    chunks.push(chunk);
+                    remaining = rest;
+                }
+            }
+        }
 
         if chunks.is_empty() {
-            // Write empty string with group code 1
             self.writer.write_string(1, "")?;
+        } else if chunks.len() == 1 {
+            self.writer.write_string(1, chunks[0])?;
         } else {
-            // Write all chunks except the last with group code 1
-            for chunk in chunks.iter().take(chunks.len().saturating_sub(1)) {
+            // All chunks except the last use group code 1
+            for chunk in &chunks[..chunks.len() - 1] {
                 self.writer.write_string(1, chunk)?;
             }
-            // Write last chunk with group code 3
-            if let Some(last) = chunks.last() {
-                self.writer.write_string(3, last)?;
-            }
+            // Last chunk uses group code 3
+            self.writer.write_string(3, chunks[chunks.len() - 1])?;
         }
 
         Ok(())

@@ -1403,6 +1403,8 @@ impl DwgDocumentBuilder {
                     e.acis_data.sat_data = data.sat_data;
                     e.acis_data.sab_data = data.sab_data;
                     e.acis_data.is_binary = data.is_binary;
+                    e.wires = data.wires;
+                    e.silhouettes = data.silhouettes;
                     let _ = document.add_entity(EntityType::Solid3D(e));
                 },
                 OBJ_REGION => {
@@ -1420,6 +1422,8 @@ impl DwgDocumentBuilder {
                     e.acis_data.sat_data = data.sat_data;
                     e.acis_data.sab_data = data.sab_data;
                     e.acis_data.is_binary = data.is_binary;
+                    e.wires = data.wires;
+                    e.silhouettes = data.silhouettes;
                     let _ = document.add_entity(EntityType::Region(e));
                 },
                 OBJ_BODY => {
@@ -1437,6 +1441,8 @@ impl DwgDocumentBuilder {
                     e.acis_data.sat_data = data.sat_data;
                     e.acis_data.sab_data = data.sab_data;
                     e.acis_data.is_binary = data.is_binary;
+                    e.wires = data.wires;
+                    e.silhouettes = data.silhouettes;
                     let _ = document.add_entity(EntityType::Body(e));
                 },
 

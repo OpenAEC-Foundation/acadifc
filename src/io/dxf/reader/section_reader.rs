@@ -4389,6 +4389,7 @@ impl<'a> SectionReader<'a> {
         let mut common = EntityCommon::new();
         let mut acis_data = String::new();
         let mut uid = String::new();
+        let mut acis_version: u8 = 1; // default to Version 1 (encoded)
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 { self.reader.push_back(pair); break; }
@@ -4401,8 +4402,18 @@ impl<'a> SectionReader<'a> {
                     acis_data.push('\n');
                 }
                 2 => uid = pair.value_string.clone(),
+                70 => {
+                    if let Some(v) = pair.as_i16() {
+                        acis_version = v as u8;
+                    }
+                }
                 _ => { self.try_read_common_entity_code(&pair, &mut common)?; }
             }
+        }
+
+        // Version 1: SAT data is stored with a character cipher — decode it.
+        if acis_version == 1 && !acis_data.is_empty() {
+            acis_data = crate::entities::solid3d::AcisData::decode_sat(&acis_data);
         }
 
         Ok((common, uid, acis_data))
