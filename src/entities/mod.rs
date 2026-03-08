@@ -215,6 +215,10 @@ pub struct EntityCommon {
     pub color: Color,
     /// Line weight
     pub line_weight: LineWeight,
+    /// Linetype name (empty string = "ByLayer")
+    pub linetype: String,
+    /// Linetype scale factor (default 1.0)
+    pub linetype_scale: f64,
     /// Transparency
     pub transparency: Transparency,
     /// Visibility flag
@@ -237,6 +241,8 @@ impl EntityCommon {
             layer: "0".to_string(),
             color: Color::ByLayer,
             line_weight: LineWeight::ByLayer,
+            linetype: String::new(),
+            linetype_scale: 1.0,
             transparency: Transparency::OPAQUE,
             invisible: false,
             extended_data: crate::xdata::ExtendedData::new(),
@@ -252,6 +258,11 @@ impl EntityCommon {
             layer: layer.into(),
             ..Self::new()
         }
+    }
+
+    /// Check whether a linetype name is set (not empty and not "ByLayer")
+    pub fn has_linetype(&self) -> bool {
+        !self.linetype.is_empty() && self.linetype != "ByLayer"
     }
 }
 

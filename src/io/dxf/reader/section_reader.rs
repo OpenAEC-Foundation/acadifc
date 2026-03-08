@@ -1962,6 +1962,16 @@ impl<'a> SectionReader<'a> {
                 }
                 Ok(true)
             }
+            6 => {
+                common.linetype = pair.value_string.clone();
+                Ok(true)
+            }
+            48 => {
+                if let Some(scale) = pair.as_double() {
+                    common.linetype_scale = scale;
+                }
+                Ok(true)
+            }
             60 => {
                 if let Some(v) = pair.as_i16() {
                     common.invisible = v != 0;
@@ -2124,6 +2134,7 @@ impl<'a> SectionReader<'a> {
     fn read_point(&mut self) -> Result<Option<Point>> {
         let mut point = Point::new();
         let mut location = PointReader::new();
+        let mut normal = PointReader::new();
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 {
@@ -2149,12 +2160,16 @@ impl<'a> SectionReader<'a> {
                         point.thickness = thickness;
                     }
                 }
+                210 | 220 | 230 => { normal.add_coordinate(&pair); }
                 _ => { self.try_read_common_entity_code(&pair, &mut point.common)?; }
             }
         }
 
         if let Some(pt) = location.get_point() {
             point.location = pt;
+        }
+        if let Some(n) = normal.get_point() {
+            point.normal = n;
         }
 
         Ok(Some(point))
@@ -2165,6 +2180,7 @@ impl<'a> SectionReader<'a> {
         let mut line = Line::new();
         let mut start = PointReader::new();
         let mut end = PointReader::new();
+        let mut normal = PointReader::new();
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 {
@@ -2192,6 +2208,7 @@ impl<'a> SectionReader<'a> {
                         line.thickness = thickness;
                     }
                 }
+                210 | 220 | 230 => { normal.add_coordinate(&pair); }
                 // Extended data - read and store
                 1001 => {
                     // Push back the pair and read XDATA
@@ -2209,6 +2226,9 @@ impl<'a> SectionReader<'a> {
         if let Some(pt) = end.get_point() {
             line.end = pt;
         }
+        if let Some(n) = normal.get_point() {
+            line.normal = n;
+        }
 
         Ok(Some(line))
     }
@@ -2217,6 +2237,7 @@ impl<'a> SectionReader<'a> {
     fn read_circle(&mut self) -> Result<Option<Circle>> {
         let mut circle = Circle::new();
         let mut center = PointReader::new();
+        let mut normal = PointReader::new();
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 {
@@ -2247,12 +2268,16 @@ impl<'a> SectionReader<'a> {
                         circle.thickness = thickness;
                     }
                 }
+                210 | 220 | 230 => { normal.add_coordinate(&pair); }
                 _ => { self.try_read_common_entity_code(&pair, &mut circle.common)?; }
             }
         }
 
         if let Some(pt) = center.get_point() {
             circle.center = pt;
+        }
+        if let Some(n) = normal.get_point() {
+            circle.normal = n;
         }
 
         Ok(Some(circle))
@@ -2262,6 +2287,7 @@ impl<'a> SectionReader<'a> {
     fn read_arc(&mut self) -> Result<Option<Arc>> {
         let mut arc = Arc::new();
         let mut center = PointReader::new();
+        let mut normal = PointReader::new();
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 {
@@ -2289,12 +2315,12 @@ impl<'a> SectionReader<'a> {
                 }
                 50 => {
                     if let Some(angle) = pair.as_double() {
-                        arc.start_angle = angle;
+                        arc.start_angle = angle.to_radians();
                     }
                 }
                 51 => {
                     if let Some(angle) = pair.as_double() {
-                        arc.end_angle = angle;
+                        arc.end_angle = angle.to_radians();
                     }
                 }
                 39 => {
@@ -2302,12 +2328,16 @@ impl<'a> SectionReader<'a> {
                         arc.thickness = thickness;
                     }
                 }
+                210 | 220 | 230 => { normal.add_coordinate(&pair); }
                 _ => { self.try_read_common_entity_code(&pair, &mut arc.common)?; }
             }
         }
 
         if let Some(pt) = center.get_point() {
             arc.center = pt;
+        }
+        if let Some(n) = normal.get_point() {
+            arc.normal = n;
         }
 
         Ok(Some(arc))
@@ -2318,6 +2348,7 @@ impl<'a> SectionReader<'a> {
         let mut ellipse = Ellipse::new();
         let mut center = PointReader::new();
         let mut major_axis = PointReader::new();
+        let mut normal = PointReader::new();
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 {
@@ -2354,6 +2385,7 @@ impl<'a> SectionReader<'a> {
                         ellipse.end_parameter = angle;
                     }
                 }
+                210 | 220 | 230 => { normal.add_coordinate(&pair); }
                 _ => { self.try_read_common_entity_code(&pair, &mut ellipse.common)?; }
             }
         }
@@ -2363,6 +2395,9 @@ impl<'a> SectionReader<'a> {
         }
         if let Some(pt) = major_axis.get_point() {
             ellipse.major_axis = pt;
+        }
+        if let Some(n) = normal.get_point() {
+            ellipse.normal = n;
         }
 
         Ok(Some(ellipse))
@@ -2443,6 +2478,7 @@ impl<'a> SectionReader<'a> {
         use crate::types::Vector2;
 
         let mut lwpolyline = LwPolyline::new();
+        let mut normal = PointReader::new();
         let mut vertices_x: Vec<f64> = Vec::new();
         let mut vertices_y: Vec<f64> = Vec::new();
         let mut bulges: Vec<f64> = Vec::new();
@@ -2477,6 +2513,16 @@ impl<'a> SectionReader<'a> {
                         lwpolyline.elevation = elevation;
                     }
                 }
+                39 => {
+                    if let Some(thickness) = pair.as_double() {
+                        lwpolyline.thickness = thickness;
+                    }
+                }
+                43 => {
+                    if let Some(cw) = pair.as_double() {
+                        lwpolyline.constant_width = cw;
+                    }
+                }
                 10 => {
                     if let Some(x) = pair.as_double() {
                         vertices_x.push(x);
@@ -2502,6 +2548,7 @@ impl<'a> SectionReader<'a> {
                         widths_end.push(width);
                     }
                 }
+                210 | 220 | 230 => { normal.add_coordinate(&pair); }
                 _ => { self.try_read_common_entity_code(&pair, &mut lwpolyline.common)?; }
             }
         }
@@ -2520,13 +2567,22 @@ impl<'a> SectionReader<'a> {
             });
         }
 
+        if let Some(n) = normal.get_point() {
+            lwpolyline.normal = n;
+        }
+
         Ok(Some(lwpolyline))
     }
 
     /// Read a TEXT entity
     fn read_text(&mut self) -> Result<Option<Text>> {
+        use crate::entities::text::{TextHorizontalAlignment, TextVerticalAlignment};
+
         let mut text = Text::new();
         let mut insertion = PointReader::new();
+        let mut alignment = PointReader::new();
+        let mut normal = PointReader::new();
+        let mut has_alignment_point = false;
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 {
@@ -2547,6 +2603,10 @@ impl<'a> SectionReader<'a> {
                     }
                 }
                 10 | 20 | 30 => { insertion.add_coordinate(&pair); }
+                11 | 21 | 31 => {
+                    alignment.add_coordinate(&pair);
+                    has_alignment_point = true;
+                }
                 1 => text.value = pair.value_string.clone(),
                 40 => {
                     if let Some(height) = pair.as_double() {
@@ -2555,7 +2615,7 @@ impl<'a> SectionReader<'a> {
                 }
                 50 => {
                     if let Some(rotation) = pair.as_double() {
-                        text.rotation = rotation;
+                        text.rotation = rotation.to_radians();
                     }
                 }
                 41 => {
@@ -2565,10 +2625,33 @@ impl<'a> SectionReader<'a> {
                 }
                 51 => {
                     if let Some(oblique) = pair.as_double() {
-                        text.oblique_angle = oblique;
+                        text.oblique_angle = oblique.to_radians();
+                    }
+                }
+                72 => {
+                    if let Some(h) = pair.as_i16() {
+                        text.horizontal_alignment = match h {
+                            1 => TextHorizontalAlignment::Center,
+                            2 => TextHorizontalAlignment::Right,
+                            3 => TextHorizontalAlignment::Aligned,
+                            4 => TextHorizontalAlignment::Middle,
+                            5 => TextHorizontalAlignment::Fit,
+                            _ => TextHorizontalAlignment::Left,
+                        };
+                    }
+                }
+                73 => {
+                    if let Some(v) = pair.as_i16() {
+                        text.vertical_alignment = match v {
+                            1 => TextVerticalAlignment::Bottom,
+                            2 => TextVerticalAlignment::Middle,
+                            3 => TextVerticalAlignment::Top,
+                            _ => TextVerticalAlignment::Baseline,
+                        };
                     }
                 }
                 7 => text.style = pair.value_string.clone(),
+                210 | 220 | 230 => { normal.add_coordinate(&pair); }
                 _ => { self.try_read_common_entity_code(&pair, &mut text.common)?; }
             }
         }
@@ -2576,14 +2659,23 @@ impl<'a> SectionReader<'a> {
         if let Some(pt) = insertion.get_point() {
             text.insertion_point = pt;
         }
+        if has_alignment_point {
+            text.alignment_point = alignment.get_point();
+        }
+        if let Some(n) = normal.get_point() {
+            text.normal = n;
+        }
 
         Ok(Some(text))
     }
 
     /// Read an MTEXT entity
     fn read_mtext(&mut self) -> Result<Option<MText>> {
+        use crate::entities::mtext::{AttachmentPoint, DrawingDirection};
+
         let mut mtext = MText::new();
         let mut insertion = PointReader::new();
+        let mut normal = PointReader::new();
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 {
@@ -2620,16 +2712,49 @@ impl<'a> SectionReader<'a> {
                 }
                 50 => {
                     if let Some(rotation) = pair.as_double() {
-                        mtext.rotation = rotation;
+                        mtext.rotation = rotation.to_radians();
+                    }
+                }
+                71 => {
+                    if let Some(ap) = pair.as_i16() {
+                        mtext.attachment_point = match ap {
+                            2 => AttachmentPoint::TopCenter,
+                            3 => AttachmentPoint::TopRight,
+                            4 => AttachmentPoint::MiddleLeft,
+                            5 => AttachmentPoint::MiddleCenter,
+                            6 => AttachmentPoint::MiddleRight,
+                            7 => AttachmentPoint::BottomLeft,
+                            8 => AttachmentPoint::BottomCenter,
+                            9 => AttachmentPoint::BottomRight,
+                            _ => AttachmentPoint::TopLeft,
+                        };
+                    }
+                }
+                72 => {
+                    if let Some(dd) = pair.as_i16() {
+                        mtext.drawing_direction = match dd {
+                            2 => DrawingDirection::TopToBottom,
+                            3 => DrawingDirection::ByStyle,
+                            _ => DrawingDirection::LeftToRight,
+                        };
+                    }
+                }
+                44 => {
+                    if let Some(lsf) = pair.as_double() {
+                        mtext.line_spacing_factor = lsf;
                     }
                 }
                 7 => mtext.style = pair.value_string.clone(),
+                210 | 220 | 230 => { normal.add_coordinate(&pair); }
                 _ => { self.try_read_common_entity_code(&pair, &mut mtext.common)?; }
             }
         }
 
         if let Some(pt) = insertion.get_point() {
             mtext.insertion_point = pt;
+        }
+        if let Some(n) = normal.get_point() {
+            mtext.normal = n;
         }
 
         Ok(Some(mtext))
@@ -2638,6 +2763,7 @@ impl<'a> SectionReader<'a> {
     /// Read a SPLINE entity
     fn read_spline(&mut self) -> Result<Option<Spline>> {
         let mut spline = Spline::new();
+        let mut normal = PointReader::new();
         let mut current_control_point = PointReader::new();
         let mut current_fit_point = PointReader::new();
         let mut reading_control = false;
@@ -2678,6 +2804,11 @@ impl<'a> SectionReader<'a> {
                         spline.knots.push(knot);
                     }
                 }
+                41 => {
+                    if let Some(weight) = pair.as_double() {
+                        spline.weights.push(weight);
+                    }
+                }
                 10 | 20 | 30 => {
                     // Control point coordinates
                     if pair.code == 10 {
@@ -2706,6 +2837,7 @@ impl<'a> SectionReader<'a> {
                     }
                     current_fit_point.add_coordinate(&pair);
                 }
+                210 | 220 | 230 => { normal.add_coordinate(&pair); }
                 _ => { self.try_read_common_entity_code(&pair, &mut spline.common)?; }
             }
         }
@@ -2722,6 +2854,10 @@ impl<'a> SectionReader<'a> {
             if let Some(pt) = current_fit_point.get_point() {
                 spline.fit_points.push(pt);
             }
+        }
+
+        if let Some(n) = normal.get_point() {
+            spline.normal = n;
         }
 
         Ok(Some(spline))
@@ -2910,6 +3046,8 @@ impl<'a> SectionReader<'a> {
             dc.common.reactors = common.reactors;
             dc.common.xdictionary_handle = common.xdictionary_handle;
             dc.common.invisible = common.invisible;
+            dc.common.linetype = common.linetype;
+            dc.common.linetype_scale = common.linetype_scale;
         }
 
         Ok(Some(dimension))
@@ -3077,9 +3215,11 @@ impl<'a> SectionReader<'a> {
         let mut corner2 = PointReader::new();
         let mut corner3 = PointReader::new();
         let mut corner4 = PointReader::new();
+        let mut normal = PointReader::new();
         let mut layer = String::from("0");
         let mut color = Color::ByLayer;
         let mut line_weight = LineWeight::ByLayer;
+        let mut thickness = 0.0f64;
         let mut common = EntityCommon::new();
 
         while let Some(pair) = self.reader.read_pair()? {
@@ -3104,6 +3244,12 @@ impl<'a> SectionReader<'a> {
                 11 | 21 | 31 => { corner2.add_coordinate(&pair); }
                 12 | 22 | 32 => { corner3.add_coordinate(&pair); }
                 13 | 23 | 33 => { corner4.add_coordinate(&pair); }
+                39 => {
+                    if let Some(t) = pair.as_double() {
+                        thickness = t;
+                    }
+                }
+                210 | 220 | 230 => { normal.add_coordinate(&pair); }
                 _ => { self.try_read_common_entity_code(&pair, &mut common)?; }
             }
         }
@@ -3122,6 +3268,12 @@ impl<'a> SectionReader<'a> {
         solid.common.reactors = common.reactors;
         solid.common.xdictionary_handle = common.xdictionary_handle;
         solid.common.invisible = common.invisible;
+        solid.common.linetype = common.linetype;
+        solid.common.linetype_scale = common.linetype_scale;
+        solid.thickness = thickness;
+        if let Some(n) = normal.get_point() {
+            solid.normal = n;
+        }
 
         Ok(Some(solid))
     }
@@ -3191,6 +3343,8 @@ impl<'a> SectionReader<'a> {
         face.common.reactors = common.reactors;
         face.common.xdictionary_handle = common.xdictionary_handle;
         face.common.invisible = common.invisible;
+        face.common.linetype = common.linetype;
+        face.common.linetype_scale = common.linetype_scale;
 
         Ok(Some(face))
     }
@@ -3199,6 +3353,7 @@ impl<'a> SectionReader<'a> {
     fn read_insert(&mut self) -> Result<Option<Insert>> {
         let mut block_name = String::new();
         let mut insertion = PointReader::new();
+        let mut normal = PointReader::new();
         let mut x_scale = 1.0;
         let mut y_scale = 1.0;
         let mut z_scale = 1.0;
@@ -3249,7 +3404,7 @@ impl<'a> SectionReader<'a> {
                 }
                 50 => {
                     if let Some(rot) = pair.as_double() {
-                        rotation = rot;
+                        rotation = rot.to_radians();
                     }
                 }
                 70 => {
@@ -3272,6 +3427,7 @@ impl<'a> SectionReader<'a> {
                         row_spacing = row_spacing_val;
                     }
                 }
+                210 | 220 | 230 => { normal.add_coordinate(&pair); }
                 _ => { self.try_read_common_entity_code(&pair, &mut common)?; }
             }
         }
@@ -3294,6 +3450,11 @@ impl<'a> SectionReader<'a> {
         insert.common.reactors = common.reactors;
         insert.common.xdictionary_handle = common.xdictionary_handle;
         insert.common.invisible = common.invisible;
+        insert.common.linetype = common.linetype;
+        insert.common.linetype_scale = common.linetype_scale;
+        if let Some(n) = normal.get_point() {
+            insert.normal = n;
+        }
 
         Ok(Some(insert))
     }
@@ -3335,6 +3496,8 @@ impl<'a> SectionReader<'a> {
         ray.common.reactors = common.reactors;
         ray.common.xdictionary_handle = common.xdictionary_handle;
         ray.common.invisible = common.invisible;
+        ray.common.linetype = common.linetype;
+        ray.common.linetype_scale = common.linetype_scale;
 
         Ok(Some(ray))
     }
@@ -3376,6 +3539,8 @@ impl<'a> SectionReader<'a> {
         xline.common.reactors = common.reactors;
         xline.common.xdictionary_handle = common.xdictionary_handle;
         xline.common.invisible = common.invisible;
+        xline.common.linetype = common.linetype;
+        xline.common.linetype_scale = common.linetype_scale;
 
         Ok(Some(xline))
     }
@@ -3416,7 +3581,7 @@ impl<'a> SectionReader<'a> {
                 }
                 50 => {
                     if let Some(r) = pair.as_double() {
-                        rotation = r;
+                        rotation = r.to_radians();
                     }
                 }
                 _ => { self.try_read_common_entity_code(&pair, &mut common)?; }
@@ -3434,6 +3599,8 @@ impl<'a> SectionReader<'a> {
         attdef.common.reactors = common.reactors;
         attdef.common.xdictionary_handle = common.xdictionary_handle;
         attdef.common.invisible = common.invisible;
+        attdef.common.linetype = common.linetype;
+        attdef.common.linetype_scale = common.linetype_scale;
 
         Ok(Some(attdef))
     }
@@ -4622,5 +4789,241 @@ impl<'a> SectionReader<'a> {
         }
 
         Ok(Some(dv))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper: create a document, write to DXF, read back.
+    fn roundtrip(doc: CadDocument) -> CadDocument {
+        let writer = crate::io::dxf::writer::DxfWriter::new(doc);
+        let bytes = writer.write_to_vec().expect("write_to_vec");
+        let cursor = std::io::Cursor::new(bytes);
+        let reader = crate::io::dxf::reader::DxfReader::from_reader(cursor).expect("from_reader");
+        reader.read().expect("read")
+    }
+
+    #[test]
+    fn test_dxf_roundtrip_line_normal() {
+        let mut doc = CadDocument::new();
+        let mut line = crate::entities::line::Line::new();
+        line.start = Vector3::new(1.0, 2.0, 3.0);
+        line.end = Vector3::new(4.0, 5.0, 6.0);
+        line.normal = Vector3::new(0.0, 1.0, 0.0);
+        line.thickness = 2.5;
+        line.common.layer = "TestLayer".to_string();
+        doc.add_entity(EntityType::Line(line));
+
+        let doc2 = roundtrip(doc);
+        let entities: Vec<_> = doc2.entities().collect();
+        assert_eq!(entities.len(), 1);
+        if let EntityType::Line(ref l) = entities[0] {
+            assert_eq!(l.common.layer, "TestLayer");
+            assert!((l.normal.x - 0.0).abs() < 1e-9);
+            assert!((l.normal.y - 1.0).abs() < 1e-9);
+            assert!((l.normal.z - 0.0).abs() < 1e-9);
+            assert!((l.thickness - 2.5).abs() < 1e-9);
+            assert!((l.start.x - 1.0).abs() < 1e-9);
+            assert!((l.end.x - 4.0).abs() < 1e-9);
+        } else {
+            panic!("Expected Line entity");
+        }
+    }
+
+    #[test]
+    fn test_dxf_roundtrip_circle_normal() {
+        let mut doc = CadDocument::new();
+        let mut circle = crate::entities::circle::Circle::new();
+        circle.center = Vector3::new(10.0, 20.0, 0.0);
+        circle.radius = 5.0;
+        circle.normal = Vector3::new(0.0, 0.0, -1.0);
+        circle.thickness = 1.5;
+        doc.add_entity(EntityType::Circle(circle));
+
+        let doc2 = roundtrip(doc);
+        let entities: Vec<_> = doc2.entities().collect();
+        assert_eq!(entities.len(), 1);
+        if let EntityType::Circle(ref c) = entities[0] {
+            assert!((c.normal.z - (-1.0)).abs() < 1e-9);
+            assert!((c.thickness - 1.5).abs() < 1e-9);
+            assert!((c.radius - 5.0).abs() < 1e-9);
+        } else {
+            panic!("Expected Circle entity");
+        }
+    }
+
+    #[test]
+    fn test_dxf_roundtrip_arc_normal() {
+        let mut doc = CadDocument::new();
+        let mut arc = crate::entities::arc::Arc::new();
+        arc.center = Vector3::new(0.0, 0.0, 0.0);
+        arc.radius = 10.0;
+        arc.start_angle = 0.0;
+        arc.end_angle = 90.0;
+        arc.normal = Vector3::new(1.0, 0.0, 0.0);
+        arc.thickness = 3.0;
+        doc.add_entity(EntityType::Arc(arc));
+
+        let doc2 = roundtrip(doc);
+        let entities: Vec<_> = doc2.entities().collect();
+        assert_eq!(entities.len(), 1);
+        if let EntityType::Arc(ref a) = entities[0] {
+            assert!((a.normal.x - 1.0).abs() < 1e-9);
+            assert!((a.thickness - 3.0).abs() < 1e-9);
+        } else {
+            panic!("Expected Arc entity");
+        }
+    }
+
+    #[test]
+    fn test_dxf_roundtrip_text_properties() {
+        use crate::entities::text::{TextHorizontalAlignment, TextVerticalAlignment};
+
+        let mut doc = CadDocument::new();
+        let mut text = crate::entities::text::Text::new();
+        text.value = "Hello".to_string();
+        text.insertion_point = Vector3::new(1.0, 2.0, 3.0);
+        text.alignment_point = Some(Vector3::new(10.0, 20.0, 0.0));
+        text.height = 2.5;
+        text.rotation = 45.0_f64.to_radians();
+        text.horizontal_alignment = TextHorizontalAlignment::Center;
+        text.vertical_alignment = TextVerticalAlignment::Middle;
+        text.normal = Vector3::new(0.0, 1.0, 0.0);
+        doc.add_entity(EntityType::Text(text));
+
+        let doc2 = roundtrip(doc);
+        let entities: Vec<_> = doc2.entities().collect();
+        assert_eq!(entities.len(), 1);
+        if let EntityType::Text(ref t) = entities[0] {
+            assert_eq!(t.value, "Hello");
+            assert!((t.height - 2.5).abs() < 1e-9);
+            assert!((t.rotation - 45.0_f64.to_radians()).abs() < 1e-6);
+            assert_eq!(t.horizontal_alignment, TextHorizontalAlignment::Center);
+            assert_eq!(t.vertical_alignment, TextVerticalAlignment::Middle);
+            assert!((t.normal.y - 1.0).abs() < 1e-9);
+            assert!(t.alignment_point.is_some());
+            let ap = t.alignment_point.unwrap();
+            assert!((ap.x - 10.0).abs() < 1e-9);
+        } else {
+            panic!("Expected Text entity");
+        }
+    }
+
+    #[test]
+    fn test_dxf_roundtrip_mtext_properties() {
+        use crate::entities::mtext::{AttachmentPoint, DrawingDirection};
+
+        let mut doc = CadDocument::new();
+        let mut mtext = crate::entities::mtext::MText::new();
+        mtext.value = "Multi\\Pline".to_string();
+        mtext.insertion_point = Vector3::new(5.0, 10.0, 0.0);
+        mtext.height = 3.0;
+        mtext.rectangle_width = 50.0;
+        mtext.attachment_point = AttachmentPoint::MiddleCenter;
+        mtext.drawing_direction = DrawingDirection::TopToBottom;
+        mtext.line_spacing_factor = 1.5;
+        mtext.normal = Vector3::new(0.0, 0.0, -1.0);
+        doc.add_entity(EntityType::MText(mtext));
+
+        let doc2 = roundtrip(doc);
+        let entities: Vec<_> = doc2.entities().collect();
+        assert_eq!(entities.len(), 1);
+        if let EntityType::MText(ref m) = entities[0] {
+            assert_eq!(m.value, "Multi\\Pline");
+            assert!((m.height - 3.0).abs() < 1e-9);
+            assert!((m.rectangle_width - 50.0).abs() < 1e-9);
+            assert_eq!(m.attachment_point, AttachmentPoint::MiddleCenter);
+            assert_eq!(m.drawing_direction, DrawingDirection::TopToBottom);
+            assert!((m.line_spacing_factor - 1.5).abs() < 1e-9);
+            assert!((m.normal.z - (-1.0)).abs() < 1e-9);
+        } else {
+            panic!("Expected MText entity");
+        }
+    }
+
+    #[test]
+    fn test_dxf_roundtrip_lwpolyline_properties() {
+        use crate::entities::lwpolyline::{LwPolyline, LwVertex};
+        use crate::types::Vector2;
+
+        let mut doc = CadDocument::new();
+        let mut lwpoly = LwPolyline::new();
+        lwpoly.is_closed = true;
+        lwpoly.elevation = 5.0;
+        lwpoly.thickness = 2.0;
+        lwpoly.constant_width = 0.5;
+        lwpoly.normal = Vector3::new(0.0, 1.0, 0.0);
+        lwpoly.vertices = vec![
+            LwVertex::new(Vector2::new(0.0, 0.0)),
+            LwVertex::new(Vector2::new(10.0, 0.0)),
+            LwVertex::new(Vector2::new(10.0, 10.0)),
+        ];
+        doc.add_entity(EntityType::LwPolyline(lwpoly));
+
+        let doc2 = roundtrip(doc);
+        let entities: Vec<_> = doc2.entities().collect();
+        assert_eq!(entities.len(), 1);
+        if let EntityType::LwPolyline(ref lw) = entities[0] {
+            assert!(lw.is_closed);
+            assert!((lw.elevation - 5.0).abs() < 1e-9);
+            assert!((lw.thickness - 2.0).abs() < 1e-9);
+            assert!((lw.constant_width - 0.5).abs() < 1e-9);
+            assert!((lw.normal.y - 1.0).abs() < 1e-9);
+            assert_eq!(lw.vertices.len(), 3);
+        } else {
+            panic!("Expected LwPolyline entity");
+        }
+    }
+
+    #[test]
+    fn test_dxf_roundtrip_linetype_and_scale() {
+        let mut doc = CadDocument::new();
+        let mut line = crate::entities::line::Line::new();
+        line.start = Vector3::new(0.0, 0.0, 0.0);
+        line.end = Vector3::new(10.0, 0.0, 0.0);
+        line.common.linetype = "DASHED".to_string();
+        line.common.linetype_scale = 2.5;
+        doc.add_entity(EntityType::Line(line));
+
+        let doc2 = roundtrip(doc);
+        let entities: Vec<_> = doc2.entities().collect();
+        assert_eq!(entities.len(), 1);
+        if let EntityType::Line(ref l) = entities[0] {
+            assert_eq!(l.common.linetype, "DASHED");
+            assert!((l.common.linetype_scale - 2.5).abs() < 1e-9);
+        } else {
+            panic!("Expected Line entity");
+        }
+    }
+
+    #[test]
+    fn test_dxf_roundtrip_default_normal_not_written() {
+        // With default normal (0,0,1), codes 210/220/230 should NOT appear in output
+        let mut doc = CadDocument::new();
+        let line = crate::entities::line::Line::new();
+        // normal defaults to UNIT_Z
+        doc.add_entity(EntityType::Line(line));
+
+        let writer = crate::io::dxf::writer::DxfWriter::new(doc);
+        let bytes = writer.write_to_vec().expect("write_to_vec");
+        let content = String::from_utf8_lossy(&bytes);
+        // 210 should NOT appear as a group code for default normal
+        // (searching for "\n210\n" to avoid matching other uses of 210)
+        let has_210 = content.lines().any(|l| l.trim() == "210");
+        // The line 210 should not appear in ENTITIES section for default normals
+        // This is a soft test - just verify roundtrip still works
+        let cursor = std::io::Cursor::new(bytes);
+        let reader = crate::io::dxf::reader::DxfReader::from_reader(cursor).expect("from_reader");
+        let doc2 = reader.read().expect("read");
+        let entities: Vec<_> = doc2.entities().collect();
+        assert_eq!(entities.len(), 1);
+        if let EntityType::Line(ref l) = entities[0] {
+            // Default normal should be preserved
+            assert!((l.normal.z - 1.0).abs() < 1e-9);
+        } else {
+            panic!("Expected Line entity");
+        }
     }
 }

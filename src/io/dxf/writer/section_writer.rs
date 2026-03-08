@@ -882,9 +882,19 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_subclass("AcDbEntity")?;
         self.writer.write_string(8, &common.layer)?;
 
+        // Write linetype if not default (ByLayer)
+        if common.has_linetype() {
+            self.writer.write_string(6, &common.linetype)?;
+        }
+
         // Write color only if not ByLayer (default)
         if common.color != Color::ByLayer {
             self.writer.write_color(62, common.color)?;
+        }
+
+        // Write linetype scale if not 1.0
+        if (common.linetype_scale - 1.0).abs() > 1e-12 {
+            self.writer.write_double(48, common.linetype_scale)?;
         }
 
         // Write lineweight if not default
@@ -897,6 +907,16 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             self.writer.write_i16(60, 1)?;
         }
 
+        Ok(())
+    }
+
+    /// Write extrusion direction (normal vector, codes 210/220/230) if not default (0,0,1).
+    fn write_normal(&mut self, normal: Vector3) -> Result<()> {
+        if normal != Vector3::UNIT_Z {
+            self.writer.write_double(210, normal.x)?;
+            self.writer.write_double(220, normal.y)?;
+            self.writer.write_double(230, normal.z)?;
+        }
         Ok(())
     }
 
@@ -930,6 +950,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         if point.thickness != 0.0 {
             self.writer.write_double(39, point.thickness)?;
         }
+        self.write_normal(point.normal)?;
         Ok(())
     }
 
@@ -943,6 +964,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         if line.thickness != 0.0 {
             self.writer.write_double(39, line.thickness)?;
         }
+        self.write_normal(line.normal)?;
         Ok(())
     }
 
@@ -956,6 +978,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         if circle.thickness != 0.0 {
             self.writer.write_double(39, circle.thickness)?;
         }
+        self.write_normal(circle.normal)?;
         Ok(())
     }
 
@@ -969,6 +992,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         if arc.thickness != 0.0 {
             self.writer.write_double(39, arc.thickness)?;
         }
+        self.write_normal(arc.normal)?;
         self.writer.write_subclass("AcDbArc")?;
         self.writer.write_double(50, arc.start_angle.to_degrees())?;
         self.writer.write_double(51, arc.end_angle.to_degrees())?;
@@ -983,6 +1007,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_point3d(10, ellipse.center)?;
         self.writer.write_point3d(11, ellipse.major_axis)?;
         self.writer.write_double(40, ellipse.minor_axis_ratio)?;
+        self.write_normal(ellipse.normal)?;
         self.writer.write_double(41, ellipse.start_parameter)?;
         self.writer.write_double(42, ellipse.end_parameter)?;
         Ok(())
@@ -1116,6 +1141,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         if lwpoly.thickness != 0.0 {
             self.writer.write_double(39, lwpoly.thickness)?;
         }
+        if lwpoly.constant_width != 0.0 {
+            self.writer.write_double(43, lwpoly.constant_width)?;
+        }
 
         for vertex in &lwpoly.vertices {
             self.writer.write_double(10, vertex.location.x)?;
@@ -1126,6 +1154,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             self.writer.write_double(42, vertex.bulge)?;
         }
 
+        self.write_normal(lwpoly.normal)?;
         Ok(())
     }
 
@@ -1151,6 +1180,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         if let Some(align_pt) = text.alignment_point {
             self.writer.write_point3d(11, align_pt)?;
         }
+        self.write_normal(text.normal)?;
         self.writer.write_subclass("AcDbText")?;
         self.writer.write_i16(73, text.vertical_alignment as i16)?;
         Ok(())
@@ -1187,6 +1217,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             self.writer.write_double(50, mtext.rotation.to_degrees())?;
         }
         self.writer.write_double(44, mtext.line_spacing_factor)?;
+        self.write_normal(mtext.normal)?;
         Ok(())
     }
 
@@ -1197,9 +1228,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_subclass("AcDbSpline")?;
 
         // Normal vector
-        self.writer.write_double(210, 0.0)?;
-        self.writer.write_double(220, 0.0)?;
-        self.writer.write_double(230, 1.0)?;
+        self.write_normal(spline.normal)?;
 
         // Flags
         let mut flags: i16 = 0;
@@ -1230,9 +1259,13 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             self.writer.write_double(40, *knot)?;
         }
 
-        // Control points
-        for point in &spline.control_points {
+        // Control points (with optional weights for rational splines)
+        for (i, point) in spline.control_points.iter().enumerate() {
             self.writer.write_point3d(10, *point)?;
+            if spline.flags.rational {
+                let w = spline.weights.get(i).copied().unwrap_or(1.0);
+                self.writer.write_double(41, w)?;
+            }
         }
 
         // Fit points
@@ -1529,6 +1562,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         if solid.thickness != 0.0 {
             self.writer.write_double(39, solid.thickness)?;
         }
+        self.write_normal(solid.normal)?;
         Ok(())
     }
 
@@ -1579,6 +1613,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         if insert.row_spacing != 0.0 {
             self.writer.write_double(45, insert.row_spacing)?;
         }
+        self.write_normal(insert.normal)?;
         Ok(())
     }
 
