@@ -1942,13 +1942,19 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     pub fn write_objects(&mut self, document: &CadDocument) -> Result<()> {
         self.writer.write_section_start("OBJECTS")?;
 
-        // Write root dictionary
-        let mut root_dict = Dictionary::new();
-        root_dict.handle = self.allocate_handle();
-        self.write_dictionary(&root_dict)?;
+        // DXF spec requires the root named object dictionary to be the
+        // very first object in the OBJECTS section.
+        let root_handle = document.header.named_objects_dict_handle;
+        if let Some(ObjectType::Dictionary(root_dict)) = document.objects.get(&root_handle) {
+            self.write_dictionary(root_dict)?;
+        }
 
-        // Write other objects
-        for object in document.objects.values() {
+        // Write remaining objects (skip the root dictionary already written)
+        for (handle, object) in document.objects.iter() {
+            if *handle == root_handle {
+                continue;
+            }
+            let object = object;
             match object {
                 ObjectType::Dictionary(dict) => self.write_dictionary(dict)?,
                 ObjectType::Layout(layout) => self.write_layout(layout)?,

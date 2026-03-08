@@ -240,7 +240,7 @@ fn main() -> acadrust::Result<()> {
     }
 
     // ── 3. Create a CadDocument and write to DXF ─────────────────────
-    let mut doc = CadDocument::with_version(DxfVersion::AC1027); // R2013
+    let mut doc = CadDocument::with_version(DxfVersion::AC1021); // R2007 – best compatibility for SAT text ACIS data
     doc.add_entity(EntityType::Solid3D(solid))?;
 
     let output_path = "solid3d_box.dxf";

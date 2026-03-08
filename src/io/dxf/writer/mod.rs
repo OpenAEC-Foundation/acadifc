@@ -104,9 +104,6 @@ impl DxfWriter {
 fn count_extra_handles(document: &CadDocument) -> u64 {
     let mut count = 0u64;
 
-    // Root dictionary in OBJECTS
-    count += 1;
-
     for entity in document.entities() {
         match entity {
             EntityType::Polyline(polyline) => {

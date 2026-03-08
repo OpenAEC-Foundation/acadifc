@@ -321,16 +321,12 @@ impl AcisData {
 }
 
 impl AcisData {
-    /// Encode plaintext SAT for DXF storage (Version 1 cipher).
+    /// Apply the symmetric SAT/DXF character cipher.
     ///
-    /// AutoCAD DXF files (R2004 / AC1018 and later) store ACIS SAT data
-    /// using a simple symmetric character cipher: every printable ASCII
-    /// character except space is mapped to `(159 - c)`.  Spaces, newlines,
-    /// and non-ASCII bytes are passed through unchanged.
-    ///
-    /// Because the cipher is symmetric (`encode(encode(x)) == x`), the
-    /// same function works for both encoding and decoding.
-    pub fn encode_sat(text: &str) -> String {
+    /// Every printable ASCII character except space is mapped to
+    /// `(159 - c)`.  Spaces, newlines, and non-ASCII bytes pass through
+    /// unchanged.  The cipher is its own inverse: `cipher(cipher(x)) == x`.
+    fn sat_cipher(text: &str) -> String {
         text.chars()
             .map(|c| {
                 let b = c as u32;
@@ -344,12 +340,60 @@ impl AcisData {
             .collect()
     }
 
+    /// Encode plaintext SAT for DXF storage (Version 1 cipher).
+    ///
+    /// AutoCAD DXF files (R2004 / AC1018 and later) store ACIS SAT data
+    /// using a simple symmetric character cipher: every printable ASCII
+    /// character except space is mapped to `(159 - c)`.  Spaces, newlines,
+    /// and non-ASCII bytes are passed through unchanged.
+    ///
+    /// After applying the cipher, a protective space is inserted after any
+    /// `^` (0x5E) that would otherwise be followed by a character in the
+    /// 0x40–0x5F range.  In DXF, the two-character sequence `^X` (where X
+    /// is in 0x40–0x5F) is interpreted as a control character and would
+    /// corrupt the data stream.  The plaintext letter `A` (0x41) encodes
+    /// to `^` (0x5E), so sequences like `AC` become `^\` which DXF readers
+    /// would mis-interpret as a File Separator control code.
+    pub fn encode_sat(text: &str) -> String {
+        let ciphered = Self::sat_cipher(text);
+        let bytes = ciphered.as_bytes();
+        let mut result = String::with_capacity(ciphered.len() + 16);
+        for i in 0..bytes.len() {
+            result.push(bytes[i] as char);
+            // Insert a protective space after '^' when the next character
+            // falls in the DXF control-character trigger range 0x40-0x5F.
+            if bytes[i] == 0x5E {
+                if let Some(&next) = bytes.get(i + 1) {
+                    if (0x40..=0x5F).contains(&next) {
+                        result.push(' ');
+                    }
+                }
+            }
+        }
+        result
+    }
+
     /// Decode DXF-encoded SAT text (Version 1 cipher).
     ///
-    /// The cipher is symmetric, so this is identical to [`encode_sat`].
-    #[inline]
+    /// Strips protective spaces that were inserted after `^` to prevent
+    /// DXF control-character interpretation, then applies the cipher.
     pub fn decode_sat(text: &str) -> String {
-        Self::encode_sat(text)
+        let bytes = text.as_bytes();
+        let mut cleaned = String::with_capacity(text.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            cleaned.push(bytes[i] as char);
+            // If we see '^' followed by a space and then a char in
+            // 0x40-0x5F, the space is a protective insertion – skip it.
+            if bytes[i] == 0x5E && i + 2 < bytes.len() && bytes[i + 1] == 0x20 {
+                let after = bytes[i + 2];
+                if (0x40..=0x5F).contains(&after) {
+                    i += 1; // skip the protective space
+                }
+            }
+            i += 1;
+        }
+        Self::sat_cipher(&cleaned)
     }
 }
 

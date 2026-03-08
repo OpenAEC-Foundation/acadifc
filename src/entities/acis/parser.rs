@@ -888,7 +888,7 @@ mod tests {
     fn test_parse_sample_sat_1() {
         let path = "examples/sat v7 samples/sample_sat_1.sat";
         let Ok(sat) = std::fs::read_to_string(path) else { return; };
-        let doc = SatDocument::parse(sat).unwrap();
+        let doc = SatDocument::parse(&sat).unwrap();
 
         assert_eq!(doc.header.version, SatVersion::V7_0);
         assert_eq!(doc.header.product_id, "TransMagic R7 sp0.0");
@@ -929,7 +929,7 @@ mod tests {
     fn test_parse_sample_sat_2() {
         let path = "examples/sat v7 samples/sample_sat_2.sat";
         let Ok(sat) = std::fs::read_to_string(path) else { return; };
-        let doc = SatDocument::parse(sat).unwrap();
+        let doc = SatDocument::parse(&sat).unwrap();
 
         assert_eq!(doc.header.version, SatVersion::V7_0);
         assert_eq!(doc.header.product_id, "TransMagic R7 sp0.0");
