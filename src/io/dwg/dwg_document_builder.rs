@@ -659,7 +659,12 @@ impl DwgDocumentBuilder {
         };
         if is_entity {
             let entity_data = self.obj_reader.read_common_entity_data(&mut reader, type_code);
-            let entity_common = map_entity_common(&entity_data, maps);
+            let entity_common = map_entity_common(
+                &entity_data,
+                maps,
+                document.header.model_space_block_handle,
+                document.header.paper_space_block_handle,
+            );
 
             match type_code {
                 // ── Simple entities ────────────────────────────────
@@ -1792,10 +1797,23 @@ impl DwgDocumentBuilder {
     }
 }
 
-fn map_entity_common(data: &EntityCommonData, maps: &HandleMaps) -> EntityCommon {
+fn map_entity_common(
+    data: &EntityCommonData,
+    maps: &HandleMaps,
+    model_space_handle: Handle,
+    paper_space_handle: Handle,
+) -> EntityCommon {
     let mut common = EntityCommon::new();
     common.handle = Handle::from(data.common.handle);
-    common.owner_handle = Handle::from(data.owner_handle);
+    // Resolve owner from entity_mode:
+    //   0 = explicit owner (handle read from stream)
+    //   1 = paper space (implicit)
+    //   2 = model space (implicit)
+    common.owner_handle = match data.entity_mode {
+        1 => paper_space_handle,
+        2 => model_space_handle,
+        _ => Handle::from(data.owner_handle),
+    };
     common.color = data.color;
     common.transparency = data.transparency;
     common.invisible = data.invisible;
