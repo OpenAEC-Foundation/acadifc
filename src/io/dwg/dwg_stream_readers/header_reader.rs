@@ -9,6 +9,7 @@
 use crate::document::HeaderVariables;
 use crate::error::{DxfError, Result};
 use crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader;
+use crate::io::dwg::dwg_stream_readers::merged_reader::DwgMergedReader;
 use crate::io::dwg::dwg_version::DwgVersion;
 use crate::io::dwg::file_headers::section_definition::start_sentinels;
 use crate::types::{DxfVersion, Handle};
@@ -38,56 +39,132 @@ fn day_ms_to_timespan(days: i32, ms: i32) -> f64 {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-//  Reader abstraction (pre-R2007 = inline, R2007+ = merged)
+//  Reader abstraction (pre-R2007 = inline, R2007+ = three-stream merge)
 // ════════════════════════════════════════════════════════════════════════════
 
 /// Abstraction over single-stream (pre-R2007) and merged (R2007+) reading.
 ///
-/// For R2007+ the text/handle streams are interleaved into the main data
-/// by DwgMergedReader (Phase 3). For now, we operate on a single stream
-/// and delegate to merged reading in a later phase.
+/// For R2007+ the header section uses the three-stream merge format
+/// (main + text + handle), matching the writer's `DwgMergedWriter`.
+/// Text reads are routed to the text sub-stream and handle reads to the
+/// handle sub-stream, preserving bit alignment of the main data.
+enum SectionReaderInner {
+    /// Pre-R2007: single stream, everything inline
+    BitReader(DwgBitReader),
+    /// R2007+: three-stream merge (main + text + handle)
+    MergedReader(DwgMergedReader),
+}
+
 struct SectionReader {
-    reader: DwgBitReader,
+    inner: SectionReaderInner,
 }
 
 impl SectionReader {
     fn new(data: Vec<u8>, version: DxfVersion) -> Result<Self> {
-        let dwg = DwgVersion::from_dxf_version(version)?;
-        let mut reader = DwgBitReader::new(data, dwg, version);
-
-        // R2007+: The section data has an RL prefix (total data size in bits)
-        // from save_position_for_size. Text and handles are INLINE.
-        // Sections do NOT use three-stream merge.
         if version >= DxfVersion::AC1021 {
-            let _total_size_bits = reader.read_raw_long();
-            // Data starts after the RL (position 32). No text stream setup.
+            // R2007+: three-stream merge.
+            // The section data starts with an RL (total size in bits).
+            // Create a DwgMergedReader in ThreeStream mode and set up
+            // text/handle sub-streams from the RL.
+            let mut merged = DwgMergedReader::new(data, version, 0);
+            // Read the RL (total_size_bits) stored by save_position_for_size
+            let total_size_bits = merged.main_mut().read_raw_long() as i64;
+            merged.setup_text_and_handle(total_size_bits);
+            Ok(SectionReader { inner: SectionReaderInner::MergedReader(merged) })
+        } else {
+            // Pre-R2007: single stream, everything inline
+            let dwg = DwgVersion::from_dxf_version(version)?;
+            let reader = DwgBitReader::new(data, dwg, version);
+            Ok(SectionReader { inner: SectionReaderInner::BitReader(reader) })
         }
-
-        Ok(SectionReader { reader })
     }
 
-    // Delegate all read methods to the underlying DwgBitReader
-    fn read_bit(&mut self) -> bool { self.reader.read_bit() }
-    fn read_byte(&mut self) -> u8 { self.reader.read_byte() }
-    fn read_bit_short(&mut self) -> i16 { self.reader.read_bit_short() }
-    fn read_bit_long(&mut self) -> i32 { self.reader.read_bit_long() }
-    fn read_bit_long_long(&mut self) -> i64 { self.reader.read_bit_long_long() }
-    fn read_bit_double(&mut self) -> f64 { self.reader.read_bit_double() }
-    fn read_3bit_double(&mut self) -> crate::types::Vector3 { self.reader.read_3bit_double() }
-    fn read_2raw_double(&mut self) -> crate::types::Vector2 { self.reader.read_2raw_double() }
-    fn read_cm_color(&mut self) -> crate::types::Color { self.reader.read_cm_color() }
-    fn read_variable_text(&mut self) -> String { self.reader.read_variable_text() }
-    fn read_handle(&mut self) -> u64 { self.reader.read_handle() }
+    // Delegate all read methods to the underlying reader
+    fn read_bit(&mut self) -> bool {
+        match &mut self.inner {
+            SectionReaderInner::BitReader(r) => r.read_bit(),
+            SectionReaderInner::MergedReader(r) => r.read_bit(),
+        }
+    }
+    fn read_byte(&mut self) -> u8 {
+        match &mut self.inner {
+            SectionReaderInner::BitReader(r) => r.read_byte(),
+            SectionReaderInner::MergedReader(r) => r.read_byte(),
+        }
+    }
+    fn read_bit_short(&mut self) -> i16 {
+        match &mut self.inner {
+            SectionReaderInner::BitReader(r) => r.read_bit_short(),
+            SectionReaderInner::MergedReader(r) => r.read_bit_short(),
+        }
+    }
+    fn read_bit_long(&mut self) -> i32 {
+        match &mut self.inner {
+            SectionReaderInner::BitReader(r) => r.read_bit_long(),
+            SectionReaderInner::MergedReader(r) => r.read_bit_long(),
+        }
+    }
+    fn read_bit_long_long(&mut self) -> i64 {
+        match &mut self.inner {
+            SectionReaderInner::BitReader(r) => r.read_bit_long_long(),
+            SectionReaderInner::MergedReader(r) => r.read_bit_long_long(),
+        }
+    }
+    fn read_bit_double(&mut self) -> f64 {
+        match &mut self.inner {
+            SectionReaderInner::BitReader(r) => r.read_bit_double(),
+            SectionReaderInner::MergedReader(r) => r.read_bit_double(),
+        }
+    }
+    fn read_3bit_double(&mut self) -> crate::types::Vector3 {
+        match &mut self.inner {
+            SectionReaderInner::BitReader(r) => r.read_3bit_double(),
+            SectionReaderInner::MergedReader(r) => r.read_3bit_double(),
+        }
+    }
+    fn read_2raw_double(&mut self) -> crate::types::Vector2 {
+        match &mut self.inner {
+            SectionReaderInner::BitReader(r) => r.read_2raw_double(),
+            SectionReaderInner::MergedReader(r) => r.read_2raw_double(),
+        }
+    }
+    fn read_cm_color(&mut self) -> crate::types::Color {
+        match &mut self.inner {
+            SectionReaderInner::BitReader(r) => r.read_cm_color(),
+            SectionReaderInner::MergedReader(r) => r.read_cm_color(),
+        }
+    }
+    fn read_variable_text(&mut self) -> String {
+        match &mut self.inner {
+            SectionReaderInner::BitReader(r) => r.read_variable_text(),
+            SectionReaderInner::MergedReader(r) => r.read_variable_text(),
+        }
+    }
+    fn read_handle(&mut self) -> u64 {
+        match &mut self.inner {
+            SectionReaderInner::BitReader(r) => r.read_handle(),
+            SectionReaderInner::MergedReader(r) => r.read_handle(),
+        }
+    }
+
+    /// Read a handle from the MAIN stream (not the handle sub-stream).
+    /// Used for HANDSEED which is always written inline.
+    fn read_handle_inline(&mut self) -> u64 {
+        match &mut self.inner {
+            SectionReaderInner::BitReader(r) => r.read_handle(),
+            SectionReaderInner::MergedReader(r) => r.main_mut().read_handle(),
+        }
+    }
 
     fn read_datetime(&mut self) -> (i32, i32) {
-        let day = self.reader.read_bit_long();
-        let ms = self.reader.read_bit_long();
+        let day = self.read_bit_long();
+        let ms = self.read_bit_long();
         (day, ms)
     }
 
     fn read_timespan(&mut self) -> (i32, i32) {
-        let days = self.reader.read_bit_long();
-        let ms = self.reader.read_bit_long();
+        let days = self.read_bit_long();
+        let ms = self.read_bit_long();
         (days, ms)
     }
 }
@@ -319,7 +396,9 @@ fn read_header_fields(r: &mut SectionReader, v: DxfVersion, h: &mut HeaderVariab
     h.current_entity_color = r.read_cm_color();
 
     // ── HANDSEED ──
-    h.handle_seed = r.read_handle();
+    // HANDSEED is written to the main stream (not the handle sub-stream),
+    // so we must read it inline from the main stream.
+    h.handle_seed = r.read_handle_inline();
 
     // ── Style/layer/linetype handles ──
     h.current_layer_handle = Handle::new(r.read_handle());
@@ -750,6 +829,44 @@ mod tests {
         assert_eq!(read.fill_mode, original.fill_mode);
         assert_eq!(read.sort_entities, original.sort_entities);
         assert_eq!(read.insertion_units, original.insertion_units);
+    }
+
+    #[test]
+    fn test_header_roundtrip_r2007() {
+        // R2007+ uses three-stream merge (main + text + handle).
+        // This test verifies the reader correctly splits the streams.
+        let original = HeaderVariables::default();
+        let written = header_writer::write_header(DxfVersion::AC1021, &original);
+        let read = read_header(&written, DxfVersion::AC1021).unwrap();
+
+        // Verify core header variables survived the three-stream roundtrip
+        assert_eq!(read.fill_mode, original.fill_mode);
+        assert_eq!(read.ortho_mode, original.ortho_mode);
+        assert_eq!(read.linear_unit_format, original.linear_unit_format,
+            "LUNITS should survive roundtrip");
+        assert_eq!(read.angular_unit_format, original.angular_unit_format);
+        assert!((read.text_height - original.text_height).abs() < 1e-10,
+            "TEXTSIZE should survive roundtrip: got {} expected {}", read.text_height, original.text_height);
+        assert!((read.linetype_scale - original.linetype_scale).abs() < 1e-10);
+        assert_eq!(read.attribute_visibility, original.attribute_visibility,
+            "ATTMODE should survive roundtrip");
+        assert!((read.current_entity_linetype_scale - original.current_entity_linetype_scale).abs() < 1e-10,
+            "CELTSCALE should survive roundtrip");
+        assert_eq!(read.insertion_units, original.insertion_units);
+        assert_eq!(read.spline_segments, original.spline_segments);
+        assert_eq!(read.sort_entities, original.sort_entities);
+    }
+
+    #[test]
+    fn test_header_roundtrip_r2010() {
+        let original = HeaderVariables::default();
+        let written = header_writer::write_header(DxfVersion::AC1024, &original);
+        let read = read_header(&written, DxfVersion::AC1024).unwrap();
+
+        assert_eq!(read.fill_mode, original.fill_mode);
+        assert_eq!(read.linear_unit_format, original.linear_unit_format);
+        assert!((read.text_height - original.text_height).abs() < 1e-10);
+        assert_eq!(read.attribute_visibility, original.attribute_visibility);
     }
 
     #[test]

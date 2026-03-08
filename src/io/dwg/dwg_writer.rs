@@ -241,6 +241,17 @@ fn prepare_header(
     if h.current_linetype_handle.is_null() {
         h.current_linetype_handle = h.bylayer_linetype_handle;
     }
+    if h.current_multiline_style_handle.is_null() {
+        // Find MLineStyle "Standard" in the objects map
+        for (_, obj) in &document.objects {
+            if let crate::objects::ObjectType::MLineStyle(mls) = obj {
+                if mls.name == "Standard" {
+                    h.current_multiline_style_handle = mls.handle;
+                    break;
+                }
+            }
+        }
+    }
 
     // ── Correct HANDSEED ──
     let max_handle = handle_map.iter().map(|&(ha, _)| ha).max().unwrap_or(0);
