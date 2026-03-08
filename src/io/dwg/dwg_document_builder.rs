@@ -1447,13 +1447,15 @@ impl DwgDocumentBuilder {
             }
         } else if !is_table_type(type_code) {
             // ── Non-graphical objects ──────────────────────────────
-            let _non_entity_data = self.obj_reader.read_common_non_entity_data(&mut reader, type_code);
+            let non_entity_data = self.obj_reader.read_common_non_entity_data(&mut reader, type_code);
+            let owner_handle = Handle::from(non_entity_data.owner_handle);
 
             match type_code {
                 OBJ_DICTIONARY => {
                     let data = objects::read_dictionary(&mut reader, self.obj_reader.version());
                     let mut obj = crate::objects::Dictionary::new();
                     obj.handle = Handle::from(handle);
+                    obj.owner = owner_handle;
                     obj.hard_owner = data.hard_owner;
                     obj.duplicate_cloning = data.duplicate_cloning;
                     for entry in data.entries {
@@ -1468,6 +1470,7 @@ impl DwgDocumentBuilder {
                     let data = objects::read_dictionary_with_default(&mut reader, self.obj_reader.version());
                     let mut obj = crate::objects::DictionaryWithDefault::new();
                     obj.handle = Handle::from(handle);
+                    obj.owner = owner_handle;
                     document.objects.insert(
                         Handle::from(handle),
                         crate::objects::ObjectType::DictionaryWithDefault(obj),
@@ -1485,6 +1488,7 @@ impl DwgDocumentBuilder {
                     let data = objects::read_dictionary_variable(&mut reader);
                     let mut obj = crate::objects::DictionaryVariable::new("", &data.value);
                     obj.handle = Handle::from(handle);
+                    obj.owner_handle = owner_handle;
                     obj.schema_number = data.schema_number as i16;
                     document.objects.insert(
                         Handle::from(handle),
@@ -1495,6 +1499,7 @@ impl DwgDocumentBuilder {
                     let data = objects::read_layout(&mut reader, self.obj_reader.version());
                     let mut obj = crate::objects::Layout::new(&data.name);
                     obj.handle = Handle::from(handle);
+                    obj.owner = owner_handle;
                     obj.flags = data.flags;
                     obj.tab_order = data.tab_order as i16;
                     obj.min_limits = data.min_limits;
@@ -1524,6 +1529,8 @@ impl DwgDocumentBuilder {
                 OBJ_GROUP => {
                     let data = objects::read_group(&mut reader);
                     let mut obj = crate::objects::Group::new("");
+                    obj.handle = Handle::from(handle);
+                    obj.owner = owner_handle;
                     obj.description = data.description;
                     obj.selectable = data.selectable;
                     for eh in data.entity_handles {
@@ -1536,7 +1543,9 @@ impl DwgDocumentBuilder {
                 },
                 OBJ_MLINESTYLE => {
                     let data = objects::read_mlinestyle(&mut reader, self.obj_reader.version(), self.obj_reader.dxf_version());
-                    let obj = crate::objects::MLineStyle::new(&data.name);
+                    let mut obj = crate::objects::MLineStyle::new(&data.name);
+                    obj.handle = Handle::from(handle);
+                    obj.owner = owner_handle;
                     document.objects.insert(
                         Handle::from(handle),
                         crate::objects::ObjectType::MLineStyle(obj),
@@ -1546,6 +1555,7 @@ impl DwgDocumentBuilder {
                     let _data = objects::read_xrecord(&mut reader);
                     let mut obj = crate::objects::XRecord::new();
                     obj.handle = Handle::from(handle);
+                    obj.owner = owner_handle;
                     document.objects.insert(
                         Handle::from(handle),
                         crate::objects::ObjectType::XRecord(obj),
@@ -1555,6 +1565,7 @@ impl DwgDocumentBuilder {
                     let data = objects::read_plot_settings_obj(&mut reader, self.obj_reader.version());
                     let mut obj = crate::objects::PlotSettings::new(&data.page_name);
                     obj.handle = Handle::from(handle);
+                    obj.owner = owner_handle;
                     obj.printer_name = data.printer_name;
                     obj.paper_size = data.paper_size;
                     obj.plot_view_name = data.plot_view_name;
@@ -1590,6 +1601,7 @@ impl DwgDocumentBuilder {
                     let data = objects::read_multileader_style(&mut reader, self.obj_reader.version());
                     let mut obj = crate::objects::MultiLeaderStyle::new("");
                     obj.handle = Handle::from(handle);
+                    obj.owner_handle = owner_handle;
                     obj.description = data.description;
                     obj.content_type = crate::objects::LeaderContentType::from(data.content_type);
                     obj.multileader_draw_order = crate::objects::MultiLeaderDrawOrderType::from(data.multileader_draw_order);
@@ -1642,6 +1654,7 @@ impl DwgDocumentBuilder {
                     let data = objects::read_image_definition(&mut reader);
                     let mut obj = crate::objects::ImageDefinition::new(&data.file_name);
                     obj.handle = Handle::from(handle);
+                    obj.owner = owner_handle;
                     obj.class_version = data.class_version;
                     obj.is_loaded = data.is_loaded;
                     obj.size_in_pixels = (data.size_in_pixels.x as u32, data.size_in_pixels.y as u32);
@@ -1659,7 +1672,7 @@ impl DwgDocumentBuilder {
                         crate::objects::ObjectType::ImageDefinitionReactor(
                             crate::objects::ImageDefinitionReactor {
                                 handle: Handle::from(handle),
-                                owner: Handle::NULL,
+                                owner: owner_handle,
                                 image_handle: Handle::NULL,
                             }
                         ),
@@ -1669,6 +1682,7 @@ impl DwgDocumentBuilder {
                     let data = objects::read_scale(&mut reader);
                     let mut obj = crate::objects::Scale::new(&data.name, data.paper_units, data.drawing_units);
                     obj.handle = Handle::from(handle);
+                    obj.owner_handle = owner_handle;
                     obj.is_unit_scale = data.is_unit_scale;
                     document.objects.insert(
                         Handle::from(handle),
@@ -1679,6 +1693,7 @@ impl DwgDocumentBuilder {
                     let data = objects::read_sort_entities_table(&mut reader);
                     let mut obj = crate::objects::SortEntitiesTable::new();
                     obj.handle = Handle::from(handle);
+                    obj.owner_handle = owner_handle;
                     obj.block_owner_handle = Handle::from(data.block_owner_handle);
                     for entry in data.entries {
                         obj.add_entry(Handle::from(entry.entity_handle), Handle::from(entry.sort_handle));
@@ -1692,7 +1707,7 @@ impl DwgDocumentBuilder {
                     let data = objects::read_raster_variables(&mut reader);
                     let obj = crate::objects::RasterVariables {
                         handle: Handle::from(handle),
-                        owner: Handle::NULL,
+                        owner: owner_handle,
                         class_version: data.class_version,
                         display_image_frame: data.display_image_frame,
                         image_quality: data.image_quality,
@@ -1707,7 +1722,7 @@ impl DwgDocumentBuilder {
                     let data = objects::read_book_color(&mut reader);
                     let obj = crate::objects::BookColor {
                         handle: Handle::from(handle),
-                        owner: Handle::NULL,
+                        owner: owner_handle,
                         color_name: data.color_name,
                         book_name: data.book_name,
                     };
@@ -1720,7 +1735,7 @@ impl DwgDocumentBuilder {
                     objects::read_placeholder(&mut reader);
                     let obj = crate::objects::PlaceHolder {
                         handle: Handle::from(handle),
-                        owner: Handle::NULL,
+                        owner: owner_handle,
                     };
                     document.objects.insert(
                         Handle::from(handle),
@@ -1731,7 +1746,7 @@ impl DwgDocumentBuilder {
                     let data = objects::read_wipeout_variables(&mut reader);
                     let obj = crate::objects::WipeoutVariables {
                         handle: Handle::from(handle),
-                        owner: Handle::NULL,
+                        owner: owner_handle,
                         display_frame: data.display_frame,
                     };
                     document.objects.insert(

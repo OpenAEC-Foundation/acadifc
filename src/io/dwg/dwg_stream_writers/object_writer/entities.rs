@@ -57,10 +57,10 @@ impl<'a> DwgObjectWriter<'a> {
             EntityType::Polyline(e) => self.write_polyline_old(e),
             // Skip types that are structural or unsupported in DWG
             EntityType::Block(_) | EntityType::BlockEnd(_) => {}
-            EntityType::Solid3D(_)
-            | EntityType::Region(_)
-            | EntityType::Body(_)
-            | EntityType::Table(_)
+            EntityType::Solid3D(e) => self.write_solid3d(e),
+            EntityType::Region(e) => self.write_region(e),
+            EntityType::Body(e) => self.write_body(e),
+            EntityType::Table(_)
             | EntityType::Underlay(_) => {
                 // Not yet supported — silently skip
             }
@@ -2752,6 +2752,166 @@ impl<'a> DwgObjectWriter<'a> {
     fn write_polyline_old(&mut self, _e: &Polyline) {
         // Legacy polyline — not commonly used in DWG writing
         // Skip silently
+    }
+
+    // ── ACIS entities (3DSOLID, REGION, BODY) ───────────────────────
+
+    fn write_solid3d(&mut self, e: &Solid3D) {
+        self.entity_preamble(common::OBJ_3DSOLID, &e.common);
+        self.write_acis_data(&e.acis_data, &e.wires, &e.silhouettes);
+
+        // 3DSOLID-specific: history_handle bit + handle (R2007+)
+        if self.version.r2007_plus() {
+            let has_history = e.history_handle.is_some();
+            self.writer.write_bit(has_history);
+            if let Some(hh) = e.history_handle {
+                self.writer
+                    .write_handle(DwgReferenceType::HardPointer, hh.value());
+            }
+        }
+
+        self.register_object(e.common.handle);
+    }
+
+    fn write_region(&mut self, e: &Region) {
+        self.entity_preamble(common::OBJ_REGION, &e.common);
+        self.write_acis_data(&e.acis_data, &e.wires, &e.silhouettes);
+        self.register_object(e.common.handle);
+    }
+
+    fn write_body(&mut self, e: &Body) {
+        self.entity_preamble(common::OBJ_BODY, &e.common);
+        self.write_acis_data(&e.acis_data, &e.wires, &e.silhouettes);
+        self.register_object(e.common.handle);
+    }
+
+    /// Write ACIS/SAT modeler geometry data shared by 3DSOLID, REGION, BODY.
+    fn write_acis_data(
+        &mut self,
+        acis: &AcisData,
+        wires: &[Wire],
+        silhouettes: &[Silhouette],
+    ) {
+        let has_data = acis.has_data();
+        self.writer.write_bit(!has_data); // acis_empty (inverted: true = empty)
+
+        if !has_data {
+            return;
+        }
+
+        // ACIS version
+        let acis_version: i16 = match acis.version {
+            AcisVersion::Version1 => 1,
+            AcisVersion::Version2 => 2,
+        };
+        self.writer.write_bit_short(acis_version);
+
+        if acis_version == 1 {
+            // SAT text
+            if self.version.r2004_plus() {
+                // R2004+: encrypt and write as a single byte block
+                let plain = acis.sat_data.as_bytes();
+                let mut encrypted = Vec::with_capacity(plain.len());
+                for (i, &b) in plain.iter().enumerate() {
+                    encrypted.push(b.wrapping_add((i & 0xFF) as u8));
+                }
+                self.writer.write_bit_long(encrypted.len() as i32);
+                self.writer.write_bytes(&encrypted);
+            } else {
+                // R13–R2000: write individual text lines
+                for line in acis.sat_data.lines() {
+                    self.writer.write_variable_text(line);
+                }
+                self.writer.write_variable_text("End-of-ACIS-data");
+            }
+        } else {
+            // SAB binary (R2007+)
+            self.writer.write_bit_long(acis.sab_data.len() as i32);
+            self.writer.write_bytes(&acis.sab_data);
+        }
+
+        // Wireframe data
+        let wireframe_present = !wires.is_empty();
+        self.writer.write_bit(wireframe_present);
+
+        if wireframe_present {
+            // Point of reference (first wire's anchor — use first wire's first point or ZERO)
+            let point = wires
+                .first()
+                .and_then(|w| w.points.first().copied())
+                .unwrap_or(Vector3::ZERO);
+            self.writer.write_3bit_double(point);
+
+            self.writer.write_bit_long(wires.len() as i32);
+            for wire in wires {
+                self.writer.write_bit_long(wire.acis_index);
+                self.writer.write_byte(wire.wire_type as u8);
+                self.writer.write_bit_long(wire.selection_marker);
+                // Color as i32 (BL)
+                let color_val: i32 = match wire.color {
+                    crate::types::Color::ByLayer => 256,
+                    crate::types::Color::ByBlock => 0,
+                    crate::types::Color::Index(idx) => idx as i32,
+                    _ => 256,
+                };
+                self.writer.write_bit_long(color_val);
+                self.writer.write_bit_long(wire.points.len() as i32);
+                for pt in &wire.points {
+                    self.writer.write_3bit_double(*pt);
+                }
+                self.writer.write_bit(wire.has_transform);
+                if wire.has_transform {
+                    self.writer.write_3bit_double(wire.x_axis);
+                    self.writer.write_3bit_double(wire.y_axis);
+                    self.writer.write_3bit_double(wire.z_axis);
+                    self.writer.write_3bit_double(wire.translation);
+                    self.writer.write_bit_double(wire.scale);
+                    self.writer.write_bit(wire.has_rotation);
+                    self.writer.write_bit(wire.has_reflection);
+                    self.writer.write_bit(wire.has_shear);
+                }
+            }
+        }
+
+        // Silhouettes (R2007+)
+        if self.version.r2007_plus() {
+            self.writer.write_bit_long(silhouettes.len() as i32);
+            for sil in silhouettes {
+                self.writer.write_bit_long(sil.viewport_id as i32);
+                self.writer.write_3bit_double(sil.view_direction);
+                self.writer.write_3bit_double(sil.up_vector);
+                self.writer.write_3bit_double(sil.target);
+                self.writer.write_bit(sil.is_perspective);
+                self.writer.write_bit_long(sil.wires.len() as i32);
+                for wire in &sil.wires {
+                    self.writer.write_bit_long(wire.acis_index);
+                    self.writer.write_byte(wire.wire_type as u8);
+                    self.writer.write_bit_long(wire.selection_marker);
+                    let color_val: i32 = match wire.color {
+                        crate::types::Color::ByLayer => 256,
+                        crate::types::Color::ByBlock => 0,
+                        crate::types::Color::Index(idx) => idx as i32,
+                        _ => 256,
+                    };
+                    self.writer.write_bit_long(color_val);
+                    self.writer.write_bit_long(wire.points.len() as i32);
+                    for pt in &wire.points {
+                        self.writer.write_3bit_double(*pt);
+                    }
+                    self.writer.write_bit(wire.has_transform);
+                    if wire.has_transform {
+                        self.writer.write_3bit_double(wire.x_axis);
+                        self.writer.write_3bit_double(wire.y_axis);
+                        self.writer.write_3bit_double(wire.z_axis);
+                        self.writer.write_3bit_double(wire.translation);
+                        self.writer.write_bit_double(wire.scale);
+                        self.writer.write_bit(wire.has_rotation);
+                        self.writer.write_bit(wire.has_reflection);
+                        self.writer.write_bit(wire.has_shear);
+                    }
+                }
+            }
+        }
     }
 }
 
