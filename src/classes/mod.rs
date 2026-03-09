@@ -212,66 +212,71 @@ impl<'a> IntoIterator for &'a DxfClassCollection {
 
 /// Build the set of default DXF classes that AutoCAD registers.
 ///
-/// Each class gets `proxy_flags = AllOperationsAllowed (1023)` unless otherwise noted.
+/// DXF names, proxy flags, and application names match AutoCAD R2013 (AC1027)
+/// reference output.
 fn default_classes() -> Vec<DxfClass> {
-    let mut classes = Vec::new();
+    // (dxf_name, cpp_class_name, proxy_flags, app_name, is_entity)
+    let defs: &[(&str, &str, u16, &str, bool)] = &[
+        // ── Entity classes ──────────────────────────────────────────
+        ("MESH", "AcDbSubDMesh", 4095,
+            "AcDbSubDMesh|Description: AutoCAD subD mesh", true),
+        ("ACAD_TABLE", "AcDbTable", 1025, "ObjectDBX Classes", true),
+        ("WIPEOUT", "AcDbWipeout", 127,
+            "WipeOut|AutoCAD Express Tool|www.autodesk.com", true),
+        ("IMAGE", "AcDbRasterImage", 127, "ISM", true),
+        ("PDFREFERENCE", "AcDbPdfReference", 1, "ObjectDBX Classes", true),
+        ("DWFREFERENCE", "AcDbDwfReference", 1, "ObjectDBX Classes", true),
+        ("DGNREFERENCE", "AcDbDgnReference", 1, "ObjectDBX Classes", true),
+        ("MULTILEADER", "AcDbMLeader", 1025, "ACDB_MLEADER_CLASS", true),
+        ("OLE2FRAME", "AcDbOle2Frame", 1, "ObjectDBX Classes", true),
+        ("MLINE", "AcDbMline", 1, "ObjectDBX Classes", true),
 
-    // Entity classes (item_class_id = 498)
-    for &(dxf, cpp) in &[
-        ("MESH", "AcDbSubDMesh"),
-        ("ACAD_TABLE", "AcDbTable"),
-        ("WIPEOUT", "AcDbWipeout"),
-        ("IMAGE", "AcDbRasterImage"),
-        ("PDFUNDERLAY", "AcDbPdfReference"),
-        ("DWFUNDERLAY", "AcDbDwfReference"),
-        ("DGNUNDERLAY", "AcDbDgnReference"),
-        ("MULTILEADER", "AcDbMLeader"),
-        ("OLE2FRAME", "AcDbOle2Frame"),
-        ("MLINE", "AcDbMline"),
-    ] {
-        let mut c = DxfClass::new_entity(dxf, cpp);
-        c.proxy_flags = ProxyFlags::ALL_OPERATIONS_ALLOWED;
-        classes.push(c);
-    }
+        // ── Object classes ──────────────────────────────────────────
+        ("ACDBDICTIONARYWDFLT", "AcDbDictionaryWithDefault", 0, "ObjectDBX Classes", false),
+        ("ACDBPLACEHOLDER", "AcDbPlaceHolder", 0, "ObjectDBX Classes", false),
+        ("LAYOUT", "AcDbLayout", 0, "ObjectDBX Classes", false),
+        ("DICTIONARYVAR", "AcDbDictionaryVar", 0, "ObjectDBX Classes", false),
+        ("TABLESTYLE", "AcDbTableStyle", 1025, "ObjectDBX Classes", false),
+        ("MATERIAL", "AcDbMaterial", 1025, "ObjectDBX Classes", false),
+        ("VISUALSTYLE", "AcDbVisualStyle", 4095, "ObjectDBX Classes", false),
+        ("SCALE", "AcDbScale", 1153, "ObjectDBX Classes", false),
+        ("MLEADERSTYLE", "AcDbMLeaderStyle", 4095, "ACDB_MLEADERSTYLE_CLASS", false),
+        ("CELLSTYLEMAP", "AcDbCellStyleMap", 1025, "ObjectDBX Classes", false),
+        ("XRECORD", "AcDbXrecord", 0, "ObjectDBX Classes", false),
+        ("SORTENTSTABLE", "AcDbSortentsTable", 0, "ObjectDBX Classes", false),
+        ("WIPEOUTVARIABLES", "AcDbWipeoutVariables", 0,
+            "WipeOut|AutoCAD Express Tool|www.autodesk.com", false),
+        ("DIMASSOC", "AcDbDimAssoc", 0,
+            "AcDbDimAssoc|Product Desc:     AcDim ARX App For Dimension|Company:          Autodesk|WEB Address:      www.autodesk.com", false),
+        ("TABLECONTENT", "AcDbTableContent", 1025, "ObjectDBX Classes", false),
+        ("TABLEGEOMETRY", "AcDbTableGeometry", 1025, "ObjectDBX Classes", false),
+        ("RASTERVARIABLES", "AcDbRasterVariables", 0, "ISM", false),
+        ("IMAGEDEF", "AcDbRasterImageDef", 0, "ISM", false),
+        ("IMAGEDEF_REACTOR", "AcDbRasterImageDefReactor", 1, "ISM", false),
+        ("DBCOLOR", "AcDbColor", 1025, "ObjectDBX Classes", false),
+        ("GEODATA", "AcDbGeoData", 1025, "ObjectDBX Classes", false),
+        ("PDFDEFINITION", "AcDbPdfDefinition", 1, "ObjectDBX Classes", false),
+        ("DWFDEFINITION", "AcDbDwfDefinition", 1, "ObjectDBX Classes", false),
+        ("DGNDEFINITION", "AcDbDgnDefinition", 1, "ObjectDBX Classes", false),
+        ("SPATIAL_FILTER", "AcDbSpatialFilter", 1, "ObjectDBX Classes", false),
+        ("PLOTSETTINGS", "AcDbPlotSettings", 0, "ObjectDBX Classes", false),
+        ("GROUP", "AcDbGroup", 0, "ObjectDBX Classes", false),
+        ("MLINESTYLE", "AcDbMlineStyle", 0, "ObjectDBX Classes", false),
+    ];
 
-    // Object classes (item_class_id = 499)
-    for &(dxf, cpp) in &[
-        ("ACDBDICTIONARYWDFLT", "AcDbDictionaryWithDefault"),
-        ("ACDBPLACEHOLDER", "AcDbPlaceHolder"),
-        ("LAYOUT", "AcDbLayout"),
-        ("DICTIONARYVAR", "AcDbDictionaryVar"),
-        ("TABLESTYLE", "AcDbTableStyle"),
-        ("MATERIAL", "AcDbMaterial"),
-        ("VISUALSTYLE", "AcDbVisualStyle"),
-        ("SCALE", "AcDbScale"),
-        ("MLEADERSTYLE", "AcDbMLeaderStyle"),
-        ("CELLSTYLEMAP", "AcDbCellStyleMap"),
-        ("XRECORD", "AcDbXrecord"),
-        ("ACDB_XRECORD_CLASS", "AcDbXrecord"),
-        ("SORTENTSTABLE", "AcDbSortentsTable"),
-        ("WIPEOUTVARIABLES", "AcDbWipeoutVariables"),
-        ("DIMASSOC", "AcDbDimAssoc"),
-        ("TABLECONTENT", "AcDbTableContent"),
-        ("TABLEGEOMETRY", "AcDbTableGeometry"),
-        ("RASTERVARIABLES", "AcDbRasterVariables"),
-        ("IMAGEDEF", "AcDbRasterImageDef"),
-        ("IMAGEDEF_REACTOR", "AcDbRasterImageDefReactor"),
-        ("DBCOLOR", "AcDbColor"),
-        ("GEODATA", "AcDbGeoData"),
-        ("PDFDEFINITION", "AcDbPdfDefinition"),
-        ("DWFDEFINITION", "AcDbDwfDefinition"),
-        ("DGNDEFINITION", "AcDbDgnDefinition"),
-        ("SPATIALFILTER", "AcDbSpatialFilter"),
-        ("PLOTSETTINGS", "AcDbPlotSettings"),
-        ("GROUP", "AcDbGroup"),
-        ("MLINESTYLE", "AcDbMlineStyle"),
-    ] {
-        let mut c = DxfClass::new(dxf, cpp);
-        c.proxy_flags = ProxyFlags::ALL_OPERATIONS_ALLOWED;
-        classes.push(c);
-    }
-
-    classes
+    defs.iter().map(|&(dxf, cpp, flags, app, is_entity)| {
+        if is_entity {
+            let mut c = DxfClass::new_entity(dxf, cpp);
+            c.proxy_flags = ProxyFlags(flags);
+            c.application_name = app.to_string();
+            c
+        } else {
+            let mut c = DxfClass::new(dxf, cpp);
+            c.proxy_flags = ProxyFlags(flags);
+            c.application_name = app.to_string();
+            c
+        }
+    }).collect()
 }
 
 #[cfg(test)]

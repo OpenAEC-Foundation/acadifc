@@ -556,11 +556,17 @@ impl<'a> SectionReader<'a> {
                 match pair.value_string.as_str() {
                     "ENDBLK" => {
                         // Read ENDBLK properties
-                        let _block_end = self.read_block_end()?;
+                        let block_end = self.read_block_end()?;
 
-                        // Find the BlockRecord and add entities
+                        // Find the BlockRecord and add entities + BLOCK/ENDBLK handles
                         if let Some(block_record) = document.block_records.get_mut(&block_name) {
                             block_record.entities = block_entities;
+                            if !handle.is_null() {
+                                block_record.block_entity_handle = handle;
+                            }
+                            if !block_end.common.handle.is_null() {
+                                block_record.block_end_handle = block_end.common.handle;
+                            }
                         }
 
                         // Note: Block and BlockEnd are block definition markers, not drawing entities.
@@ -1606,6 +1612,10 @@ impl<'a> SectionReader<'a> {
 
     /// Read BLOCK_RECORD table
     fn read_block_record_table(&mut self, document: &mut CadDocument) -> Result<()> {
+        // Save old block record handles so we can update Layout references
+        let old_model_handle = document.header.model_space_block_handle;
+        let old_paper_handle = document.header.paper_space_block_handle;
+
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 && pair.value_string == "ENDTAB" {
                 break;
@@ -1613,10 +1623,54 @@ impl<'a> SectionReader<'a> {
 
             if pair.code == 0 && pair.value_string == "BLOCK_RECORD" {
                 if let Some(block_record) = self.read_block_record_entry()? {
-                    let _ = document.block_records.add(block_record);
+                    let name = block_record.name.clone();
+                    if let Err(_) = document.block_records.add(block_record.clone()) {
+                        // Entry already exists (from initialize_defaults),
+                        // update it with the data from the file
+                        if let Some(existing) = document.block_records.get_mut(&name) {
+                            if !block_record.handle.is_null() {
+                                existing.set_handle(block_record.handle);
+                            }
+                            if !block_record.layout.is_null() {
+                                existing.layout = block_record.layout;
+                            }
+                            existing.units = block_record.units;
+                            existing.flags = block_record.flags;
+                        }
+                    }
                 }
             }
         }
+
+        // Update header block handles to match what was read from the file
+        if let Some(ms) = document.block_records.get("*Model_Space") {
+            if !ms.handle.is_null() {
+                document.header.model_space_block_handle = ms.handle;
+            }
+        }
+        if let Some(ps) = document.block_records.get("*Paper_Space") {
+            if !ps.handle.is_null() {
+                document.header.paper_space_block_handle = ps.handle;
+            }
+        }
+
+        // Update Layout objects created by initialize_defaults() to reference
+        // the file's block record handles instead of the initialized ones
+        let new_model_handle = document.header.model_space_block_handle;
+        let new_paper_handle = document.header.paper_space_block_handle;
+
+        if old_model_handle != new_model_handle || old_paper_handle != new_paper_handle {
+            for (_, obj) in document.objects.iter_mut() {
+                if let ObjectType::Layout(layout) = obj {
+                    if layout.block_record == old_model_handle {
+                        layout.block_record = new_model_handle;
+                    } else if layout.block_record == old_paper_handle {
+                        layout.block_record = new_paper_handle;
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -1631,6 +1685,11 @@ impl<'a> SectionReader<'a> {
             }
 
             match pair.code {
+                5 => {
+                    if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) {
+                        block_record.handle = Handle::new(h);
+                    }
+                }
                 2 => block_record.name = pair.value_string.clone(),
                 70 => {
                     if let Some(flags) = pair.as_i16() {
@@ -1643,6 +1702,11 @@ impl<'a> SectionReader<'a> {
                 280 => {
                     if let Some(units) = pair.as_i16() {
                         block_record.units = units;
+                    }
+                }
+                340 => {
+                    if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) {
+                        block_record.layout = Handle::new(h);
                     }
                 }
                 _ => {}

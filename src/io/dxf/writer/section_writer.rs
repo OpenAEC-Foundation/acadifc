@@ -13,7 +13,7 @@ use crate::objects::{
     TableStyle, VisualStyle, BookColor, WipeoutVariables, XRecord,
 };
 use crate::tables::*;
-use crate::types::{Color, Handle, Vector3};
+use crate::types::{Color, DxfVersion, Handle, Vector3};
 use crate::xdata::{ExtendedData, XDataValue};
 
 use super::stream_writer::{DxfStreamWriter, DxfStreamWriterExt};
@@ -35,6 +35,10 @@ pub struct SectionWriter<'a, W: DxfStreamWriter> {
     writer: &'a mut W,
     next_handle: u64,
     handle_seed: u64,
+    /// DXF version (determines SAT vs SAB format for ACIS data)
+    dxf_version: DxfVersion,
+    /// Collected SAB entries: (entity_handle, sab_binary_data) for ACDSDATA section
+    sab_entries: Vec<(Handle, Vec<u8>)>,
 }
 
 impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
@@ -44,7 +48,19 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             writer,
             next_handle: handle_start,
             handle_seed,
+            dxf_version: DxfVersion::AC1024,
+            sab_entries: Vec::new(),
         }
+    }
+
+    /// Set the target DXF version
+    pub fn set_version(&mut self, version: DxfVersion) {
+        self.dxf_version = version;
+    }
+
+    /// Returns true if the target version requires SAB binary format (AC1027+)
+    fn needs_sab(&self) -> bool {
+        self.dxf_version >= DxfVersion::AC1027
     }
 
     fn allocate_handle(&mut self) -> Handle {
@@ -1942,11 +1958,26 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     pub fn write_objects(&mut self, document: &CadDocument) -> Result<()> {
         self.writer.write_section_start("OBJECTS")?;
 
+        // Collect handles of Unknown objects — these won't be written, so
+        // dictionary entries referencing them must be filtered out to avoid
+        // dangling pointers that cause "not that kind of class" errors.
+        let unknown_handles: std::collections::HashSet<Handle> = document
+            .objects
+            .iter()
+            .filter_map(|(h, obj)| {
+                if matches!(obj, ObjectType::Unknown { .. }) {
+                    Some(*h)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
         // DXF spec requires the root named object dictionary to be the
         // very first object in the OBJECTS section.
         let root_handle = document.header.named_objects_dict_handle;
         if let Some(ObjectType::Dictionary(root_dict)) = document.objects.get(&root_handle) {
-            self.write_dictionary(root_dict)?;
+            self.write_dictionary(root_dict, &unknown_handles)?;
         }
 
         // Write remaining objects (skip the root dictionary already written)
@@ -1956,7 +1987,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             }
             let object = object;
             match object {
-                ObjectType::Dictionary(dict) => self.write_dictionary(dict)?,
+                ObjectType::Dictionary(dict) => self.write_dictionary(dict, &unknown_handles)?,
                 ObjectType::Layout(layout) => self.write_layout(layout)?,
                 ObjectType::XRecord(xrecord) => self.write_xrecord(xrecord)?,
                 ObjectType::Group(group) => self.write_group(group)?,
@@ -1976,7 +2007,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 ObjectType::RasterVariables(obj) => self.write_raster_variables(obj)?,
                 ObjectType::BookColor(obj) => self.write_bookcolor(obj)?,
                 ObjectType::PlaceHolder(obj) => self.write_stub_handle_only("ACDBPLACEHOLDER", obj.handle, obj.owner)?,
-                ObjectType::DictionaryWithDefault(obj) => self.write_dict_with_default(obj)?,
+                ObjectType::DictionaryWithDefault(obj) => self.write_dict_with_default(obj, &unknown_handles)?,
                 ObjectType::WipeoutVariables(obj) => self.write_wipeout_variables(obj)?,
                 ObjectType::Unknown { .. } => {}
             }
@@ -1986,7 +2017,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         Ok(())
     }
 
-    fn write_dictionary(&mut self, dict: &Dictionary) -> Result<()> {
+    fn write_dictionary(&mut self, dict: &Dictionary, unknown_handles: &std::collections::HashSet<Handle>) -> Result<()> {
         self.writer.write_string(0, "DICTIONARY")?;
         self.writer.write_handle(5, dict.handle)?;
         self.writer.write_handle(330, dict.owner)?;
@@ -1996,6 +2027,11 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_byte(281, dict.duplicate_cloning as u8)?;
 
         for (key, handle) in &dict.entries {
+            // Skip entries that reference Unknown objects (which aren't written)
+            // to avoid dangling handle references.
+            if unknown_handles.contains(handle) {
+                continue;
+            }
             self.writer.write_string(3, key)?;
             self.writer.write_handle(350, *handle)?;
         }
@@ -2630,13 +2666,17 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     }
 
     /// Write an ACDBDICTIONARYWDFLT object
-    fn write_dict_with_default(&mut self, obj: &DictionaryWithDefault) -> Result<()> {
+    fn write_dict_with_default(&mut self, obj: &DictionaryWithDefault, unknown_handles: &std::collections::HashSet<Handle>) -> Result<()> {
         self.writer.write_string(0, "ACDBDICTIONARYWDFLT")?;
         self.writer.write_handle(5, obj.handle)?;
         self.writer.write_handle(330, obj.owner)?;
         self.writer.write_subclass("AcDbDictionary")?;
         self.writer.write_i16(281, obj.duplicate_cloning)?;
         for (key, handle) in &obj.entries {
+            // Skip entries that reference Unknown objects
+            if unknown_handles.contains(handle) {
+                continue;
+            }
             self.writer.write_string(3, key)?;
             self.writer.write_handle(350, *handle)?;
         }
@@ -3115,11 +3155,19 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.write_common_entity_data(&solid.common, owner)?;
         self.writer.write_subclass("AcDbModelerGeometry")?;
 
-        // Version
-        self.writer.write_i16(70, solid.acis_data.version as i16)?;
+        if self.needs_sab() {
+            // AC1027+: SAB binary format stored in ACDSDATA section
+            self.writer.write_bool(290, false)?;
+            self.writer
+                .write_string(2, "{00000000-0000-0000-0000-000000000000}")?;
 
-        // Write ACIS data
-        self.write_acis_data(&solid.acis_data)?;
+            // Convert SAT to SAB and queue for ACDSDATA section
+            self.queue_sab_data(&solid.acis_data, solid.common.handle);
+        } else {
+            // Pre-AC1027: SAT cipher text inline
+            self.writer.write_i16(70, solid.acis_data.version as i16)?;
+            self.write_acis_data(&solid.acis_data)?;
+        }
 
         self.writer.write_subclass("AcDb3dSolid")?;
 
@@ -3136,11 +3184,16 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.write_common_entity_data(&region.common, owner)?;
         self.writer.write_subclass("AcDbModelerGeometry")?;
 
-        // Version
-        self.writer.write_i16(70, region.acis_data.version as i16)?;
-
-        // Write ACIS data
-        self.write_acis_data(&region.acis_data)?;
+        if self.needs_sab() {
+            self.writer.write_bool(290, false)?;
+            self.writer
+                .write_string(2, "{00000000-0000-0000-0000-000000000000}")?;
+            self.queue_sab_data(&region.acis_data, region.common.handle);
+        } else {
+            self.writer
+                .write_i16(70, region.acis_data.version as i16)?;
+            self.write_acis_data(&region.acis_data)?;
+        }
 
         Ok(())
     }
@@ -3151,11 +3204,15 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.write_common_entity_data(&body.common, owner)?;
         self.writer.write_subclass("AcDbModelerGeometry")?;
 
-        // Version
-        self.writer.write_i16(70, body.acis_data.version as i16)?;
-
-        // Write ACIS data
-        self.write_acis_data(&body.acis_data)?;
+        if self.needs_sab() {
+            self.writer.write_bool(290, false)?;
+            self.writer
+                .write_string(2, "{00000000-0000-0000-0000-000000000000}")?;
+            self.queue_sab_data(&body.acis_data, body.common.handle);
+        } else {
+            self.writer.write_i16(70, body.acis_data.version as i16)?;
+            self.write_acis_data(&body.acis_data)?;
+        }
 
         Ok(())
     }
@@ -3701,6 +3758,201 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_handle(5, seqend_handle)?;
         self.writer.write_handle(330, mesh_handle)?;
         self.writer.write_string(8, &mesh.common.layer)?;
+
+        Ok(())
+    }
+
+    /// Convert ACIS data to SAB binary and queue for ACDSDATA section.
+    fn queue_sab_data(&mut self, acis: &AcisData, entity_handle: Handle) {
+        if acis.is_binary && !acis.sab_data.is_empty() {
+            // Already have SAB binary data, use it directly
+            self.sab_entries
+                .push((entity_handle, acis.sab_data.clone()));
+        } else if !acis.sat_data.is_empty() {
+            // Convert SAT text to SAB binary via SatDocument.
+            // Strip non-geometry entities (attributes, refinement, etc.)
+            // which cause ACIS "NOT THAT KIND OF CLASS" errors in SAB.
+            if let Ok(mut sat_doc) =
+                crate::entities::acis::SatDocument::parse(&acis.sat_data)
+            {
+                sat_doc.strip_for_sab();
+                let sab = crate::entities::acis::SabWriter::write(&sat_doc);
+                self.sab_entries.push((entity_handle, sab));
+            }
+        }
+    }
+
+    /// Write the ACDSDATA section (AC1027+ only, for SAB binary ACIS data).
+    ///
+    /// This section stores ACIS SAB binary data for 3DSOLID, REGION, and BODY
+    /// entities when the DXF version is AC1027 (R2013) or later.
+    pub fn write_acdsdata(&mut self) -> Result<()> {
+        if self.sab_entries.is_empty() {
+            return Ok(());
+        }
+
+        self.writer.write_section_start("ACDSDATA")?;
+
+        // Section-level header
+        self.writer.write_i16(70, 2)?;
+        self.writer.write_i16(71, 2)?;
+
+        // Schema 0: AcDb_Thumbnail_Schema (standard boilerplate)
+        self.write_acds_thumbnail_schema()?;
+
+        // Schema 1: AcDb3DSolid_ASM_Data (for SAB data)
+        self.write_acds_asm_schema()?;
+
+        // Schemas 2-5: Standard infrastructure schemas
+        self.write_acds_infrastructure_schemas()?;
+
+        // ACDSRECORD entries (one per entity with SAB data)
+        // Take entries from self to avoid borrow issues
+        let entries = std::mem::take(&mut self.sab_entries);
+        for (entity_handle, sab_data) in &entries {
+            self.write_acds_record(*entity_handle, sab_data)?;
+        }
+        self.sab_entries = entries;
+
+        self.writer.write_section_end()?;
+        Ok(())
+    }
+
+    fn write_acds_thumbnail_schema(&mut self) -> Result<()> {
+        self.writer.write_string(0, "ACDSSCHEMA")?;
+        self.writer.write_i32(90, 0)?;
+        self.writer.write_string(1, "AcDb_Thumbnail_Schema")?;
+        self.writer.write_string(2, "AcDbDs::ID")?;
+        self.writer.write_byte(280, 10)?;
+        self.writer.write_i32(91, 8)?;
+        self.writer.write_string(2, "Thumbnail_Data")?;
+        self.writer.write_byte(280, 15)?;
+        self.writer.write_i32(91, 0)?;
+
+        // Schema records
+        self.write_acds_schema_records(0)?;
+        Ok(())
+    }
+
+    fn write_acds_asm_schema(&mut self) -> Result<()> {
+        self.writer.write_string(0, "ACDSSCHEMA")?;
+        self.writer.write_i32(90, 1)?;
+        self.writer.write_string(1, "AcDb3DSolid_ASM_Data")?;
+        self.writer.write_string(2, "AcDbDs::ID")?;
+        self.writer.write_byte(280, 10)?;
+        self.writer.write_i32(91, 8)?;
+        self.writer.write_string(2, "ASM_Data")?;
+        self.writer.write_byte(280, 15)?;
+        self.writer.write_i32(91, 0)?;
+
+        // Schema records
+        self.write_acds_schema_records(1)?;
+        Ok(())
+    }
+
+    fn write_acds_schema_records(&mut self, schema_id: i32) -> Result<()> {
+        // TreatedAsObjectData record
+        self.writer.write_string(101, "ACDSRECORD")?;
+        self.writer.write_i32(95, schema_id)?;
+        self.writer.write_i32(90, 2)?;
+        self.writer.write_string(2, "AcDbDs::TreatedAsObjectData")?;
+        self.writer.write_byte(280, 1)?;
+        self.writer.write_bool(291, true)?;
+
+        // Legacy record
+        self.writer.write_string(101, "ACDSRECORD")?;
+        self.writer.write_i32(95, schema_id)?;
+        self.writer.write_i32(90, 3)?;
+        self.writer.write_string(2, "AcDbDs::Legacy")?;
+        self.writer.write_byte(280, 1)?;
+        self.writer.write_bool(291, true)?;
+
+        // Indexable record
+        self.writer.write_string(101, "ACDSRECORD")?;
+        self.writer.write_string(1, "AcDbDs::ID")?;
+        self.writer.write_i32(90, 4)?;
+        self.writer.write_string(2, "AcDs:Indexable")?;
+        self.writer.write_byte(280, 1)?;
+        self.writer.write_bool(291, true)?;
+
+        // HandleAttribute record
+        self.writer.write_string(101, "ACDSRECORD")?;
+        self.writer.write_string(1, "AcDbDs::ID")?;
+        self.writer.write_i32(90, 5)?;
+        self.writer.write_string(2, "AcDbDs::HandleAttribute")?;
+        self.writer.write_byte(280, 7)?;
+        self.writer.write_i16(282, 1)?;
+
+        Ok(())
+    }
+
+    fn write_acds_infrastructure_schemas(&mut self) -> Result<()> {
+        // Schema 2: TreatedAsObjectDataSchema
+        self.writer.write_string(0, "ACDSSCHEMA")?;
+        self.writer.write_i32(90, 2)?;
+        self.writer
+            .write_string(1, "AcDbDs::TreatedAsObjectDataSchema")?;
+        self.writer
+            .write_string(2, "AcDbDs::TreatedAsObjectData")?;
+        self.writer.write_byte(280, 1)?;
+        self.writer.write_i32(91, 0)?;
+
+        // Schema 3: LegacySchema
+        self.writer.write_string(0, "ACDSSCHEMA")?;
+        self.writer.write_i32(90, 3)?;
+        self.writer.write_string(1, "AcDbDs::LegacySchema")?;
+        self.writer.write_string(2, "AcDbDs::Legacy")?;
+        self.writer.write_byte(280, 1)?;
+        self.writer.write_i32(91, 0)?;
+
+        // Schema 4: IndexedPropertySchema
+        self.writer.write_string(0, "ACDSSCHEMA")?;
+        self.writer.write_i32(90, 4)?;
+        self.writer
+            .write_string(1, "AcDbDs::IndexedPropertySchema")?;
+        self.writer.write_string(2, "AcDs:Indexable")?;
+        self.writer.write_byte(280, 1)?;
+        self.writer.write_i32(91, 0)?;
+
+        // Schema 5: HandleAttributeSchema
+        self.writer.write_string(0, "ACDSSCHEMA")?;
+        self.writer.write_i32(90, 5)?;
+        self.writer
+            .write_string(1, "AcDbDs::HandleAttributeSchema")?;
+        self.writer.write_string(2, "AcDbDs::HandleAttribute")?;
+        self.writer.write_byte(280, 7)?;
+        self.writer.write_i32(91, 1)?;
+        self.writer.write_i16(284, 1)?;
+
+        Ok(())
+    }
+
+    fn write_acds_record(
+        &mut self,
+        entity_handle: Handle,
+        sab_data: &[u8],
+    ) -> Result<()> {
+        self.writer.write_string(0, "ACDSRECORD")?;
+
+        // Schema reference (1 = AcDb3DSolid_ASM_Data)
+        self.writer.write_i32(90, 1)?;
+
+        // Entity handle reference
+        self.writer.write_string(2, "AcDbDs::ID")?;
+        self.writer.write_byte(280, 10)?;
+        self.writer.write_handle(320, entity_handle)?;
+
+        // ASM_Data field with SAB binary
+        self.writer.write_string(2, "ASM_Data")?;
+        self.writer.write_byte(280, 15)?;
+
+        // Total byte count
+        self.writer.write_i32(94, sab_data.len() as i32)?;
+
+        // Write SAB data in 127-byte chunks as gc=310
+        for chunk in sab_data.chunks(127) {
+            self.writer.write_binary(310, chunk)?;
+        }
 
         Ok(())
     }

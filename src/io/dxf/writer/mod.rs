@@ -80,6 +80,7 @@ impl DxfWriter {
         let extra_handles = count_extra_handles(&self.document);
         let handle_seed = handle_start + extra_handles;
         let mut section_writer = SectionWriter::new(writer, handle_start, handle_seed);
+        section_writer.set_version(self.document.version);
 
         // Write all sections
         section_writer.write_header(&self.document)?;
@@ -88,6 +89,7 @@ impl DxfWriter {
         section_writer.write_blocks(&self.document)?;
         section_writer.write_entities(&self.document)?;
         section_writer.write_objects(&self.document)?;
+        section_writer.write_acdsdata()?;
 
         // Write EOF
         writer.write_string(0, "EOF")?;

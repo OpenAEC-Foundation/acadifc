@@ -1365,6 +1365,113 @@ impl SatDocument {
 
         errors
     }
+
+    /// Strip non-geometry entities for SAB binary encoding.
+    ///
+    /// AutoCAD/IntelliCAD's ACIS SAB format only includes core geometric
+    /// entities. Custom attribute entities (like `eye_refinement`,
+    /// `vertex_template`, `*-attrib`) cause "NOT THAT KIND OF CLASS"
+    /// errors in the ACIS kernel when encountered in SAB binary data.
+    ///
+    /// This method removes all non-core entities and remaps pointer
+    /// references in the remaining records.
+    pub fn strip_for_sab(&mut self) {
+        // Determine which records to keep.
+        // Core ACIS base types (last segment after hyphen split):
+        let keep: Vec<bool> = self
+            .records
+            .iter()
+            .map(|r| Self::is_core_geometry_type(&r.entity_type))
+            .collect();
+
+        let kept_count = keep.iter().filter(|&&k| k).count();
+        if kept_count == self.records.len() {
+            return; // nothing to strip
+        }
+
+        // Build old-index → new-index mapping.
+        // Removed records map to -1 (null pointer).
+        let mut index_map = vec![-1i32; self.records.len()];
+        let mut new_idx: i32 = 0;
+        for (old_idx, &kept) in keep.iter().enumerate() {
+            if kept {
+                index_map[old_idx] = new_idx;
+                new_idx += 1;
+            }
+        }
+
+        // Remap a single pointer value
+        let remap = |p: i32| -> i32 {
+            if p < 0 || (p as usize) >= index_map.len() {
+                -1
+            } else {
+                index_map[p as usize]
+            }
+        };
+
+        // Filter and remap records
+        let mut new_records = Vec::with_capacity(kept_count);
+        let old_records = std::mem::take(&mut self.records);
+        for (old_idx, record) in old_records.into_iter().enumerate() {
+            if !keep[old_idx] {
+                continue;
+            }
+            let mut rec = record;
+            rec.index = index_map[old_idx];
+
+            // Remap attribute pointer — always null since all attribs are stripped
+            rec.attribute = SatPointer::new(remap(rec.attribute.0));
+
+            // Remap all pointer tokens
+            for token in &mut rec.tokens {
+                if let SatToken::Pointer(p) = token {
+                    p.0 = remap(p.0);
+                }
+            }
+
+            new_records.push(rec);
+        }
+
+        self.records = new_records;
+        self.header.num_records = self.records.len();
+
+        // Normalize spatial_resolution to 1.0 for SAB output.
+        // IntelliCAD/AutoCAD always use 1.0 in native SAB data.
+        // Source files from older ACIS versions may use different values
+        // (e.g. 10.0) which can cause compatibility issues.
+        self.header.spatial_resolution = 1.0;
+    }
+
+    /// Check if an entity type is a core ACIS geometry type that should
+    /// be preserved in SAB output.
+    fn is_core_geometry_type(entity_type: &str) -> bool {
+        // Get the base type (last segment after hyphen split)
+        let base = if let Some(pos) = entity_type.rfind('-') {
+            &entity_type[pos + 1..]
+        } else {
+            entity_type
+        };
+
+        matches!(
+            base,
+            "body"
+                | "lump"
+                | "shell"
+                | "subshell"
+                | "face"
+                | "loop"
+                | "coedge"
+                | "edge"
+                | "vertex"
+                | "wire"
+                | "point"
+                | "curve"
+                | "surface"
+                | "pcurve"
+                | "transform"
+                | "asmheader"
+        )
+    }
 }
 
 impl Default for SatDocument {

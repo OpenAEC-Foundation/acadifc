@@ -172,6 +172,14 @@ impl SatParser {
             return Ok(records);
         }
 
+        // Remove newlines/carriage returns from record data. DXF stores SAT
+        // text in gc=1/3 entries (max 255 chars each), joined with newlines by
+        // the reader. When a long SAT record exceeds a gc entry boundary, a
+        // word can be split across entries (e.g., "reversed" → "rev\nersed").
+        // Since records are '#'-terminated, newlines within record text are
+        // purely DXF line-boundary artifacts and can be safely removed.
+        let remaining = remaining.replace('\n', "").replace('\r', "");
+
         // Split by '#' to get individual records
         let record_texts: Vec<&str> = remaining.split('#').collect();
 
