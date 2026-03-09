@@ -289,6 +289,8 @@ impl SatDocument {
     }
 
     /// Add a cone-surface record and return its index.
+    ///
+    /// For a cylinder, use `cos_half_angle = 1.0` and `sin_half_angle = 0.0`.
     pub fn add_cone_surface(
         &mut self,
         center: [f64; 3],
@@ -312,8 +314,18 @@ impl SatDocument {
             record.tokens.push(SatToken::Float(v));
         }
         record.tokens.push(SatToken::Float(ratio));
-        record.tokens.push(SatToken::Float(cos_half_angle));
+        // Spline/law continuation parameters (always I I for simple surfaces)
+        record.tokens.push(SatToken::Ident("I".to_string()));
+        record.tokens.push(SatToken::Ident("I".to_string()));
+        // Half-angle: ACIS stores sine first, then cosine
         record.tokens.push(SatToken::Float(sin_half_angle));
+        record.tokens.push(SatToken::Float(cos_half_angle));
+        // Radius at reference cross-section = |major_axis|
+        let radius = (major_axis[0] * major_axis[0]
+            + major_axis[1] * major_axis[1]
+            + major_axis[2] * major_axis[2])
+        .sqrt();
+        record.tokens.push(SatToken::Float(radius));
         record.tokens.push(SatToken::Ident("forward_v".to_string()));
         record.tokens.push(SatToken::Ident("I".to_string()));
         record.tokens.push(SatToken::Ident("I".to_string()));

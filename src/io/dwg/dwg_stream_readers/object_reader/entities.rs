@@ -2087,11 +2087,11 @@ pub struct AcisEntityData {
 /// Read modeler-geometry (ACIS) data shared by 3DSOLID, REGION, BODY.
 ///
 /// This reads both `DECODE_3DSOLID` (acis data) and the wireframe +
-/// `acis_empty_bit` from `COMMON_3DSOLID`.  The caller must still read
-/// any version-dependent trailing fields (history_id, etc.).
+/// `acis_empty_bit` + R2007+ trailing fields from `COMMON_3DSOLID`.
+/// The caller must still read the 3DSOLID-specific history_id handle.
 pub fn read_acis_entity(
     reader: &mut DwgMergedReader,
-    _version: DwgVersion,
+    version: DwgVersion,
 ) -> AcisEntityData {
     let acis_empty = reader.read_bit();
 
@@ -2186,6 +2186,11 @@ pub fn read_acis_entity(
 
     // acis_empty_bit (COMMON_3DSOLID — always present)
     let _acis_empty_bit = reader.read_bit();
+
+    // R2007+: unknown BL field (COMMON_3DSOLID)
+    if version.r2007_plus() {
+        let _unknown_2007 = reader.read_bit_long();
+    }
 
     AcisEntityData {
         acis_empty,

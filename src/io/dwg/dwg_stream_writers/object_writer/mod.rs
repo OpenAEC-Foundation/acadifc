@@ -58,6 +58,9 @@ pub struct DwgObjectWriter<'a> {
     pub(super) next_alloc_handle: u64,
     /// Computed model space extents for VPort view adjustment and header EXTMIN/EXTMAX
     pub(crate) model_space_extents: Option<BoundingBox3D>,
+    /// SAB data entries collected during entity writing (AC1027+).
+    /// Each entry is (entity_handle, sab_binary_data).
+    pub(super) sab_entries: Vec<(Handle, Vec<u8>)>,
 }
 
 impl<'a> DwgObjectWriter<'a> {
@@ -80,13 +83,19 @@ impl<'a> DwgObjectWriter<'a> {
             next_handle: None,
             next_alloc_handle: document.header.handle_seed,
             model_space_extents: None,
+            sab_entries: Vec::new(),
         })
     }
 
     // ── Main entry point ────────────────────────────────────────────
 
-    /// Write all objects and return `(output_bytes, handle_map, model_space_extents)`.
-    pub fn write(mut self) -> (Vec<u8>, Vec<(u64, u32)>, Option<BoundingBox3D>) {
+    /// Write all objects and return `(output_bytes, handle_map, model_space_extents, sab_entries)`.
+    ///
+    /// For AC1027+, ACIS entities (3DSOLID, REGION, BODY) are written with
+    /// `acis_empty=true` in the entity stream; their SAB binary data is
+    /// collected into `sab_entries` for writing into the `AcDb:AcDsPrototype_1b`
+    /// section.
+    pub fn write(mut self) -> (Vec<u8>, Vec<(u64, u32)>, Option<BoundingBox3D>, Vec<(Handle, Vec<u8>)>) {
         // Compute model space extents for VPort view adjustment
         self.model_space_extents = self.compute_model_space_extents();
 
@@ -159,7 +168,13 @@ impl<'a> DwgObjectWriter<'a> {
         // ── Drain object queue ──────────────────────────────────
         self.write_objects();
 
-        (self.output, self.handle_map, self.model_space_extents)
+        (self.output, self.handle_map, self.model_space_extents, self.sab_entries)
+    }
+
+    /// Whether this version stores ACIS data externally (AcDsPrototype_1b section)
+    /// rather than inline in the entity stream.
+    fn needs_acds_section(&self) -> bool {
+        self.dxf_version >= DxfVersion::AC1027
     }
 
     /// Find the root dictionary handle by scanning document.objects.
@@ -1593,7 +1608,7 @@ mod tests {
     fn object_writer_writes_basic_document() {
         let doc = CadDocument::new();
         let writer = DwgObjectWriter::new(&doc).unwrap();
-        let (output, handle_map, _) = writer.write();
+        let (output, handle_map, _, _) = writer.write();
         // Should have produced some output (at least the 0x0DCA marker)
         assert!(!output.is_empty());
         // Should have recorded some handles (table controls + entries)
@@ -1604,7 +1619,7 @@ mod tests {
     fn object_writer_encodes_dca_marker() {
         let doc = CadDocument::new();
         let writer = DwgObjectWriter::new(&doc).unwrap();
-        let (output, _, _) = writer.write();
+        let (output, _, _, _) = writer.write();
         // First 4 bytes should be 0x0DCA as little-endian i32
         if output.len() >= 4 {
             let marker = i32::from_le_bytes([output[0], output[1], output[2], output[3]]);

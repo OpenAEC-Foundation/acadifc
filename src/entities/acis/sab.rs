@@ -154,7 +154,8 @@ impl SabWriter {
     ///
     /// For geometric entities (surfaces, curves, points), consecutive Float
     /// tokens that represent coordinates are grouped into Position/Direction
-    /// composite tags.
+    /// composite tags. The layout describes the exact sequence of triplets
+    /// and scalars for each entity type.
     fn write_tokens_with_coord_grouping(
         buf: &mut Vec<u8>,
         tokens: &[SatToken],
@@ -162,37 +163,48 @@ impl SabWriter {
         ints_as_doubles: bool,
     ) {
         let mut i = 0;
-        let mut coord_index = 0; // tracks which coordinate triplet we're at
+        let mut step_index = 0; // tracks position in layout.steps
 
         // Skip the first Pointer token (v700 unknown/$-1) to count geometry tokens
         let geom_start = tokens.iter().position(|t| Self::is_numeric(t));
 
         while i < tokens.len() {
-            // Check if this is the start of a coordinate triplet
-            let at_geom_start = geom_start
-                .map(|gs| i >= gs)
-                .unwrap_or(false);
+            // Are we in the geometry section of the token stream?
+            let in_geom = geom_start.map(|gs| i >= gs).unwrap_or(false);
 
-            // Only try to group as coordinates if the layout has remaining triplets
-            if at_geom_start
-                && coord_index < layout.triplet_tags.len()
-                && i + 2 < tokens.len()
-                && Self::is_numeric(&tokens[i])
-                && Self::is_numeric(&tokens[i + 1])
-                && Self::is_numeric(&tokens[i + 2])
-            {
-                let x = Self::numeric_value(&tokens[i]);
-                let y = Self::numeric_value(&tokens[i + 1]);
-                let z = Self::numeric_value(&tokens[i + 2]);
+            if in_geom && step_index < layout.steps.len() {
+                match layout.steps[step_index] {
+                    Some(tag) => {
+                        // This step expects a coordinate triplet (3 floats → Position/Direction)
+                        if i + 2 < tokens.len()
+                            && Self::is_numeric(&tokens[i])
+                            && Self::is_numeric(&tokens[i + 1])
+                            && Self::is_numeric(&tokens[i + 2])
+                        {
+                            let x = Self::numeric_value(&tokens[i]);
+                            let y = Self::numeric_value(&tokens[i + 1]);
+                            let z = Self::numeric_value(&tokens[i + 2]);
 
-                let tag = layout.tag_for_triplet(coord_index);
-                buf.push(tag);
-                buf.extend_from_slice(&x.to_le_bytes());
-                buf.extend_from_slice(&y.to_le_bytes());
-                buf.extend_from_slice(&z.to_le_bytes());
+                            buf.push(tag);
+                            buf.extend_from_slice(&x.to_le_bytes());
+                            buf.extend_from_slice(&y.to_le_bytes());
+                            buf.extend_from_slice(&z.to_le_bytes());
 
-                i += 3;
-                coord_index += 1;
+                            i += 3;
+                            step_index += 1;
+                        } else {
+                            // Not enough numeric tokens for a triplet — write individually
+                            Self::write_token(buf, &tokens[i], ints_as_doubles);
+                            i += 1;
+                        }
+                    }
+                    None => {
+                        // This step expects a scalar double (single float value)
+                        Self::write_token(buf, &tokens[i], ints_as_doubles);
+                        i += 1;
+                        step_index += 1;
+                    }
+                }
             } else {
                 Self::write_token(buf, &tokens[i], ints_as_doubles);
                 i += 1;
@@ -343,31 +355,71 @@ impl SabWriter {
 // Coordinate layout for entity-type-aware SAB encoding
 // ============================================================================
 
-/// Describes which coordinate triplets in a record are positions vs directions.
+/// Describes the layout of coordinate triplets and scalars in a geometry record.
 ///
-/// In SAT text, positions and directions are both written as three floats.
-/// In SAB binary, positions use tag `0x13` and directions use tag `0x14`.
+/// In SAT text, positions and directions are both written as three individual floats.
+/// In SAB binary, positions use tag `0x13` and directions use tag `0x14`, each
+/// encoding three f64 values as a single composite token.
+///
+/// Some entities (like `sphere-surface` and `torus-surface`) have scalar float
+/// values interleaved between coordinate triplets. The layout must describe
+/// the exact sequence to group correctly.
 struct CoordLayout {
-    /// Tag for each coordinate triplet in order: 0x13 (position) or 0x14 (direction).
-    triplet_tags: &'static [u8],
+    /// Sequence of geometry tokens after the initial v700 $-1 pointer.
+    ///
+    /// - `Some(tag)` = group next 3 floats as a composite Position/Direction.
+    /// - `None` = write next float as an individual DOUBLE scalar.
+    steps: &'static [Option<u8>],
 }
 
 impl CoordLayout {
-    const EMPTY: Self = Self { triplet_tags: &[] };
+    const EMPTY: Self = Self { steps: &[] };
 
     /// Position only (e.g., `point`)
     const POS: Self = Self {
-        triplet_tags: &[tags::POSITION],
+        steps: &[Some(tags::POSITION)],
     };
 
     /// Position + direction (e.g., `straight-curve`)
     const POS_DIR: Self = Self {
-        triplet_tags: &[tags::POSITION, tags::DIRECTION],
+        steps: &[Some(tags::POSITION), Some(tags::DIRECTION)],
     };
 
     /// Position + direction + direction (e.g., `plane-surface`)
     const POS_DIR_DIR: Self = Self {
-        triplet_tags: &[tags::POSITION, tags::DIRECTION, tags::DIRECTION],
+        steps: &[Some(tags::POSITION), Some(tags::DIRECTION), Some(tags::DIRECTION)],
+    };
+
+    /// Position + direction + position (e.g., future entity types where
+    /// the 3rd triplet's magnitude carries meaning).
+    #[allow(dead_code)]
+    const POS_DIR_POS: Self = Self {
+        steps: &[Some(tags::POSITION), Some(tags::DIRECTION), Some(tags::POSITION)],
+    };
+
+    /// Position + scalar + direction + direction (e.g., `sphere-surface`)
+    ///
+    /// sphere-surface: center(pos) radius(scalar) u_dir(dir) pole(dir)
+    const POS_S_DIR_DIR: Self = Self {
+        steps: &[
+            Some(tags::POSITION),
+            None, // radius (scalar double)
+            Some(tags::DIRECTION),
+            Some(tags::DIRECTION),
+        ],
+    };
+
+    /// Position + direction + scalar + scalar + direction (e.g., `torus-surface`)
+    ///
+    /// torus-surface: center(pos) normal(dir) major_r(scalar) minor_r(scalar) u_dir(dir)
+    const POS_DIR_SS_DIR: Self = Self {
+        steps: &[
+            Some(tags::POSITION),
+            Some(tags::DIRECTION),
+            None, // major_radius (scalar)
+            None, // minor_radius (scalar)
+            Some(tags::DIRECTION),
+        ],
     };
 
     /// Determine the coordinate layout for a given entity type.
@@ -375,21 +427,13 @@ impl CoordLayout {
         match entity_type {
             "point" => Self::POS,
             "straight-curve" => Self::POS_DIR,
-            "plane-surface" | "cone-surface" | "torus-surface" => Self::POS_DIR_DIR,
-            "sphere-surface" => Self::POS_DIR,
-            "ellipse-curve" | "intcurve-curve" => Self::POS_DIR_DIR,
-            "spline-surface" => Self::POS_DIR_DIR,
+            "plane-surface" => Self::POS_DIR_DIR,
+            "cone-surface" => Self::POS_DIR_DIR,
+            "sphere-surface" => Self::POS_S_DIR_DIR,
+            "torus-surface" => Self::POS_DIR_SS_DIR,
+            "ellipse-curve" => Self::POS_DIR_DIR,
+            "intcurve-curve" | "spline-surface" => Self::POS_DIR_DIR,
             _ => Self::EMPTY,
-        }
-    }
-
-    /// Get the tag for the nth coordinate triplet (0-indexed).
-    fn tag_for_triplet(&self, index: usize) -> u8 {
-        if index < self.triplet_tags.len() {
-            self.triplet_tags[index]
-        } else {
-            // Default to position for unrecognized extra triplets
-            tags::POSITION
         }
     }
 }

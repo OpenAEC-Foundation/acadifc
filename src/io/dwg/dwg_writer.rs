@@ -25,7 +25,7 @@ use std::path::Path;
 
 use crate::document::{CadDocument, HeaderVariables};
 use crate::error::{DxfError, Result};
-use crate::types::DxfVersion;
+use crate::types::{DxfVersion, Handle};
 
 use super::dwg_stream_writers::{
     app_info_writer, aux_header_writer, classes_writer, handle_writer, header_writer,
@@ -313,7 +313,7 @@ fn write_ac15<W: Write + Seek>(
 
     // ── Phase 1: Compute objects FIRST to get handle map ──
     let obj_writer = DwgObjectWriter::new(document)?;
-    let (obj_data, handle_map_u32, extents) = obj_writer.write();
+    let (obj_data, handle_map_u32, extents, _sab_entries) = obj_writer.write();
 
     // ── Phase 2: Prepare header (sync handles + correct HANDSEED) ──
     let corrected_header = prepare_header(document, &handle_map_u32, &extents);
@@ -380,7 +380,7 @@ fn write_ac18<W: Write + Seek>(
 
     // ── Phase 1: Compute objects FIRST to get handle map ──
     let obj_writer = DwgObjectWriter::new(document)?;
-    let (obj_data, handle_map_u32, extents) = obj_writer.write();
+    let (obj_data, handle_map_u32, extents, sab_entries) = obj_writer.write();
 
     // ── Phase 2: Prepare header (sync handles + correct HANDSEED) ──
     let corrected_header = prepare_header(document, &handle_map_u32, &extents);
@@ -426,6 +426,12 @@ fn write_ac18<W: Write + Seek>(
 
     // ── Section: AcDbObjects (pre-computed) ──
     fhw.add_section(output, section_names::ACDB_OBJECTS, &obj_data, true, PAGE_SIZE)?;
+
+    // ── Section: AcDsPrototype_1b (AC1027+ ACIS SAB storage) ──
+    if !sab_entries.is_empty() {
+        let acds_data = build_acds_prototype(&sab_entries);
+        fhw.add_section(output, section_names::ACDS_PROTOTYPE, &acds_data, true, PAGE_SIZE)?;
+    }
 
     // ── Section: ObjFreeSpace ──
     let obj_free_space = build_obj_free_space(version, document, handle_map_u32.len());
@@ -474,7 +480,7 @@ fn write_ac21_impl<W: Write + Seek>(
 
     // ── Phase 1: Compute objects FIRST to get handle map ──
     let obj_writer = DwgObjectWriter::new(document)?;
-    let (obj_data, handle_map_u32, extents) = obj_writer.write();
+    let (obj_data, handle_map_u32, extents, sab_entries) = obj_writer.write();
 
     // ── Phase 2: Prepare header (sync handles + correct HANDSEED) ──
     let corrected_header = prepare_header(document, &handle_map_u32, &extents);
@@ -505,6 +511,12 @@ fn write_ac21_impl<W: Write + Seek>(
 
     // AcDbObjects (pre-computed)
     fhw.add_section(output, section_names::ACDB_OBJECTS, &obj_data)?;
+
+    // AcDsPrototype_1b (AC1027+ ACIS SAB storage)
+    if !sab_entries.is_empty() {
+        let acds_data = build_acds_prototype(&sab_entries);
+        fhw.add_section(output, section_names::ACDS_PROTOTYPE, &acds_data)?;
+    }
 
     // ObjFreeSpace
     let obj_free_space = build_obj_free_space(version, document, handle_map_u32.len());
@@ -674,6 +686,460 @@ fn build_rev_history() -> Vec<u8> {
     data.extend_from_slice(&0u32.to_le_bytes());
     data
 }
+
+/// Build AcDsPrototype_1b section data (AC1027+ only).
+///
+/// This section stores SAB binary ACIS data for 3DSOLID, REGION, and BODY
+/// entities in R2013+ DWG files.  The entity stream writes `acis_empty=true`
+/// and the actual SAB data lives here, linked by entity handle.
+///
+/// ## Binary format (reverse-engineered from IntelliCAD-saved reference files)
+///
+/// The section consists of a 128-byte "jard" header followed by 7 segments:
+///
+/// | Segment   | ID | Description                                   |
+/// |-----------|----|-----------------------------------------------|
+/// | `_data_`  | 2  | SAB binary data records (one per entity)      |
+/// | `_data_`  | 3  | Thumbnail data table (empty, boilerplate)     |
+/// | `datidx`  | 4  | Data index                                    |
+/// | `schdat`  | 5  | Schema column definitions                     |
+/// | `schidx`  | 6  | Schema index + schema names                   |
+/// | `search`  | 7  | Handle-based search/lookup index              |
+/// | `segidx`  | 1  | Segment index (offsets of all other segments)  |
+///
+/// Each segment has a 48-byte header:
+///   `marker[8] + id[4] + pad[4] + size[8] + records[8] + meta[8] + fill[8]`
+///
+/// Segments are padded with 0x70 bytes to 16-byte alignment.
+fn build_acds_prototype(sab_entries: &[(Handle, Vec<u8>)]) -> Vec<u8> {
+    if sab_entries.is_empty() {
+        return Vec::new();
+    }
+
+    // Use first entry only (extend to multi-entry later if needed).
+    let (entity_handle, sab_data) = &sab_entries[0];
+    let handle_val = entity_handle.value() as u32;
+
+    // ── Segment 1: _data_ id=2 (SAB data records) ─────────────────
+    let data2 = build_acds_data2_segment(handle_val, sab_data);
+
+    // ── Segment 2: _data_ id=3 (thumbnail, empty boilerplate) ─────
+    #[rustfmt::skip]
+    let data3: &[u8] = &[
+        0xAC, 0xD5, 0x5F, 0x64, 0x61, 0x74, 0x61, 0x5F, // marker "_data_"
+        0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // id=3
+        0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // size=64
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // records=1
+        0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, // meta: 0, cols=4
+        0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, // fill "UUUUUUUU"
+        0x62, 0x62, 0x62, 0x62, 0x62, 0x62, 0x62, 0x62, // content "bbbb..."
+        0x62, 0x62, 0x62, 0x62, 0x62, 0x62, 0x62, 0x62,
+    ];
+
+    // ── Segment 3: datidx id=4 ────────────────────────────────────
+    let datidx = build_acds_datidx();
+
+    // ── Segment 4: schdat id=5 (schema definitions, fixed) ────────
+    let schdat = ACDS_SCHDAT_TEMPLATE;
+
+    // ── Segment 5: schidx id=6 (schema index, fixed) ─────────────
+    let schidx = ACDS_SCHIDX_TEMPLATE;
+
+    // ── Segment 6: search id=7 ───────────────────────────────────
+    let search = build_acds_search_segment(handle_val);
+
+    // ── Segment 7: segidx id=1 ───────────────────────────────────
+    // Compute offsets (all relative to section start = after jard header)
+    let off_data2 = 0x80u32;
+    let off_data3 = off_data2 + data2.len() as u32;
+    let off_datidx = off_data3 + data3.len() as u32;
+    let off_schdat = off_datidx + datidx.len() as u32;
+    let off_schidx = off_schdat + schdat.len() as u32;
+    let off_search = off_schidx + schidx.len() as u32;
+    let off_segidx = off_search + search.len() as u32;
+    let segidx_size = 192u32;
+
+    let segidx = build_acds_segidx(
+        off_segidx, segidx_size,
+        off_data2, data2.len() as u32,
+        off_data3, data3.len() as u32,
+        off_datidx, datidx.len() as u32,
+        off_schdat, schdat.len() as u32,
+        off_schidx, schidx.len() as u32,
+        off_search, search.len() as u32,
+    );
+
+    // ── Jard header ──────────────────────────────────────────────
+    let total_size = off_segidx + segidx_size;
+    let segidx_offset = off_segidx; // data_size field = segidx offset
+    let header = build_acds_jard_header(
+        sab_entries.len() as u32,
+        segidx_offset,
+        total_size,
+    );
+
+    // ── Assemble ─────────────────────────────────────────────────
+    let mut result = Vec::with_capacity(total_size as usize);
+    result.extend_from_slice(&header);
+    result.extend_from_slice(&data2);
+    result.extend_from_slice(data3);
+    result.extend_from_slice(&datidx);
+    result.extend_from_slice(schdat);
+    result.extend_from_slice(schidx);
+    result.extend_from_slice(&search);
+    result.extend_from_slice(&segidx);
+
+    debug_assert_eq!(result.len(), total_size as usize);
+    result
+}
+
+/// Build the "jard" header (128 bytes).
+fn build_acds_jard_header(
+    num_records: u32,
+    segidx_offset: u32,
+    total_size: u32,
+) -> Vec<u8> {
+    let mut h = vec![0u8; 128];
+    // Magic
+    h[0..4].copy_from_slice(b"jard");
+    // Header size
+    h[4..8].copy_from_slice(&128u32.to_le_bytes());
+    // Schema version
+    h[8..12].copy_from_slice(&2u32.to_le_bytes());
+    // Num schemas
+    h[12..16].copy_from_slice(&2u32.to_le_bytes());
+    // Unknown
+    h[16..20].copy_from_slice(&0u32.to_le_bytes());
+    // Record count
+    h[20..24].copy_from_slice(&num_records.to_le_bytes());
+    // Segidx offset (u64)
+    h[24..32].copy_from_slice(&(segidx_offset as u64).to_le_bytes());
+    // Segidx entry count (null + 7 segments = 8)
+    h[32..36].copy_from_slice(&8u32.to_le_bytes());
+    // Num segments excluding segidx
+    h[36..40].copy_from_slice(&6u32.to_le_bytes());
+    // Unknown (4)
+    h[40..44].copy_from_slice(&4u32.to_le_bytes());
+    // Num segments total
+    h[44..48].copy_from_slice(&7u32.to_le_bytes());
+    // Unknown (0)
+    h[48..52].copy_from_slice(&0u32.to_le_bytes());
+    // Total size (u64)
+    h[52..60].copy_from_slice(&(total_size as u64).to_le_bytes());
+    // Remaining bytes are zero (padding)
+    h
+}
+
+/// Build `_data_` segment id=2 containing SAB record(s).
+fn build_acds_data2_segment(handle_val: u32, sab_data: &[u8]) -> Vec<u8> {
+    let sab_len = sab_data.len();
+    // Raw size = 48 (segment header) + 36 (record metadata) + sab_len
+    let raw_size = 84 + sab_len;
+    let seg_size = align16(raw_size);
+    let padding = seg_size - raw_size;
+
+    let mut seg = Vec::with_capacity(seg_size);
+
+    // Segment header (48 bytes)
+    seg.extend_from_slice(&[0xAC, 0xD5, 0x5F, 0x64, 0x61, 0x74, 0x61, 0x5F]); // "_data_"
+    seg.extend_from_slice(&2u32.to_le_bytes()); // id=2
+    seg.extend_from_slice(&0u32.to_le_bytes()); // pad
+    seg.extend_from_slice(&(seg_size as u64).to_le_bytes()); // segment size
+    seg.extend_from_slice(&1u64.to_le_bytes()); // record count = 1
+    seg.extend_from_slice(&0u32.to_le_bytes()); // meta field1 = 0
+    seg.extend_from_slice(&5u32.to_le_bytes()); // meta field2 = 5 (num columns)
+    seg.extend_from_slice(&[0x55; 8]); // fill "UUUUUUUU"
+
+    // Record metadata (36 bytes)
+    seg.extend_from_slice(&0x14u32.to_le_bytes()); // col0 = 20
+    seg.extend_from_slice(&1u32.to_le_bytes());     // col1 = record index (1-based)
+    seg.extend_from_slice(&(handle_val as u64).to_le_bytes()); // col2 = entity handle
+    seg.extend_from_slice(&0u32.to_le_bytes());     // col3 = 0
+    seg.extend_from_slice(&[0x62; 12]);              // col4 fill "bbbbbbbbbbbb"
+    seg.extend_from_slice(&(sab_len as u32).to_le_bytes()); // SAB blob size
+
+    // SAB binary data
+    seg.extend_from_slice(sab_data);
+
+    // Padding with 0x70 to 16-byte alignment
+    seg.extend(std::iter::repeat(0x70u8).take(padding));
+
+    debug_assert_eq!(seg.len(), seg_size);
+    seg
+}
+
+/// Build `datidx` segment id=4.
+fn build_acds_datidx() -> Vec<u8> {
+    let mut seg = vec![0x70u8; 128];
+
+    // Segment header
+    seg[0..8].copy_from_slice(&[0xAC, 0xD5, 0x64, 0x61, 0x74, 0x69, 0x64, 0x78]); // "datidx"
+    seg[8..12].copy_from_slice(&4u32.to_le_bytes());    // id=4
+    seg[12..16].copy_from_slice(&0u32.to_le_bytes());   // pad
+    seg[16..24].copy_from_slice(&128u64.to_le_bytes()); // segment size
+    seg[24..32].copy_from_slice(&1u64.to_le_bytes());   // record count
+    seg[32..40].copy_from_slice(&0u64.to_le_bytes());   // meta
+    seg[40..48].copy_from_slice(&[0x55; 8]);             // fill
+
+    // Content: index entries
+    // (row_index=1, schema_id=2, data_count=1)
+    seg[48..52].copy_from_slice(&1u32.to_le_bytes());
+    seg[52..56].copy_from_slice(&0u32.to_le_bytes());
+    seg[56..60].copy_from_slice(&2u32.to_le_bytes());
+    seg[60..64].copy_from_slice(&0u32.to_le_bytes());
+    seg[64..68].copy_from_slice(&1u32.to_le_bytes());
+    // Rest is padding (already 0x70)
+
+    seg
+}
+
+/// Build `search` segment id=7 with entity handle reference.
+fn build_acds_search_segment(handle_val: u32) -> Vec<u8> {
+    let mut seg = vec![0x70u8; 192];
+
+    // Segment header
+    seg[0..8].copy_from_slice(&[0xAC, 0xD5, 0x73, 0x65, 0x61, 0x72, 0x63, 0x68]); // "search"
+    seg[8..12].copy_from_slice(&7u32.to_le_bytes());    // id=7
+    seg[12..16].copy_from_slice(&0u32.to_le_bytes());   // pad
+    seg[16..24].copy_from_slice(&192u64.to_le_bytes()); // segment size
+    seg[24..32].copy_from_slice(&1u64.to_le_bytes());   // record count
+    seg[32..40].copy_from_slice(&0u64.to_le_bytes());   // meta
+    seg[40..48].copy_from_slice(&[0x55; 8]);             // fill
+
+    // Content (matches reference file layout)
+    // Search index entries
+    let content: &[u8] = &[
+        0x02, 0x00, 0x00, 0x00, // num_schemas_with_data = 2
+        0x01, 0x00, 0x00, 0x00, // ?
+        0x01, 0x00, 0x00, 0x00, // ?
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // zeros
+        0x00, 0x00, 0x00, 0x00, // ?
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // ?
+        0x01, 0x00, 0x00, 0x00, // ?
+    ];
+    seg[48..48 + content.len()].copy_from_slice(content);
+
+    // Entity handle at offset 0x54 from segment start (= 48 + 36 = 84)
+    // Actually from the dump: handle "2A" is at segment offset +0x54
+    // = content offset 0x54 - 0x30 = 0x24 from content start (48 + 36 = 84)
+    // Let me recalculate: segment starts at 0x19C0 in reference,
+    // handle 0x2A at 0x1A14 = 0x19C0 + 0x54.
+    // So offset within segment is 0x54 = 84.
+    seg[84..88].copy_from_slice(&handle_val.to_le_bytes());
+    seg[88..92].copy_from_slice(&0u32.to_le_bytes()); // pad
+
+    // Remaining fields after handle
+    let tail: &[u8] = &[
+        0x01, 0x00, 0x00, 0x00, // ?
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // zeros
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // zeros
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // zeros
+        0x00, 0x00, 0x00, 0x00, // zeros
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // ?
+        0x00, 0x00, 0x00, 0x00, // ?
+    ];
+    seg[92..92 + tail.len()].copy_from_slice(tail);
+    // Rest is padding (already 0x70)
+
+    seg
+}
+
+/// Build `segidx` segment id=1 with offsets for all other segments.
+#[allow(clippy::too_many_arguments)]
+fn build_acds_segidx(
+    off_segidx: u32, sz_segidx: u32,
+    off_data2: u32, sz_data2: u32,
+    off_data3: u32, sz_data3: u32,
+    off_datidx: u32, sz_datidx: u32,
+    off_schdat: u32, sz_schdat: u32,
+    off_schidx: u32, sz_schidx: u32,
+    off_search: u32, sz_search: u32,
+) -> Vec<u8> {
+    let mut seg = vec![0x70u8; sz_segidx as usize];
+
+    // Segment header
+    seg[0..8].copy_from_slice(&[0xAC, 0xD5, 0x73, 0x65, 0x67, 0x69, 0x64, 0x78]); // "segidx"
+    seg[8..12].copy_from_slice(&1u32.to_le_bytes());    // id=1
+    seg[12..16].copy_from_slice(&0u32.to_le_bytes());   // pad
+    seg[16..24].copy_from_slice(&(sz_segidx as u64).to_le_bytes()); // segment size
+    seg[24..32].copy_from_slice(&1u64.to_le_bytes());   // record count
+    seg[32..40].copy_from_slice(&0u64.to_le_bytes());   // meta
+    seg[40..48].copy_from_slice(&[0x55; 8]);             // fill
+
+    // Content: 8 entries × 12 bytes = 96 bytes
+    // Entry format: (u32 offset, u32 pad=0, u32 size)
+    let mut pos = 48;
+
+    // Entry 0: null
+    write_segidx_entry(&mut seg, pos, 0, 0); pos += 12;
+    // Entry 1: segidx
+    write_segidx_entry(&mut seg, pos, off_segidx, sz_segidx); pos += 12;
+    // Entry 2: _data_ id=2
+    write_segidx_entry(&mut seg, pos, off_data2, sz_data2); pos += 12;
+    // Entry 3: _data_ id=3
+    write_segidx_entry(&mut seg, pos, off_data3, sz_data3); pos += 12;
+    // Entry 4: datidx
+    write_segidx_entry(&mut seg, pos, off_datidx, sz_datidx); pos += 12;
+    // Entry 5: schdat
+    write_segidx_entry(&mut seg, pos, off_schdat, sz_schdat); pos += 12;
+    // Entry 6: schidx
+    write_segidx_entry(&mut seg, pos, off_schidx, sz_schidx); pos += 12;
+    // Entry 7: search
+    write_segidx_entry(&mut seg, pos, off_search, sz_search);
+    // Rest is padding (already 0x70)
+
+    seg
+}
+
+/// Write one segidx entry: (offset u32, pad u32, size u32).
+fn write_segidx_entry(buf: &mut [u8], pos: usize, offset: u32, size: u32) {
+    buf[pos..pos + 4].copy_from_slice(&offset.to_le_bytes());
+    buf[pos + 4..pos + 8].copy_from_slice(&0u32.to_le_bytes());
+    buf[pos + 8..pos + 12].copy_from_slice(&size.to_le_bytes());
+}
+
+/// Round up to next 16-byte boundary.
+fn align16(n: usize) -> usize {
+    (n + 15) & !15
+}
+
+/// Schema data template (448 bytes) — fixed content defining column
+/// types and names for AcDb_Thumbnail_Schema and AcDb3DSolid_ASM_Data.
+#[rustfmt::skip]
+const ACDS_SCHDAT_TEMPLATE: &[u8] = &[
+    // Segment header
+    0xAC, 0xD5, 0x73, 0x63, 0x68, 0x64, 0x61, 0x74, // "schdat"
+    0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // id=5
+    0xC0, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // size=448
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // records=1
+    0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // meta: field_count=20
+    0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, // fill
+    // Column type definitions (8 bytes each: type u32, flags u32)
+    0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    // Schema field descriptors
+    0x02, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x00, 0x00,
+    0x02, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
+    0x00, 0x00, 0x0F, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x00, 0x00,
+    0x02, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00,
+    0x00, 0x00, 0x0F, 0x00, 0x00, 0x00, 0x00, 0x00,
+    // Schema records (sub-structures)
+    0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x01, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x08, 0x00, 0x00, 0x00, 0x06, 0x00,
+    0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x01, 0x00,
+    0x00, 0x00, 0x01, 0x00, 0x00,
+    // NUL-terminated schema field name strings
+    0x73, 0x73, 0x73, // "sss" (separator/padding?)
+    0x07, 0x00, 0x00, 0x00,
+    // "AcDbDs::ID"
+    0x41, 0x63, 0x44, 0x62, 0x44, 0x73, 0x3A, 0x3A, 0x49, 0x44, 0x00,
+    // "Thumbnail_Data"
+    0x54, 0x68, 0x75, 0x6D, 0x62, 0x6E, 0x61, 0x69, 0x6C, 0x5F, 0x44, 0x61, 0x74, 0x61, 0x00,
+    // "ASM_Data"
+    0x41, 0x53, 0x4D, 0x5F, 0x44, 0x61, 0x74, 0x61, 0x00,
+    // "AcDbDs::TreatedAsObjectData"
+    0x41, 0x63, 0x44, 0x62, 0x44, 0x73, 0x3A, 0x3A,
+    0x54, 0x72, 0x65, 0x61, 0x74, 0x65, 0x64, 0x41, 0x73, 0x4F, 0x62, 0x6A, 0x65, 0x63, 0x74, 0x44,
+    0x61, 0x74, 0x61, 0x00,
+    // "AcDbDs::Legacy"
+    0x41, 0x63, 0x44, 0x62, 0x44, 0x73, 0x3A, 0x3A, 0x4C, 0x65, 0x67, 0x61, 0x63, 0x79, 0x00,
+    // "AcDs:Indexable"
+    0x41, 0x63, 0x44, 0x73, 0x3A, 0x49, 0x6E, 0x64, 0x65, 0x78, 0x61, 0x62, 0x6C, 0x65, 0x00,
+    // "AcDbDs::HandleAttribute"
+    0x41, 0x63, 0x44, 0x62, 0x44, 0x73, 0x3A, 0x3A, 0x48, 0x61, 0x6E, 0x64, 0x6C, 0x65, 0x41,
+    0x74, 0x74, 0x72, 0x69, 0x62, 0x75, 0x74, 0x65, 0x00,
+    // Padding to 448 bytes
+    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
+];
+
+/// Schema index template (448 bytes) — fixed content listing schema
+/// names and column offset tables.
+#[rustfmt::skip]
+const ACDS_SCHIDX_TEMPLATE: &[u8] = &[
+    // Segment header
+    0xAC, 0xD5, 0x73, 0x63, 0x68, 0x69, 0x64, 0x78, // "schidx"
+    0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // id=6
+    0xC0, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // size=448
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // records=1
+    0x0F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // meta: 15
+    0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, // fill
+    // Schema index content
+    0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
+    0x40, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x05, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00,
+    0x02, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
+    0xC0, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+    0x05, 0x00, 0x00, 0x00, 0xD2, 0x00, 0x00, 0x00,
+    0x04, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
+    0xE4, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
+    0x05, 0x00, 0x00, 0x00, 0xF6, 0x00, 0x00, 0x00,
+    0x0C, 0xF1, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x02, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
+    0x08, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+    0x05, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00,
+    0x04, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
+    0x18, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
+    0x05, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00,
+    0x02, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
+    0x28, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+    0x05, 0x00, 0x00, 0x00, 0x30, 0x00, 0x00, 0x00,
+    0x04, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
+    0x38, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
+    // Schema names (NUL-terminated strings)
+    0x06, 0x00, 0x00, 0x00,
+    // "AcDb_Thumbnail_Schema"
+    0x41, 0x63, 0x44, 0x62, 0x5F, 0x54, 0x68, 0x75, 0x6D, 0x62, 0x6E, 0x61,
+    0x69, 0x6C, 0x5F, 0x53, 0x63, 0x68, 0x65, 0x6D, 0x61, 0x00,
+    // "AcDb3DSolid_ASM_Data"
+    0x41, 0x63, 0x44, 0x62, 0x33, 0x44,
+    0x53, 0x6F, 0x6C, 0x69, 0x64, 0x5F, 0x41, 0x53, 0x4D, 0x5F, 0x44, 0x61, 0x74, 0x61, 0x00,
+    // "AcDbDs::TreatedAsObjectDataSchema"
+    0x41,
+    0x63, 0x44, 0x62, 0x44, 0x73, 0x3A, 0x3A, 0x54, 0x72, 0x65, 0x61, 0x74, 0x65, 0x64, 0x41, 0x73,
+    0x4F, 0x62, 0x6A, 0x65, 0x63, 0x74, 0x44, 0x61, 0x74, 0x61, 0x53, 0x63, 0x68, 0x65, 0x6D, 0x61,
+    0x00,
+    // "AcDbDs::LegacySchema"
+    0x41, 0x63, 0x44, 0x62, 0x44, 0x73, 0x3A, 0x3A, 0x4C, 0x65, 0x67, 0x61, 0x63, 0x79,
+    0x53, 0x63, 0x68, 0x65, 0x6D, 0x61, 0x00,
+    // "AcDbDs::IndexedPropertySchema"
+    0x41, 0x63, 0x44, 0x62, 0x44, 0x73, 0x3A, 0x3A, 0x49, 0x6E,
+    0x64, 0x65, 0x78, 0x65, 0x64, 0x50, 0x72, 0x6F, 0x70, 0x65, 0x72, 0x74, 0x79, 0x53, 0x63, 0x68,
+    0x65, 0x6D, 0x61, 0x00,
+    // "AcDbDs::HandleAttributeSchema"
+    0x41, 0x63, 0x44, 0x62, 0x44, 0x73, 0x3A, 0x3A, 0x48, 0x61, 0x6E, 0x64,
+    0x6C, 0x65, 0x41, 0x74, 0x74, 0x72, 0x69, 0x62, 0x75, 0x74, 0x65, 0x53, 0x63, 0x68, 0x65, 0x6D,
+    0x61, 0x00,
+    // Padding
+    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
+    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
+    0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
+];
 
 // ════════════════════════════════════════════════════════════════════════════
 //  Tests

@@ -10,6 +10,7 @@
 /// to identify section locator records (AC15).
 pub mod names {
     pub const ACDB_OBJECTS: &str = "AcDb:AcDbObjects";
+    pub const ACDS_PROTOTYPE: &str = "AcDb:AcDsPrototype_1b";
     pub const APP_INFO: &str = "AcDb:AppInfo";
     pub const AUX_HEADER: &str = "AcDb:AuxHeader";
     pub const HEADER: &str = "AcDb:Header";

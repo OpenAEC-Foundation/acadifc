@@ -1406,10 +1406,9 @@ impl DwgDocumentBuilder {
                     e.wires = data.wires;
                     e.silhouettes = data.silhouettes;
 
-                    // history handle — only for ACIS version > 1 (SAB)
-                    // per LibreDWG spec.  acis_empty_bit is now read
-                    // inside read_acis_entity.
-                    if data.version > 1 {
+                    // 3DSOLID R2007+: history_id handle
+                    // (always present since R2007, regardless of ACIS version)
+                    if self.obj_reader.version().r2007_plus() {
                         let h = reader.read_handle();
                         if h != 0 {
                             e.history_handle = Some(Handle::new(h));

@@ -2758,23 +2758,30 @@ impl<'a> DwgObjectWriter<'a> {
 
     fn write_solid3d(&mut self, e: &Solid3D) {
         self.entity_preamble(common::OBJ_3DSOLID, &e.common);
-        self.write_acis_data(&e.acis_data, &e.wires, &e.silhouettes);
+
+        let acds = self.needs_acds_section();
+        if acds {
+            // AC1027+: ACIS data is stored in the AcDsPrototype_1b section.
+            // Entity stream writes acis_empty=true with no inline data.
+            self.write_acis_empty();
+            self.queue_sab_entry(&e.acis_data, e.common.handle);
+        } else {
+            self.write_acis_data(&e.acis_data, &e.wires, &e.silhouettes);
+        }
 
         // acis_empty_bit — second copy of the "empty" flag.
-        // Per LibreDWG this is always present in COMMON_3DSOLID.
-        self.writer.write_bit(false);
+        // Must match the acis_empty bit written above.
+        self.writer.write_bit(acds);
 
-        // history handle — only present when ACIS version > 1 (SAB) per
-        // LibreDWG spec.  For SAT (version 1) it is absent.
-        let acis_ver: i16 = match e.acis_data.version {
-            AcisVersion::Version1 => 1,
-            AcisVersion::Version2 => 2,
-        };
-        if acis_ver > 1 {
-            self.writer.write_handle(
-                DwgReferenceType::HardPointer,
-                e.history_handle.map(|h| h.value()).unwrap_or(0),
-            );
+        // R2007+: unknown BL field (COMMON_3DSOLID)
+        if self.version.r2007_plus() {
+            self.writer.write_bit_long(0);
+        }
+
+        // 3DSOLID R2007+: history_id handle
+        if self.version.r2007_plus() {
+            let h = e.history_handle.map(|h| h.value()).unwrap_or(0);
+            self.writer.write_handle(DwgReferenceType::SoftPointer, h);
         }
 
         self.register_object(e.common.handle);
@@ -2782,18 +2789,76 @@ impl<'a> DwgObjectWriter<'a> {
 
     fn write_region(&mut self, e: &Region) {
         self.entity_preamble(common::OBJ_REGION, &e.common);
-        self.write_acis_data(&e.acis_data, &e.wires, &e.silhouettes);
-        // acis_empty_bit (COMMON_3DSOLID — always present)
-        self.writer.write_bit(false);
+
+        let acds = self.needs_acds_section();
+        if acds {
+            self.write_acis_empty();
+            self.queue_sab_entry(&e.acis_data, e.common.handle);
+        } else {
+            self.write_acis_data(&e.acis_data, &e.wires, &e.silhouettes);
+        }
+
+        // acis_empty_bit — must match acis_empty
+        self.writer.write_bit(acds);
+
+        // R2007+: unknown BL field (COMMON_3DSOLID)
+        if self.version.r2007_plus() {
+            self.writer.write_bit_long(0);
+        }
+
         self.register_object(e.common.handle);
     }
 
     fn write_body(&mut self, e: &Body) {
         self.entity_preamble(common::OBJ_BODY, &e.common);
-        self.write_acis_data(&e.acis_data, &e.wires, &e.silhouettes);
-        // acis_empty_bit (COMMON_3DSOLID — always present)
-        self.writer.write_bit(false);
+
+        let acds = self.needs_acds_section();
+        if acds {
+            self.write_acis_empty();
+            self.queue_sab_entry(&e.acis_data, e.common.handle);
+        } else {
+            self.write_acis_data(&e.acis_data, &e.wires, &e.silhouettes);
+        }
+
+        // acis_empty_bit — must match acis_empty
+        self.writer.write_bit(acds);
+
+        // R2007+: unknown BL field (COMMON_3DSOLID)
+        if self.version.r2007_plus() {
+            self.writer.write_bit_long(0);
+        }
+
         self.register_object(e.common.handle);
+    }
+
+    /// Write an empty ACIS entity stub (AC1027+).
+    ///
+    /// For R2013 and later, ACIS data lives in the AcDsPrototype_1b section.
+    /// The entity stream simply indicates "no inline data":
+    ///   acis_empty = true (B), wireframe_present = false (B).
+    fn write_acis_empty(&mut self) {
+        self.writer.write_bit(true); // acis_empty = true (no inline data)
+        self.writer.write_bit(false); // wireframe_present = false
+    }
+
+    /// Queue SAB data for writing into the AcDsPrototype_1b section.
+    ///
+    /// Converts SAT text → SAB binary if needed (mirroring the DXF writer's
+    /// `queue_sab_data()` approach).
+    fn queue_sab_entry(&mut self, acis: &AcisData, entity_handle: Handle) {
+        if acis.is_binary && !acis.sab_data.is_empty() {
+            // Already have SAB binary data
+            self.sab_entries.push((entity_handle, acis.sab_data.clone()));
+        } else if !acis.sat_data.is_empty() {
+            // Convert SAT text → SAB binary via SatDocument
+            if let Ok(mut sat_doc) =
+                crate::entities::acis::SatDocument::parse(&acis.sat_data)
+            {
+                sat_doc.strip_for_sab();
+                let sab = crate::entities::acis::SabWriter::write(&sat_doc);
+                self.sab_entries.push((entity_handle, sab));
+            }
+        }
     }
 
     /// Write ACIS/SAT modeler geometry data shared by 3DSOLID, REGION, BODY.
@@ -2801,6 +2866,12 @@ impl<'a> DwgObjectWriter<'a> {
     /// This writes both `ENCODE_3DSOLID` (acis data) and the wireframe part
     /// of `COMMON_3DSOLID`.  The caller must still write `acis_empty_bit`
     /// and any version-dependent trailing fields (history_id, etc.).
+    ///
+    /// DWG entity streams always use SAT text (version 1) with the selective
+    /// 159-cipher, regardless of the DWG file version.  SAB binary is a
+    /// DXF-only concept stored in the ACDSDATA section — it is never written
+    /// inline in the DWG entity stream.  If the entity contains SAB data,
+    /// it is converted back to SAT text via [`SabReader`] + [`SatDocument`].
     fn write_acis_data(
         &mut self,
         acis: &AcisData,
@@ -2815,42 +2886,47 @@ impl<'a> DwgObjectWriter<'a> {
             // is always present between acis_empty and the version BS.
             self.writer.write_bit(false);
 
-            // ACIS version
-            let acis_version: i16 = match acis.version {
-                AcisVersion::Version1 => 1,
-                AcisVersion::Version2 => 2,
-            };
-            self.writer.write_bit_short(acis_version);
+            // DWG entity streams always use SAT text (version 1).
+            // SAB binary (version 2) is only used in DXF ACDSDATA sections.
+            self.writer.write_bit_short(1_i16);
 
-            if acis_version == 1 {
-                // SAT text — all DWG versions use the same encoding:
-                // BL-sized blocks of encrypted bytes (cipher: 159 - byte)
-                // terminated by BL(0).  Per LibreDWG dwg.spec.
-                let stripped = AcisData::strip_sat_terminator(&acis.sat_data);
-                let mut full = stripped.clone();
-                full.push_str("End-of-ACIS-data\n");
-                let plain = full.as_bytes();
-
-                // Encrypt with selective 159-substitution cipher
-                // (per LibreDWG dwg.spec: bytes <= 32 pass through, bytes > 32: 159 - byte)
-                let mut encrypted = Vec::with_capacity(plain.len());
-                for &b in plain.iter() {
-                    if b <= 32 {
-                        encrypted.push(b);
-                    } else {
-                        encrypted.push(159u8.wrapping_sub(b));
-                    }
+            // Obtain SAT text — convert from SAB if needed.
+            let sat_text = if !acis.sat_data.is_empty() {
+                // Already have SAT text
+                acis.sat_data.clone()
+            } else if !acis.sab_data.is_empty() {
+                // Convert SAB binary → SAT text via SabReader + SatDocument
+                match crate::entities::acis::SabReader::read(&acis.sab_data) {
+                    Ok(sat_doc) => sat_doc.to_sat_string(),
+                    Err(_) => String::new(),
                 }
-
-                // Write as a single block + terminating BL(0)
-                self.writer.write_bit_long(encrypted.len() as i32);
-                self.writer.write_bytes(&encrypted);
-                self.writer.write_bit_long(0); // terminating empty block
             } else {
-                // SAB binary (R2007+)
-                self.writer.write_bit_long(acis.sab_data.len() as i32);
-                self.writer.write_bytes(&acis.sab_data);
+                String::new()
+            };
+
+            // SAT text — all DWG versions use the same encoding:
+            // BL-sized blocks of encrypted bytes (cipher: 159 - byte)
+            // terminated by BL(0).  Per LibreDWG dwg.spec.
+            let stripped = AcisData::strip_sat_terminator(&sat_text);
+            let mut full = stripped.clone();
+            full.push_str("End-of-ACIS-data\n");
+            let plain = full.as_bytes();
+
+            // Encrypt with selective 159-substitution cipher
+            // (per LibreDWG dwg.spec: bytes <= 32 pass through, bytes > 32: 159 - byte)
+            let mut encrypted = Vec::with_capacity(plain.len());
+            for &b in plain.iter() {
+                if b <= 32 {
+                    encrypted.push(b);
+                } else {
+                    encrypted.push(159u8.wrapping_sub(b));
+                }
             }
+
+            // Write as a single block + terminating BL(0)
+            self.writer.write_bit_long(encrypted.len() as i32);
+            self.writer.write_bytes(&encrypted);
+            self.writer.write_bit_long(0); // terminating empty block
         }
 
         // ── COMMON_3DSOLID: Wireframe data (always present) ─────────
@@ -2949,7 +3025,7 @@ mod tests {
         };
         let doc = make_doc_with_entity(EntityType::Point(pt));
         let writer = DwgObjectWriter::new(&doc).unwrap();
-        let (output, _map, _) = writer.write();
+        let (output, _map, _, _) = writer.write();
         assert!(!output.is_empty());
     }
 
@@ -2967,7 +3043,7 @@ mod tests {
         };
         let doc = make_doc_with_entity(EntityType::Line(line));
         let writer = DwgObjectWriter::new(&doc).unwrap();
-        let (output, _map, _) = writer.write();
+        let (output, _map, _, _) = writer.write();
         assert!(!output.is_empty());
     }
 }
