@@ -1,4 +1,4 @@
-# acadrust 0.2.8
+# acadrust 0.2.9
 
 [![Crates.io](https://img.shields.io/crates/v/acadrust.svg)](https://crates.io/crates/acadrust)
 [![Documentation](https://docs.rs/acadrust/badge.svg)](https://docs.rs/acadrust)
@@ -17,7 +17,7 @@ acadrust provides comprehensive support for the DXF and DWG file formats with a 
 
 - **📖 Read & Write DXF** — Full support for both ASCII and Binary DXF formats
 - **📐 Read & Write DWG** — Native DWG binary input/output for R13 through R2018 (8 versions), 208/208 roundtrip-perfect
-- **🧊 3D Solid Creation** — Read/Build ACIS-based simple 3DSOLID entities (box, wedge, pyramid, cylinder, and custom B-Rep) with SAT text (R2000–R2007) and SAB binary (R2013+) encoding
+- **🧊 3D Solid Creation** — Read/Build ACIS-based 3DSOLID entities and write primitives (box, wedge, pyramid, cylinder, and custom B-Rep) with SAT text (R2000–R2007) and SAB binary (R2013+) encoding
 - **🔒 Type Safe** — Leverages Rust's type system with strongly-typed entities, tables, and objects
 - **🌐 Encoding Support** — Automatic code page detection and character encoding for pre-2007 files (~40 code pages via `encoding_rs`)
 - **🛡️ Failsafe Mode** — Optional error-tolerant parsing that collects diagnostics instead of aborting
@@ -167,7 +167,7 @@ Add acadrust to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-acadrust = "0.2.8"
+acadrust = "0.2.9"
 ```
 
 Or install via cargo:
@@ -184,7 +184,7 @@ cargo add acadrust
 
 ```toml
 [dependencies]
-acadrust = { version = "0.2.8", features = ["serde"] }
+acadrust = { version = "0.2.9", features = ["serde"] }
 ```
 
 ---
