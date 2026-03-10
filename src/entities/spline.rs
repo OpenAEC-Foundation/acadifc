@@ -39,7 +39,7 @@ impl Default for SplineFlags {
 }
 
 /// A spline entity (NURBS curve)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Spline {
     /// Common entity data

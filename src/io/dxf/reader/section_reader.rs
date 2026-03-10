@@ -4243,7 +4243,7 @@ impl<'a> SectionReader<'a> {
                 13 | 23 | 33 => { current_vertex_miter.add_coordinate(&pair); }
                 74 => {
                     // Number of parameters for this element
-                    if reading_params && !current_params.is_empty() {
+                    if reading_params {
                         current_segments.push(MLineSegment {
                             parameters: std::mem::take(&mut current_params),
                             area_fill_parameters: std::mem::take(&mut current_area_fill),
@@ -4290,7 +4290,7 @@ impl<'a> SectionReader<'a> {
         reading_params: &mut bool, _reading_area_fill: &mut bool,
     ) {
         use crate::entities::mline::*;
-        if *reading_params && !params.is_empty() {
+        if *reading_params {
             segments.push(MLineSegment {
                 parameters: std::mem::take(params),
                 area_fill_parameters: std::mem::take(area_fill),

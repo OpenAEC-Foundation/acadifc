@@ -30,7 +30,7 @@ impl OleObjectType {
 /// An embedded OLE2 object entity.
 ///
 /// Stores the binary OLE data and bounding rectangle.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Ole2Frame {
     /// Common entity data

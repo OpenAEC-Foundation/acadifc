@@ -86,6 +86,7 @@ impl<'a> DwgObjectWriter<'a> {
             &c.line_weight,
             &c.transparency,
             c.invisible,
+            c.linetype_scale,
             &c.extended_data,
             &c.reactors,
             &c.xdictionary_handle,
@@ -1493,6 +1494,7 @@ impl<'a> DwgObjectWriter<'a> {
             &crate::types::LineWeight::ByLayer,
             &crate::types::Transparency::default(),
             false,
+            1.0,
             &crate::xdata::ExtendedData::default(),
             &[],
             &None,
@@ -1521,6 +1523,7 @@ impl<'a> DwgObjectWriter<'a> {
             &crate::types::LineWeight::ByLayer,
             &crate::types::Transparency::default(),
             false,
+            1.0,
             &crate::xdata::ExtendedData::default(),
             &[],
             &None,
@@ -1625,6 +1628,7 @@ impl<'a> DwgObjectWriter<'a> {
             &crate::types::LineWeight::ByLayer,
             &crate::types::Transparency::default(),
             false,
+            1.0,
             &crate::xdata::ExtendedData::default(),
             &[],
             &None,
@@ -1653,6 +1657,7 @@ impl<'a> DwgObjectWriter<'a> {
             &crate::types::LineWeight::ByLayer,
             &crate::types::Transparency::default(),
             false,
+            1.0,
             &crate::xdata::ExtendedData::default(),
             &[],
             &None,
@@ -1740,6 +1745,7 @@ impl<'a> DwgObjectWriter<'a> {
                 &crate::types::LineWeight::ByLayer,
                 &crate::types::Transparency::default(),
                 false,
+                1.0,
                 &crate::xdata::ExtendedData::default(),
                 &[],
                 &None,
@@ -1763,6 +1769,7 @@ impl<'a> DwgObjectWriter<'a> {
                 &crate::types::LineWeight::ByLayer,
                 &crate::types::Transparency::default(),
                 false,
+                1.0,
                 &crate::xdata::ExtendedData::default(),
                 &[],
                 &None,
@@ -1787,6 +1794,7 @@ impl<'a> DwgObjectWriter<'a> {
             &crate::types::LineWeight::ByLayer,
             &crate::types::Transparency::default(),
             false,
+            1.0,
             &crate::xdata::ExtendedData::default(),
             &[],
             &None,
@@ -1860,6 +1868,7 @@ impl<'a> DwgObjectWriter<'a> {
                 &crate::types::LineWeight::ByLayer,
                 &crate::types::Transparency::default(),
                 false,
+                1.0,
                 &crate::xdata::ExtendedData::default(),
                 &[],
                 &None,
@@ -1881,6 +1890,7 @@ impl<'a> DwgObjectWriter<'a> {
             &crate::types::LineWeight::ByLayer,
             &crate::types::Transparency::default(),
             false,
+            1.0,
             &crate::xdata::ExtendedData::default(),
             &[],
             &None,
@@ -2749,9 +2759,22 @@ impl<'a> DwgObjectWriter<'a> {
 
     // ── Legacy Polyline (2D) ────────────────────────────────────────
 
-    fn write_polyline_old(&mut self, _e: &Polyline) {
-        // Legacy polyline — not commonly used in DWG writing
-        // Skip silently
+    fn write_polyline_old(&mut self, e: &Polyline) {
+        // Legacy Polyline — convert to Polyline3D for DWG output.
+        // The DXF reader collapses Polyline2D/3D/PolyfaceMesh into this
+        // legacy variant; we re-emit as Polyline3D so data isn't lost.
+        let mut p3d = Polyline3D::new();
+        p3d.common = e.common.clone();
+        p3d.flags.closed = e.flags.is_closed();
+        for v in &e.vertices {
+            p3d.vertices.push(Vertex3DPolyline {
+                handle: Handle::NULL,
+                layer: e.common.layer.clone(),
+                position: v.location,
+                flags: v.flags.bits() as i32,
+            });
+        }
+        self.write_polyline3d(&p3d);
     }
 
     // ── ACIS entities (3DSOLID, REGION, BODY) ───────────────────────

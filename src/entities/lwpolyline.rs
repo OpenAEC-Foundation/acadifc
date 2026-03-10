@@ -47,7 +47,7 @@ impl LwVertex {
 }
 
 /// A lightweight (2D) polyline entity
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LwPolyline {
     /// Common entity data

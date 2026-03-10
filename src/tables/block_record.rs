@@ -40,7 +40,7 @@ impl Default for BlockFlags {
 }
 
 /// A block record table entry
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BlockRecord {
     /// Unique handle for the block record table entry

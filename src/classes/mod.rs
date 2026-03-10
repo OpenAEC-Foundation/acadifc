@@ -67,7 +67,7 @@ impl From<i32> for ProxyFlags {
 /// - 91: Instance count (informational)
 /// - 280: Was-a-zombie flag
 /// - 281: Is-an-entity flag (1 = can appear in ENTITIES/BLOCKS, 0 = OBJECTS only)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DxfClass {
     /// DXF class name (group code 1) — e.g. "ACDBPLACEHOLDER"
@@ -118,7 +118,7 @@ impl DxfClass {
 /// Collection of DXF class definitions, keyed by DXF name (case-insensitive).
 ///
 /// Corresponds to ACadSharp's `DxfClassCollection`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DxfClassCollection {
     entries: Vec<DxfClass>,

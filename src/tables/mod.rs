@@ -58,7 +58,7 @@ pub trait TableEntry {
 }
 
 /// Generic table for storing named entries
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Table<T: TableEntry> {
     /// Entries stored by name (case-insensitive)

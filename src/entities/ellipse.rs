@@ -4,7 +4,7 @@ use super::{Entity, EntityCommon};
 use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transparency, Vector3};
 
 /// An ellipse entity
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Ellipse {
     /// Common entity data

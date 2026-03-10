@@ -200,7 +200,7 @@ impl Vertex3D {
 }
 
 /// A 2D polyline entity (heavy polyline with vertices)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Polyline2D {
     /// Common entity data
@@ -258,7 +258,7 @@ impl Default for Polyline2D {
 }
 
 /// A 3D polyline entity
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Polyline {
     /// Common entity data

@@ -1833,6 +1833,7 @@ fn map_entity_common(
     common.color = data.color;
     common.transparency = data.transparency;
     common.invisible = data.invisible;
+    common.linetype_scale = data.linetype_scale;
     common.layer = maps.layer_name(data.layer_handle);
     common
 }

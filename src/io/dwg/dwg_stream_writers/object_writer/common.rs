@@ -273,6 +273,7 @@ impl<'a> DwgObjectWriter<'a> {
         line_weight: &crate::types::LineWeight,
         transparency: &Transparency,
         invisible: bool,
+        linetype_scale: f64,
         xdata: &crate::xdata::ExtendedData,
         reactors: &[Handle],
         xdictionary_handle: &Option<Handle>,
@@ -381,7 +382,7 @@ impl<'a> DwgObjectWriter<'a> {
         }
 
         // ── MAIN: Linetype scale ──
-        self.writer.write_bit_double(1.0); // simplified: always 1.0
+        self.writer.write_bit_double(linetype_scale);
 
         // ── R13-R14 only: invisibility + early return ──
         // DXF group 60 convention (all DWG versions): 0 = visible, non-zero = invisible

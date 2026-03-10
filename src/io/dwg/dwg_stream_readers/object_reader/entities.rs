@@ -1712,8 +1712,8 @@ pub fn read_multileader(
     let scale_factor = reader.read_bit_double();
 
     let mut text_attachment_direction: i16 = 0;
-    let mut text_bottom_attachment: i16 = 0;
-    let mut text_top_attachment: i16 = 0;
+    let mut text_bottom_attachment: i16 = 9; // CenterOfText — matches MultiLeader::new() default
+    let mut text_top_attachment: i16 = 9; // CenterOfText — matches MultiLeader::new() default
     if version.r2010_plus() {
         text_attachment_direction = reader.read_bit_short();
         text_bottom_attachment = reader.read_bit_short();
@@ -1860,7 +1860,7 @@ fn read_multileader_annotation_context(
     let mut block_content_location = Vector3::ZERO;
     let mut block_content_scale = Vector3::new(1.0, 1.0, 1.0);
     let mut block_rotation = 0.0;
-    let mut block_content_color = Color::ByLayer;
+    let mut block_content_color = Color::ByBlock;
     let mut transform_matrix = [0.0f64; 16];
     // Set identity
     transform_matrix[0] = 1.0;
@@ -1887,8 +1887,8 @@ fn read_multileader_annotation_context(
     let base_vertical = reader.read_3bit_double();
     let normal_reversed = reader.read_bit();
 
-    let mut text_top_attachment = TextAttachmentType::default();
-    let mut text_bottom_attachment = TextAttachmentType::default();
+    let mut text_top_attachment = TextAttachmentType::CenterOfText;
+    let mut text_bottom_attachment = TextAttachmentType::CenterOfText;
     if version.r2010_plus() {
         text_top_attachment = TextAttachmentType::from(reader.read_bit_short());
         text_bottom_attachment = TextAttachmentType::from(reader.read_bit_short());
@@ -2021,10 +2021,10 @@ fn read_leader_line(
     let index = reader.read_bit_long();
 
     let mut path_type = MultiLeaderPathType::default();
-    let mut line_color = Color::ByLayer;
+    let mut line_color = Color::ByBlock;
     let mut line_type_handle: Option<Handle> = None;
     let mut line_weight = crate::types::LineWeight::ByLayer;
-    let mut arrowhead_size = 0.0;
+    let mut arrowhead_size = 0.18;
     let mut arrowhead_handle: Option<Handle> = None;
     let mut override_flags = LeaderLinePropertyOverrideFlags::NONE;
 

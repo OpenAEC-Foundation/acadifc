@@ -44,7 +44,7 @@ impl LineTypeElement {
 }
 
 /// A line type table entry
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LineType {
     /// Unique handle

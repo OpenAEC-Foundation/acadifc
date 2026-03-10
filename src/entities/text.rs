@@ -36,7 +36,7 @@ pub enum TextVerticalAlignment {
 }
 
 /// A single-line text entity
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Text {
     /// Common entity data

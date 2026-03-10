@@ -4,7 +4,7 @@ use super::TableEntry;
 use crate::types::{Handle, Vector2, Vector3};
 
 /// A viewport table entry
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct VPort {
     /// Unique handle

@@ -30,7 +30,7 @@ impl Default for TextGenerationFlags {
 }
 
 /// A text style table entry
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextStyle {
     /// Unique handle

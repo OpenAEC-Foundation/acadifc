@@ -26,7 +26,7 @@ use crate::Result;
 use std::collections::HashMap;
 
 /// DWG header variables containing drawing settings
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HeaderVariables {
     // ==================== Version-specific Flags ====================
@@ -858,7 +858,7 @@ impl Default for HeaderVariables {
 }
 
 /// A CAD document containing all drawing data
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CadDocument {
     /// Document version

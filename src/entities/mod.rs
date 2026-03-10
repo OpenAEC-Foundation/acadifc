@@ -274,7 +274,7 @@ impl Default for EntityCommon {
 }
 
 /// Enumeration of all entity types for type-safe storage
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum EntityType {
     /// Point entity

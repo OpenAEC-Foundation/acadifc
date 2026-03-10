@@ -21,7 +21,7 @@ use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transform, Transpar
 /// Preserves the DXF/DWG type name and common entity properties.
 /// When raw data is available (DWG `raw_dwg_data` or DXF
 /// `raw_dxf_codes`), the entity is written back losslessly.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct UnknownEntity {
     /// Common entity data (handle, layer, color, reactors, …).

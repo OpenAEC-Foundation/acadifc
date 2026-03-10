@@ -35,7 +35,7 @@ impl fmt::Display for NotificationType {
 }
 
 /// A single notification produced during reading or writing.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Notification {
     /// The severity / category.
@@ -61,7 +61,7 @@ impl fmt::Display for Notification {
 }
 
 /// Collects notifications during a read/write operation.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct NotificationCollection {
     items: Vec<Notification>,

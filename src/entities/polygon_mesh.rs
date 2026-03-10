@@ -31,7 +31,7 @@ impl SurfaceSmoothType {
 }
 
 /// A vertex in a polygon mesh
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PolygonMeshVertex {
     /// Common entity data
@@ -91,7 +91,7 @@ bitflags::bitflags! {
 ///
 /// In DXF this is a POLYLINE entity with flag bit 16 set
 /// and subclass marker `AcDbPolygonMesh`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PolygonMesh {
     /// Common entity data

@@ -4,7 +4,7 @@ use super::TableEntry;
 use crate::types::{Handle, Vector3};
 
 /// A view table entry
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct View {
     /// Unique handle

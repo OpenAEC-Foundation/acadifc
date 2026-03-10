@@ -45,7 +45,7 @@ pub use stub_objects::{
 use crate::types::Handle;
 
 /// Dictionary object - stores key-value pairs of object handles
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Dictionary {
     /// Unique handle
@@ -109,7 +109,7 @@ impl Default for Dictionary {
 }
 
 /// Layout object - represents a layout (model space or paper space)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Layout {
     /// Unique handle
@@ -165,7 +165,7 @@ impl Layout {
 }
 
 /// Object types
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ObjectType {
     /// Dictionary object
