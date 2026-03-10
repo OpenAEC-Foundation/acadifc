@@ -1,11 +1,14 @@
 //! Example: write DWG files containing various 3DSOLID shapes.
 //!
-//! Demonstrates the SAT builder API with four different solid shapes:
+//! Demonstrates the SAT builder API with seven different solid shapes:
 //!
 //! - **Box** (10×10×10) — 6 planar faces, 12 edges, 8 vertices
 //! - **Wedge** (right triangular prism) — 5 planar faces, 9 edges, 6 vertices
 //! - **Pyramid** (square base, apex) — 5 planar faces, 8 edges, 5 vertices
 //! - **Cylinder** (radius 5, height 10) — 2 planar caps + 1 cylindrical surface
+//! - **Cone** (base radius 5, height 10) — 1 conical surface + 1 base cap
+//! - **Sphere** (radius 5) — 1 spherical surface, no edges/vertices
+//! - **Torus** (major 5, minor 2) — 1 toroidal surface, no edges/vertices
 //!
 //! Each shape is written as R2013 (AC1027) DWG. The box is also written
 //! at R2000 and R2004 for multi-version testing.
@@ -24,12 +27,18 @@ fn main() -> acadrust::Result<()> {
     let wedge_sat = build_wedge_sat();
     let pyramid_sat = build_pyramid_sat();
     let cylinder_sat = build_cylinder_sat();
+    let cone_sat = build_cone_sat();
+    let sphere_sat = build_sphere_sat();
+    let torus_sat = build_torus_sat();
 
-    // Print and validate the box SAT for inspection
+    // Print and validate all shapes
     print_sat_info("Box", &box_sat);
     print_sat_info("Wedge", &wedge_sat);
     print_sat_info("Pyramid", &pyramid_sat);
     print_sat_info("Cylinder", &cylinder_sat);
+    print_sat_info("Cone", &cone_sat);
+    print_sat_info("Sphere", &sphere_sat);
+    print_sat_info("Torus", &torus_sat);
 
     // ── 2. Write box at multiple DWG versions ───────────────────────
     println!("\n=== Writing DWG files ===");
@@ -41,6 +50,9 @@ fn main() -> acadrust::Result<()> {
     write_solid("wedge_r2013.dwg", DxfVersion::AC1027, &wedge_sat)?;
     write_solid("pyramid_r2013.dwg", DxfVersion::AC1027, &pyramid_sat)?;
     write_solid("cylinder_r2013.dwg", DxfVersion::AC1027, &cylinder_sat)?;
+    write_solid("cone_r2013.dwg", DxfVersion::AC1027, &cone_sat)?;
+    write_solid("sphere_r2013.dwg", DxfVersion::AC1027, &sphere_sat)?;
+    write_solid("torus_r2013.dwg", DxfVersion::AC1027, &torus_sat)?;
 
     // ── 4. Write cylinder at R2000 for SAT-text testing ─────────────
     write_solid("cylinder_r2000.dwg", DxfVersion::AC1015, &cylinder_sat)?;
@@ -57,6 +69,9 @@ fn main() -> acadrust::Result<()> {
             "wedge_r2013.dwg",
             "pyramid_r2013.dwg",
             "cylinder_r2013.dwg",
+            "cone_r2013.dwg",
+            "sphere_r2013.dwg",
+            "torus_r2013.dwg",
             "cylinder_r2000.dwg",
         ] {
             let mut reader = DwgReader::from_file(path)?;
@@ -610,6 +625,167 @@ fn build_cylinder_sat() -> SatDocument {
 
     // ── Shell → Lump → Body ─────────────────────────────────────────
     sat.add_shell(ptr(face_base), ptr(lump_idx));
+    sat.add_lump(ptr(shell_idx), body_idx);
+
+    if let Some(body_rec) = sat.record_mut(0) {
+        body_rec.tokens[1] = SatToken::Pointer(ptr(lump_idx));
+    }
+
+    sat
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  Cone — base radius 5, apex at height 10
+// ════════════════════════════════════════════════════════════════════════════
+
+/// Build a cone with circular base (radius 5 at z=0) and apex at (0,0,10).
+///
+/// 2 faces, 1 edge (base circle), 1 vertex (seam on base circle).
+fn build_cone_sat() -> SatDocument {
+    let mut sat = SatDocument::new_body();
+    let body_idx = SatPointer::new(0);
+    let ptr = |i: i32| SatPointer::new(i);
+
+    let tau = std::f64::consts::TAU;
+
+    // Half-angle: tan = R/H = 5/10 = 0.5
+    let hyp = (5.0_f64 * 5.0 + 10.0 * 10.0).sqrt(); // √125
+    let sin_half = -5.0 / hyp;  // negative → tapers in +Z direction
+    let cos_half = 10.0 / hyp;
+
+    // ── Point (1) — seam point on base circle ──────────────────────
+    let p0 = sat.add_point(5.0, 0.0, 0.0);
+
+    // ── Surfaces (2) ────────────────────────────────────────────────
+    let surf_base = sat.add_plane_surface([0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [1.0, 0.0, 0.0]);
+    let surf_cone = sat.add_cone_surface(
+        [0.0, 0.0, 0.0],   // center (on axis, at base level)
+        [0.0, 0.0, 1.0],   // axis direction (toward apex)
+        [5.0, 0.0, 0.0],   // major_axis (radius = 5 at center)
+        1.0,                // ratio (circular)
+        cos_half,           // cos(half-angle)
+        sin_half,           // sin(half-angle)
+    );
+
+    // ── Curve (1) — base circle ─────────────────────────────────────
+    let crv_base = sat.add_ellipse_curve(
+        [0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [5.0, 0.0, 0.0], 1.0,
+    );
+
+    // ── Vertex (1) ──────────────────────────────────────────────────
+    let v0 = sat.add_vertex(SatPointer::NULL, ptr(p0));
+
+    // ── Edge (1) — closed circle ────────────────────────────────────
+    let e0 = sat.add_edge(ptr(v0), 0.0, ptr(v0), tau, SatPointer::NULL, ptr(crv_base), Sense::Forward);
+
+    // ── Coedge pre-computed indices ─────────────────────────────────
+    let base = sat.records.len() as i32;
+    let co = |i: i32| base + i;   // 2 coedges: base+0..1
+    let loop_base = base + 2;      // 2 loops: base+2..3
+    let face_base = base + 4;      // 2 faces: base+4..5
+    let shell_idx = base + 6;
+    let lump_idx  = base + 7;
+
+    // ── Base cap: single coedge (circle reversed = CW from below) ───
+    sat.add_coedge(ptr(co(0)), ptr(co(0)), ptr(co(1)), ptr(e0), Sense::Reversed, ptr(loop_base));     // co0
+
+    // ── Cone lateral: single coedge (circle forward) ────────────────
+    sat.add_coedge(ptr(co(1)), ptr(co(1)), ptr(co(0)), ptr(e0), Sense::Forward, ptr(loop_base + 1));  // co1
+
+    // ── Loops (2) ───────────────────────────────────────────────────
+    sat.add_loop(SatPointer::NULL, ptr(co(0)), ptr(face_base));       // base cap
+    sat.add_loop(SatPointer::NULL, ptr(co(1)), ptr(face_base + 1));   // cone lateral
+
+    // ── Faces (2, linked list) ──────────────────────────────────────
+    sat.add_face(ptr(face_base + 1), ptr(loop_base),     ptr(shell_idx), ptr(surf_base), Sense::Forward, Sidedness::Single);
+    sat.add_face(SatPointer::NULL,   ptr(loop_base + 1), ptr(shell_idx), ptr(surf_cone), Sense::Forward, Sidedness::Single);
+
+    // ── Shell → Lump → Body ─────────────────────────────────────────
+    sat.add_shell(ptr(face_base), ptr(lump_idx));
+    sat.add_lump(ptr(shell_idx), body_idx);
+
+    if let Some(body_rec) = sat.record_mut(0) {
+        body_rec.tokens[1] = SatToken::Pointer(ptr(lump_idx));
+    }
+
+    sat
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  Sphere — radius 5
+// ════════════════════════════════════════════════════════════════════════════
+
+/// Build a sphere of radius 5 centered at the origin.
+///
+/// 1 face, 0 edges, 0 vertices. Closed surface — no loop entity needed;
+/// the face's first_loop is NULL, meaning it covers the entire sphere.
+fn build_sphere_sat() -> SatDocument {
+    let mut sat = SatDocument::new_body();
+    let body_idx = SatPointer::new(0);
+    let ptr = |i: i32| SatPointer::new(i);
+
+    // ── Surface (1) ─────────────────────────────────────────────────
+    let surf = sat.add_sphere_surface(
+        [0.0, 0.0, 0.0],  // center
+        5.0,               // radius
+        [1.0, 0.0, 0.0],  // u direction
+        [0.0, 0.0, 1.0],  // pole direction
+    );
+
+    // ── Closed surface: no loop, face.first_loop = NULL ─────────────
+    let base = sat.records.len() as i32;
+    let face_idx  = base;
+    let shell_idx = base + 1;
+    let lump_idx  = base + 2;
+
+    // ── Face (1) ────────────────────────────────────────────────────
+    sat.add_face(SatPointer::NULL, SatPointer::NULL, ptr(shell_idx), ptr(surf), Sense::Forward, Sidedness::Single);
+
+    // ── Shell → Lump → Body ─────────────────────────────────────────
+    sat.add_shell(ptr(face_idx), ptr(lump_idx));
+    sat.add_lump(ptr(shell_idx), body_idx);
+
+    if let Some(body_rec) = sat.record_mut(0) {
+        body_rec.tokens[1] = SatToken::Pointer(ptr(lump_idx));
+    }
+
+    sat
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  Torus — major radius 5, minor radius 2
+// ════════════════════════════════════════════════════════════════════════════
+
+/// Build a torus centered at the origin with major radius 5 and minor radius 2.
+/// The axis of revolution is the Z-axis.
+///
+/// 1 face, 0 edges, 0 vertices. Closed surface — no loop entity needed;
+/// the face's first_loop is NULL, meaning it covers the entire torus.
+fn build_torus_sat() -> SatDocument {
+    let mut sat = SatDocument::new_body();
+    let body_idx = SatPointer::new(0);
+    let ptr = |i: i32| SatPointer::new(i);
+
+    // ── Surface (1) ─────────────────────────────────────────────────
+    let surf = sat.add_torus_surface(
+        [0.0, 0.0, 0.0],  // center
+        [0.0, 0.0, 1.0],  // normal (axis of revolution)
+        5.0,               // major radius
+        2.0,               // minor radius
+        [1.0, 0.0, 0.0],  // u direction
+    );
+
+    // ── Closed surface: no loop, face.first_loop = NULL ─────────────
+    let base = sat.records.len() as i32;
+    let face_idx  = base;
+    let shell_idx = base + 1;
+    let lump_idx  = base + 2;
+
+    // ── Face (1) ────────────────────────────────────────────────────
+    sat.add_face(SatPointer::NULL, SatPointer::NULL, ptr(shell_idx), ptr(surf), Sense::Forward, Sidedness::Single);
+
+    // ── Shell → Lump → Body ─────────────────────────────────────────
+    sat.add_shell(ptr(face_idx), ptr(lump_idx));
     sat.add_lump(ptr(shell_idx), body_idx);
 
     if let Some(body_rec) = sat.record_mut(0) {

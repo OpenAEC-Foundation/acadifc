@@ -971,7 +971,11 @@ impl<'a> SatPlaneSurface<'a> {
 
 /// Accessor for a `cone-surface` entity record.
 ///
-/// Cone-surface layout: `cone-surface $<attrib> <cx> <cy> <cz> <ax_x> <ax_y> <ax_z> <rx> <ry> <rz> <ratio> <cos_half_angle> <sin_half_angle> ...`
+/// Cone-surface layout (v700):
+/// `cone-surface $<attrib> -1 $-1 <cx> <cy> <cz> <ax_x> <ax_y> <ax_z> <rx> <ry> <rz> <ratio> I I <sin_half_angle> <cos_half_angle> <radius> forward_v I I I I`
+///
+/// Tokens 11–12 are spline continuation markers (`I`), so sine/cosine
+/// sit at positions 13 and 14. For a cylinder, sin=0 and cos=1.
 #[derive(Debug, Clone)]
 pub struct SatConeSurface<'a> {
     record: &'a SatRecord,
@@ -1016,14 +1020,21 @@ impl<'a> SatConeSurface<'a> {
         self.record.token_float(10).unwrap_or(1.0)
     }
 
-    /// Cosine of half angle.
-    pub fn cos_half_angle(&self) -> f64 {
-        self.record.token_float(11).unwrap_or(0.0)
+    /// Sine of half angle (position 13, after two `I` continuation tokens).
+    /// For a cylinder this is 0.0.
+    pub fn sin_half_angle(&self) -> f64 {
+        self.record.token_float(13).unwrap_or(0.0)
     }
 
-    /// Sine of half angle.
-    pub fn sin_half_angle(&self) -> f64 {
-        self.record.token_float(12).unwrap_or(1.0)
+    /// Cosine of half angle (position 14, after two `I` continuation tokens).
+    /// For a cylinder this is 1.0.
+    pub fn cos_half_angle(&self) -> f64 {
+        self.record.token_float(14).unwrap_or(1.0)
+    }
+
+    /// Radius at the reference cross-section (position 15).
+    pub fn radius(&self) -> f64 {
+        self.record.token_float(15).unwrap_or(1.0)
     }
 }
 

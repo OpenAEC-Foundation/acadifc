@@ -724,4 +724,53 @@ mod tests {
 
         assert!(idx >= 0);
     }
+
+    #[test]
+    fn test_cone_surface_accessor_positions() {
+        let mut doc = SatDocument::new_body();
+        let _idx = doc.add_cone_surface(
+            [1.0, 2.0, 3.0],      // center
+            [0.0, 0.0, 1.0],      // axis
+            [5.0, 0.0, 0.0],      // major_axis (radius = 5)
+            1.0,                    // ratio
+            1.0,                    // cos_half_angle (cylinder)
+            0.0,                    // sin_half_angle (cylinder)
+        );
+
+        // Roundtrip through SAT text
+        let output = doc.to_sat_string();
+        let doc2 = SatDocument::parse(&output).unwrap();
+        let cones = doc2.records_of_type("cone-surface");
+        assert_eq!(cones.len(), 1);
+        let cone = SatConeSurface::from_record(cones[0]).unwrap();
+        assert_eq!(cone.center(), (1.0, 2.0, 3.0));
+        assert_eq!(cone.axis(), (0.0, 0.0, 1.0));
+        assert_eq!(cone.major_axis(), (5.0, 0.0, 0.0));
+        assert_eq!(cone.ratio(), 1.0);
+        assert!((cone.sin_half_angle() - 0.0).abs() < 1e-10, "sin should be 0.0 for cylinder, got {}", cone.sin_half_angle());
+        assert!((cone.cos_half_angle() - 1.0).abs() < 1e-10, "cos should be 1.0 for cylinder, got {}", cone.cos_half_angle());
+        assert!((cone.radius() - 5.0).abs() < 1e-10, "radius should be 5.0, got {}", cone.radius());
+    }
+
+    #[test]
+    fn test_cone_surface_accessor_with_cone_angles() {
+        let mut doc = SatDocument::new_body();
+        let sin_val: f64 = 30.0_f64.to_radians().sin();  // ~0.5
+        let cos_val: f64 = 30.0_f64.to_radians().cos();  // ~0.866
+        let _idx = doc.add_cone_surface(
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [3.0, 0.0, 0.0],
+            1.0,
+            cos_val,
+            sin_val,
+        );
+
+        let output = doc.to_sat_string();
+        let doc2 = SatDocument::parse(&output).unwrap();
+        let cones = doc2.records_of_type("cone-surface");
+        let cone = SatConeSurface::from_record(cones[0]).unwrap();
+        assert!((cone.sin_half_angle() - sin_val).abs() < 1e-10, "sin mismatch: {} vs {}", cone.sin_half_angle(), sin_val);
+        assert!((cone.cos_half_angle() - cos_val).abs() < 1e-10, "cos mismatch: {} vs {}", cone.cos_half_angle(), cos_val);
+    }
 }
