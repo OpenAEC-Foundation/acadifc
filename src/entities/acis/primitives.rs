@@ -1,0 +1,630 @@
+//! Parametric ACIS primitive builders.
+//!
+//! High-level functions that produce a complete [`SatDocument`] for standard
+//! 3-D primitives.  Each builder creates the full B-rep topology
+//! (body → lump → shell → face → loop → coedge → edge → vertex) with correct
+//! geometry so the result can be assigned directly to a [`Solid3D`] entity.
+//!
+//! # Primitives
+//!
+//! | Builder | Faces | Edges | Vertices |
+//! |---------|-------|-------|----------|
+//! | [`build_box`] | 6 | 12 | 8 |
+//! | [`build_wedge`] | 5 | 9 | 6 |
+//! | [`build_pyramid`] | 5 | 8 | 5 |
+//! | [`build_cylinder`] | 3 | 3 | 2 |
+//! | [`build_cone`] | 2 | 1 | 1 |
+//! | [`build_sphere`] | 1 | 0 | 0 |
+//! | [`build_torus`] | 1 | 0 | 0 |
+//!
+//! # Example
+//!
+//! ```rust
+//! use acadrust::entities::acis::primitives;
+//!
+//! let sat = primitives::build_box([0.0, 0.0, 0.0], 10.0, 10.0, 10.0);
+//! assert_eq!(sat.faces().len(), 6);
+//! assert_eq!(sat.edges().len(), 12);
+//! assert_eq!(sat.vertices().len(), 8);
+//! ```
+
+use super::{SatDocument, SatPointer, SatToken, Sense, Sidedness};
+
+fn ptr(i: i32) -> SatPointer {
+    SatPointer::new(i)
+}
+
+/// Build an axis-aligned box centered at `center` with the given dimensions.
+///
+/// The box extends ±`length/2` along X, ±`width/2` along Y, and ±`height/2`
+/// along Z from the center point.
+pub fn build_box(center: [f64; 3], length: f64, width: f64, height: f64) -> SatDocument {
+    let mut sat = SatDocument::new_body();
+    let body_idx = SatPointer::new(0);
+
+    let hl = length / 2.0;
+    let hw = width / 2.0;
+    let hh = height / 2.0;
+    let [cx, cy, cz] = center;
+
+    let p0 = sat.add_point(cx - hl, cy - hw, cz - hh);
+    let p1 = sat.add_point(cx + hl, cy - hw, cz - hh);
+    let p2 = sat.add_point(cx + hl, cy + hw, cz - hh);
+    let p3 = sat.add_point(cx - hl, cy + hw, cz - hh);
+    let p4 = sat.add_point(cx - hl, cy - hw, cz + hh);
+    let p5 = sat.add_point(cx + hl, cy - hw, cz + hh);
+    let p6 = sat.add_point(cx + hl, cy + hw, cz + hh);
+    let p7 = sat.add_point(cx - hl, cy + hw, cz + hh);
+
+    let surf_top    = sat.add_plane_surface([cx, cy, cz + hh], [0.0, 0.0,  1.0], [1.0, 0.0, 0.0]);
+    let surf_bottom = sat.add_plane_surface([cx, cy, cz - hh], [0.0, 0.0, -1.0], [1.0, 0.0, 0.0]);
+    let surf_front  = sat.add_plane_surface([cx, cy - hw, cz], [0.0, -1.0, 0.0], [1.0, 0.0, 0.0]);
+    let surf_back   = sat.add_plane_surface([cx, cy + hw, cz], [0.0,  1.0, 0.0], [1.0, 0.0, 0.0]);
+    let surf_right  = sat.add_plane_surface([cx + hl, cy, cz], [ 1.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
+    let surf_left   = sat.add_plane_surface([cx - hl, cy, cz], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
+
+    // Bottom edges
+    let crv_b0 = sat.add_straight_curve([cx - hl, cy - hw, cz - hh], [ 1.0, 0.0, 0.0]);
+    let crv_b1 = sat.add_straight_curve([cx + hl, cy - hw, cz - hh], [ 0.0, 1.0, 0.0]);
+    let crv_b2 = sat.add_straight_curve([cx + hl, cy + hw, cz - hh], [-1.0, 0.0, 0.0]);
+    let crv_b3 = sat.add_straight_curve([cx - hl, cy + hw, cz - hh], [ 0.0,-1.0, 0.0]);
+    // Top edges
+    let crv_t0 = sat.add_straight_curve([cx - hl, cy - hw, cz + hh], [ 1.0, 0.0, 0.0]);
+    let crv_t1 = sat.add_straight_curve([cx + hl, cy - hw, cz + hh], [ 0.0, 1.0, 0.0]);
+    let crv_t2 = sat.add_straight_curve([cx + hl, cy + hw, cz + hh], [-1.0, 0.0, 0.0]);
+    let crv_t3 = sat.add_straight_curve([cx - hl, cy + hw, cz + hh], [ 0.0,-1.0, 0.0]);
+    // Vertical edges
+    let crv_v0 = sat.add_straight_curve([cx - hl, cy - hw, cz - hh], [0.0, 0.0, 1.0]);
+    let crv_v1 = sat.add_straight_curve([cx + hl, cy - hw, cz - hh], [0.0, 0.0, 1.0]);
+    let crv_v2 = sat.add_straight_curve([cx + hl, cy + hw, cz - hh], [0.0, 0.0, 1.0]);
+    let crv_v3 = sat.add_straight_curve([cx - hl, cy + hw, cz - hh], [0.0, 0.0, 1.0]);
+
+    let v0 = sat.add_vertex(SatPointer::NULL, ptr(p0));
+    let v1 = sat.add_vertex(SatPointer::NULL, ptr(p1));
+    let v2 = sat.add_vertex(SatPointer::NULL, ptr(p2));
+    let v3 = sat.add_vertex(SatPointer::NULL, ptr(p3));
+    let v4 = sat.add_vertex(SatPointer::NULL, ptr(p4));
+    let v5 = sat.add_vertex(SatPointer::NULL, ptr(p5));
+    let v6 = sat.add_vertex(SatPointer::NULL, ptr(p6));
+    let v7 = sat.add_vertex(SatPointer::NULL, ptr(p7));
+
+    let e0  = sat.add_edge(ptr(v0), 0.0, ptr(v1), length, SatPointer::NULL, ptr(crv_b0), Sense::Forward);
+    let e1  = sat.add_edge(ptr(v1), 0.0, ptr(v2), width,  SatPointer::NULL, ptr(crv_b1), Sense::Forward);
+    let e2  = sat.add_edge(ptr(v2), 0.0, ptr(v3), length, SatPointer::NULL, ptr(crv_b2), Sense::Forward);
+    let e3  = sat.add_edge(ptr(v3), 0.0, ptr(v0), width,  SatPointer::NULL, ptr(crv_b3), Sense::Forward);
+    let e4  = sat.add_edge(ptr(v4), 0.0, ptr(v5), length, SatPointer::NULL, ptr(crv_t0), Sense::Forward);
+    let e5  = sat.add_edge(ptr(v5), 0.0, ptr(v6), width,  SatPointer::NULL, ptr(crv_t1), Sense::Forward);
+    let e6  = sat.add_edge(ptr(v6), 0.0, ptr(v7), length, SatPointer::NULL, ptr(crv_t2), Sense::Forward);
+    let e7  = sat.add_edge(ptr(v7), 0.0, ptr(v4), width,  SatPointer::NULL, ptr(crv_t3), Sense::Forward);
+    let e8  = sat.add_edge(ptr(v0), 0.0, ptr(v4), height, SatPointer::NULL, ptr(crv_v0), Sense::Forward);
+    let e9  = sat.add_edge(ptr(v1), 0.0, ptr(v5), height, SatPointer::NULL, ptr(crv_v1), Sense::Forward);
+    let e10 = sat.add_edge(ptr(v2), 0.0, ptr(v6), height, SatPointer::NULL, ptr(crv_v2), Sense::Forward);
+    let e11 = sat.add_edge(ptr(v3), 0.0, ptr(v7), height, SatPointer::NULL, ptr(crv_v3), Sense::Forward);
+
+    let base = sat.records.len() as i32;
+    let co_base   = base;
+    let loop_base = base + 24;
+    let face_base = base + 30;
+    let shell_idx = base + 36;
+    let lump_idx  = base + 37;
+    let co = |i: i32| co_base + i;
+
+    // Bottom face
+    sat.add_coedge(ptr(co(1)),  ptr(co(3)),  ptr(co(8)),  ptr(e0), Sense::Reversed, ptr(loop_base));
+    sat.add_coedge(ptr(co(2)),  ptr(co(0)),  ptr(co(20)), ptr(e3), Sense::Reversed, ptr(loop_base));
+    sat.add_coedge(ptr(co(3)),  ptr(co(1)),  ptr(co(12)), ptr(e2), Sense::Reversed, ptr(loop_base));
+    sat.add_coedge(ptr(co(0)),  ptr(co(2)),  ptr(co(16)), ptr(e1), Sense::Reversed, ptr(loop_base));
+    // Top face
+    sat.add_coedge(ptr(co(5)),  ptr(co(7)),  ptr(co(10)), ptr(e4), Sense::Forward, ptr(loop_base + 1));
+    sat.add_coedge(ptr(co(6)),  ptr(co(4)),  ptr(co(18)), ptr(e5), Sense::Forward, ptr(loop_base + 1));
+    sat.add_coedge(ptr(co(7)),  ptr(co(5)),  ptr(co(14)), ptr(e6), Sense::Forward, ptr(loop_base + 1));
+    sat.add_coedge(ptr(co(4)),  ptr(co(6)),  ptr(co(22)), ptr(e7), Sense::Forward, ptr(loop_base + 1));
+    // Front face
+    sat.add_coedge(ptr(co(9)),  ptr(co(11)), ptr(co(0)),  ptr(e0), Sense::Forward,  ptr(loop_base + 2));
+    sat.add_coedge(ptr(co(10)), ptr(co(8)),  ptr(co(19)), ptr(e9), Sense::Forward,  ptr(loop_base + 2));
+    sat.add_coedge(ptr(co(11)), ptr(co(9)),  ptr(co(4)),  ptr(e4), Sense::Reversed, ptr(loop_base + 2));
+    sat.add_coedge(ptr(co(8)),  ptr(co(10)), ptr(co(21)), ptr(e8), Sense::Reversed, ptr(loop_base + 2));
+    // Back face
+    sat.add_coedge(ptr(co(13)), ptr(co(15)), ptr(co(2)),  ptr(e2),  Sense::Forward,  ptr(loop_base + 3));
+    sat.add_coedge(ptr(co(14)), ptr(co(12)), ptr(co(23)), ptr(e11), Sense::Forward,  ptr(loop_base + 3));
+    sat.add_coedge(ptr(co(15)), ptr(co(13)), ptr(co(6)),  ptr(e6),  Sense::Reversed, ptr(loop_base + 3));
+    sat.add_coedge(ptr(co(12)), ptr(co(14)), ptr(co(17)), ptr(e10), Sense::Reversed, ptr(loop_base + 3));
+    // Right face
+    sat.add_coedge(ptr(co(17)), ptr(co(19)), ptr(co(3)),  ptr(e1),  Sense::Forward,  ptr(loop_base + 4));
+    sat.add_coedge(ptr(co(18)), ptr(co(16)), ptr(co(15)), ptr(e10), Sense::Forward,  ptr(loop_base + 4));
+    sat.add_coedge(ptr(co(19)), ptr(co(17)), ptr(co(5)),  ptr(e5),  Sense::Reversed, ptr(loop_base + 4));
+    sat.add_coedge(ptr(co(16)), ptr(co(18)), ptr(co(9)),  ptr(e9),  Sense::Reversed, ptr(loop_base + 4));
+    // Left face
+    sat.add_coedge(ptr(co(21)), ptr(co(23)), ptr(co(1)),  ptr(e3),  Sense::Forward,  ptr(loop_base + 5));
+    sat.add_coedge(ptr(co(22)), ptr(co(20)), ptr(co(11)), ptr(e8),  Sense::Forward,  ptr(loop_base + 5));
+    sat.add_coedge(ptr(co(23)), ptr(co(21)), ptr(co(7)),  ptr(e7),  Sense::Reversed, ptr(loop_base + 5));
+    sat.add_coedge(ptr(co(20)), ptr(co(22)), ptr(co(13)), ptr(e11), Sense::Reversed, ptr(loop_base + 5));
+
+    sat.add_loop(SatPointer::NULL, ptr(co(0)),  ptr(face_base));
+    sat.add_loop(SatPointer::NULL, ptr(co(4)),  ptr(face_base + 1));
+    sat.add_loop(SatPointer::NULL, ptr(co(8)),  ptr(face_base + 2));
+    sat.add_loop(SatPointer::NULL, ptr(co(12)), ptr(face_base + 3));
+    sat.add_loop(SatPointer::NULL, ptr(co(16)), ptr(face_base + 4));
+    sat.add_loop(SatPointer::NULL, ptr(co(20)), ptr(face_base + 5));
+
+    sat.add_face(ptr(face_base + 1), ptr(loop_base),     ptr(shell_idx), ptr(surf_bottom), Sense::Forward, Sidedness::Single);
+    sat.add_face(ptr(face_base + 2), ptr(loop_base + 1), ptr(shell_idx), ptr(surf_top),    Sense::Forward, Sidedness::Single);
+    sat.add_face(ptr(face_base + 3), ptr(loop_base + 2), ptr(shell_idx), ptr(surf_front),  Sense::Forward, Sidedness::Single);
+    sat.add_face(ptr(face_base + 4), ptr(loop_base + 3), ptr(shell_idx), ptr(surf_back),   Sense::Forward, Sidedness::Single);
+    sat.add_face(ptr(face_base + 5), ptr(loop_base + 4), ptr(shell_idx), ptr(surf_right),  Sense::Forward, Sidedness::Single);
+    sat.add_face(SatPointer::NULL,   ptr(loop_base + 5), ptr(shell_idx), ptr(surf_left),   Sense::Forward, Sidedness::Single);
+
+    sat.add_shell(ptr(face_base), ptr(lump_idx));
+    sat.add_lump(ptr(shell_idx), body_idx);
+
+    if let Some(body_rec) = sat.record_mut(0) {
+        body_rec.tokens[1] = SatToken::Pointer(ptr(lump_idx));
+    }
+    sat
+}
+
+/// Build a right triangular prism (wedge) with one corner at `origin`.
+///
+/// The wedge has a right-triangle cross-section in the XY plane:
+/// - Leg along X with length `length`
+/// - Leg along Y with length `width`
+/// - Hypotenuse connecting (length, 0) to (0, width)
+///
+/// Extruded along Z by `height`.
+pub fn build_wedge(origin: [f64; 3], length: f64, width: f64, height: f64) -> SatDocument {
+    let mut sat = SatDocument::new_body();
+    let body_idx = SatPointer::new(0);
+    let [ox, oy, oz] = origin;
+
+    let hyp_len = (length * length + width * width).sqrt();
+    let s = 1.0 / hyp_len; // normalization factor
+    let nx = width * s;     // hypotenuse normal X component
+    let ny = length * s;    // hypotenuse normal Y component
+
+    let p_a = sat.add_point(ox,          oy,         oz);
+    let p_b = sat.add_point(ox + length, oy,         oz);
+    let p_c = sat.add_point(ox,          oy + width, oz);
+    let p_d = sat.add_point(ox,          oy,         oz + height);
+    let p_e = sat.add_point(ox + length, oy,         oz + height);
+    let p_f = sat.add_point(ox,          oy + width, oz + height);
+
+    let surf_bot = sat.add_plane_surface([ox, oy, oz],          [0.0, 0.0, -1.0], [1.0, 0.0, 0.0]);
+    let surf_top = sat.add_plane_surface([ox, oy, oz + height], [0.0, 0.0,  1.0], [1.0, 0.0, 0.0]);
+    let surf_frt = sat.add_plane_surface([ox, oy, oz],          [0.0, -1.0, 0.0], [1.0, 0.0, 0.0]);
+    let surf_lft = sat.add_plane_surface([ox, oy, oz],          [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
+    let hyp_mid = [ox + length / 2.0, oy + width / 2.0, oz];
+    let surf_hyp = sat.add_plane_surface(hyp_mid, [nx, ny, 0.0], [0.0, 0.0, 1.0]);
+
+    // Hypotenuse edge direction (unit vector from B to C)
+    let hx = -length / hyp_len;
+    let hy = width / hyp_len;
+
+    let crv0 = sat.add_straight_curve([ox, oy, oz],               [1.0, 0.0, 0.0]);
+    let crv1 = sat.add_straight_curve([ox + length, oy, oz],      [hx,  hy,  0.0]);
+    let crv2 = sat.add_straight_curve([ox, oy + width, oz],       [0.0, -1.0, 0.0]);
+    let crv3 = sat.add_straight_curve([ox, oy, oz + height],      [1.0, 0.0, 0.0]);
+    let crv4 = sat.add_straight_curve([ox + length, oy, oz + height], [hx, hy, 0.0]);
+    let crv5 = sat.add_straight_curve([ox, oy + width, oz + height], [0.0, -1.0, 0.0]);
+    let crv6 = sat.add_straight_curve([ox, oy, oz],               [0.0, 0.0, 1.0]);
+    let crv7 = sat.add_straight_curve([ox + length, oy, oz],      [0.0, 0.0, 1.0]);
+    let crv8 = sat.add_straight_curve([ox, oy + width, oz],       [0.0, 0.0, 1.0]);
+
+    let v_a = sat.add_vertex(SatPointer::NULL, ptr(p_a));
+    let v_b = sat.add_vertex(SatPointer::NULL, ptr(p_b));
+    let v_c = sat.add_vertex(SatPointer::NULL, ptr(p_c));
+    let v_d = sat.add_vertex(SatPointer::NULL, ptr(p_d));
+    let v_e = sat.add_vertex(SatPointer::NULL, ptr(p_e));
+    let v_f = sat.add_vertex(SatPointer::NULL, ptr(p_f));
+
+    let e0 = sat.add_edge(ptr(v_a), 0.0, ptr(v_b), length,  SatPointer::NULL, ptr(crv0), Sense::Forward);
+    let e1 = sat.add_edge(ptr(v_b), 0.0, ptr(v_c), hyp_len, SatPointer::NULL, ptr(crv1), Sense::Forward);
+    let e2 = sat.add_edge(ptr(v_c), 0.0, ptr(v_a), width,   SatPointer::NULL, ptr(crv2), Sense::Forward);
+    let e3 = sat.add_edge(ptr(v_d), 0.0, ptr(v_e), length,  SatPointer::NULL, ptr(crv3), Sense::Forward);
+    let e4 = sat.add_edge(ptr(v_e), 0.0, ptr(v_f), hyp_len, SatPointer::NULL, ptr(crv4), Sense::Forward);
+    let e5 = sat.add_edge(ptr(v_f), 0.0, ptr(v_d), width,   SatPointer::NULL, ptr(crv5), Sense::Forward);
+    let e6 = sat.add_edge(ptr(v_a), 0.0, ptr(v_d), height,  SatPointer::NULL, ptr(crv6), Sense::Forward);
+    let e7 = sat.add_edge(ptr(v_b), 0.0, ptr(v_e), height,  SatPointer::NULL, ptr(crv7), Sense::Forward);
+    let e8 = sat.add_edge(ptr(v_c), 0.0, ptr(v_f), height,  SatPointer::NULL, ptr(crv8), Sense::Forward);
+
+    let base = sat.records.len() as i32;
+    let co = |i: i32| base + i;
+    let loop_base = base + 18;
+    let face_base = base + 23;
+    let shell_idx = base + 28;
+    let lump_idx  = base + 29;
+
+    // Bottom: A→C→B
+    sat.add_coedge(ptr(co(1)),  ptr(co(2)),  ptr(co(13)), ptr(e2), Sense::Reversed, ptr(loop_base));
+    sat.add_coedge(ptr(co(2)),  ptr(co(0)),  ptr(co(14)), ptr(e1), Sense::Reversed, ptr(loop_base));
+    sat.add_coedge(ptr(co(0)),  ptr(co(1)),  ptr(co(6)),  ptr(e0), Sense::Reversed, ptr(loop_base));
+    // Top: D→E→F
+    sat.add_coedge(ptr(co(4)),  ptr(co(5)),  ptr(co(8)),  ptr(e3), Sense::Forward, ptr(loop_base + 1));
+    sat.add_coedge(ptr(co(5)),  ptr(co(3)),  ptr(co(16)), ptr(e4), Sense::Forward, ptr(loop_base + 1));
+    sat.add_coedge(ptr(co(3)),  ptr(co(4)),  ptr(co(11)), ptr(e5), Sense::Forward, ptr(loop_base + 1));
+    // Front: A→B→E→D
+    sat.add_coedge(ptr(co(7)),  ptr(co(9)),  ptr(co(2)),  ptr(e0), Sense::Forward,  ptr(loop_base + 2));
+    sat.add_coedge(ptr(co(8)),  ptr(co(6)),  ptr(co(17)), ptr(e7), Sense::Forward,  ptr(loop_base + 2));
+    sat.add_coedge(ptr(co(9)),  ptr(co(7)),  ptr(co(3)),  ptr(e3), Sense::Reversed, ptr(loop_base + 2));
+    sat.add_coedge(ptr(co(6)),  ptr(co(8)),  ptr(co(10)), ptr(e6), Sense::Reversed, ptr(loop_base + 2));
+    // Left: A→D→F→C
+    sat.add_coedge(ptr(co(11)), ptr(co(13)), ptr(co(9)),  ptr(e6), Sense::Forward,  ptr(loop_base + 3));
+    sat.add_coedge(ptr(co(12)), ptr(co(10)), ptr(co(5)),  ptr(e5), Sense::Reversed, ptr(loop_base + 3));
+    sat.add_coedge(ptr(co(13)), ptr(co(11)), ptr(co(15)), ptr(e8), Sense::Reversed, ptr(loop_base + 3));
+    sat.add_coedge(ptr(co(10)), ptr(co(12)), ptr(co(0)),  ptr(e2), Sense::Forward,  ptr(loop_base + 3));
+    // Hypotenuse: B→C→F→E
+    sat.add_coedge(ptr(co(15)), ptr(co(17)), ptr(co(1)),  ptr(e1), Sense::Forward,  ptr(loop_base + 4));
+    sat.add_coedge(ptr(co(16)), ptr(co(14)), ptr(co(12)), ptr(e8), Sense::Forward,  ptr(loop_base + 4));
+    sat.add_coedge(ptr(co(17)), ptr(co(15)), ptr(co(4)),  ptr(e4), Sense::Reversed, ptr(loop_base + 4));
+    sat.add_coedge(ptr(co(14)), ptr(co(16)), ptr(co(7)),  ptr(e7), Sense::Reversed, ptr(loop_base + 4));
+
+    sat.add_loop(SatPointer::NULL, ptr(co(0)),  ptr(face_base));
+    sat.add_loop(SatPointer::NULL, ptr(co(3)),  ptr(face_base + 1));
+    sat.add_loop(SatPointer::NULL, ptr(co(6)),  ptr(face_base + 2));
+    sat.add_loop(SatPointer::NULL, ptr(co(10)), ptr(face_base + 3));
+    sat.add_loop(SatPointer::NULL, ptr(co(14)), ptr(face_base + 4));
+
+    sat.add_face(ptr(face_base + 1), ptr(loop_base),     ptr(shell_idx), ptr(surf_bot), Sense::Forward, Sidedness::Single);
+    sat.add_face(ptr(face_base + 2), ptr(loop_base + 1), ptr(shell_idx), ptr(surf_top), Sense::Forward, Sidedness::Single);
+    sat.add_face(ptr(face_base + 3), ptr(loop_base + 2), ptr(shell_idx), ptr(surf_frt), Sense::Forward, Sidedness::Single);
+    sat.add_face(ptr(face_base + 4), ptr(loop_base + 3), ptr(shell_idx), ptr(surf_lft), Sense::Forward, Sidedness::Single);
+    sat.add_face(SatPointer::NULL,   ptr(loop_base + 4), ptr(shell_idx), ptr(surf_hyp), Sense::Forward, Sidedness::Single);
+
+    sat.add_shell(ptr(face_base), ptr(lump_idx));
+    sat.add_lump(ptr(shell_idx), body_idx);
+
+    if let Some(body_rec) = sat.record_mut(0) {
+        body_rec.tokens[1] = SatToken::Pointer(ptr(lump_idx));
+    }
+    sat
+}
+
+/// Build a square-base pyramid with its base centered at `center`.
+///
+/// - `base_size`: side length of the square base
+/// - `height`: distance from the base plane to the apex along Z
+pub fn build_pyramid(center: [f64; 3], base_size: f64, height: f64) -> SatDocument {
+    let mut sat = SatDocument::new_body();
+    let body_idx = SatPointer::new(0);
+    let [cx, cy, cz] = center;
+
+    let hb = base_size / 2.0;
+    let s5 = (1.0 + (height / hb).powi(2)).sqrt(); // slant normalization
+    let n_horiz = 1.0 / s5;
+    let n_vert = (height / hb) / s5;
+    let lat_len = (hb * hb + hb * hb + height * height).sqrt();
+    let s6 = lat_len; // edge length from corner to apex
+
+    // Lateral edge direction factors
+    let inv_lat = 1.0 / lat_len;
+
+    let p_a = sat.add_point(cx - hb, cy - hb, cz);
+    let p_b = sat.add_point(cx + hb, cy - hb, cz);
+    let p_c = sat.add_point(cx + hb, cy + hb, cz);
+    let p_d = sat.add_point(cx - hb, cy + hb, cz);
+    let p_e = sat.add_point(cx,      cy,      cz + height);
+
+    let surf_base  = sat.add_plane_surface([cx, cy, cz],      [0.0,     0.0,     -1.0],   [1.0, 0.0, 0.0]);
+    let surf_front = sat.add_plane_surface([cx, cy - hb, cz], [0.0,    -n_horiz, n_vert], [1.0, 0.0, 0.0]);
+    let surf_right = sat.add_plane_surface([cx + hb, cy, cz], [n_horiz, 0.0,     n_vert], [0.0, 1.0, 0.0]);
+    let surf_back  = sat.add_plane_surface([cx, cy + hb, cz], [0.0,     n_horiz, n_vert], [1.0, 0.0, 0.0]);
+    let surf_left  = sat.add_plane_surface([cx - hb, cy, cz], [-n_horiz,0.0,     n_vert], [0.0, 1.0, 0.0]);
+
+    let crv0 = sat.add_straight_curve([cx - hb, cy - hb, cz], [1.0, 0.0, 0.0]);
+    let crv1 = sat.add_straight_curve([cx + hb, cy - hb, cz], [0.0, 1.0, 0.0]);
+    let crv2 = sat.add_straight_curve([cx + hb, cy + hb, cz], [-1.0, 0.0, 0.0]);
+    let crv3 = sat.add_straight_curve([cx - hb, cy + hb, cz], [0.0, -1.0, 0.0]);
+    let crv4 = sat.add_straight_curve([cx - hb, cy - hb, cz], [ hb * inv_lat,  hb * inv_lat, height * inv_lat]);
+    let crv5 = sat.add_straight_curve([cx + hb, cy - hb, cz], [-hb * inv_lat,  hb * inv_lat, height * inv_lat]);
+    let crv6 = sat.add_straight_curve([cx + hb, cy + hb, cz], [-hb * inv_lat, -hb * inv_lat, height * inv_lat]);
+    let crv7 = sat.add_straight_curve([cx - hb, cy + hb, cz], [ hb * inv_lat, -hb * inv_lat, height * inv_lat]);
+
+    let v_a = sat.add_vertex(SatPointer::NULL, ptr(p_a));
+    let v_b = sat.add_vertex(SatPointer::NULL, ptr(p_b));
+    let v_c = sat.add_vertex(SatPointer::NULL, ptr(p_c));
+    let v_d = sat.add_vertex(SatPointer::NULL, ptr(p_d));
+    let v_e = sat.add_vertex(SatPointer::NULL, ptr(p_e));
+
+    let e0 = sat.add_edge(ptr(v_a), 0.0, ptr(v_b), base_size, SatPointer::NULL, ptr(crv0), Sense::Forward);
+    let e1 = sat.add_edge(ptr(v_b), 0.0, ptr(v_c), base_size, SatPointer::NULL, ptr(crv1), Sense::Forward);
+    let e2 = sat.add_edge(ptr(v_c), 0.0, ptr(v_d), base_size, SatPointer::NULL, ptr(crv2), Sense::Forward);
+    let e3 = sat.add_edge(ptr(v_d), 0.0, ptr(v_a), base_size, SatPointer::NULL, ptr(crv3), Sense::Forward);
+    let e4 = sat.add_edge(ptr(v_a), 0.0, ptr(v_e), s6,        SatPointer::NULL, ptr(crv4), Sense::Forward);
+    let e5 = sat.add_edge(ptr(v_b), 0.0, ptr(v_e), s6,        SatPointer::NULL, ptr(crv5), Sense::Forward);
+    let e6 = sat.add_edge(ptr(v_c), 0.0, ptr(v_e), s6,        SatPointer::NULL, ptr(crv6), Sense::Forward);
+    let e7 = sat.add_edge(ptr(v_d), 0.0, ptr(v_e), s6,        SatPointer::NULL, ptr(crv7), Sense::Forward);
+
+    let base = sat.records.len() as i32;
+    let co = |i: i32| base + i;
+    let loop_base = base + 16;
+    let face_base = base + 21;
+    let shell_idx = base + 26;
+    let lump_idx  = base + 27;
+
+    // Base: A→D→C→B
+    sat.add_coedge(ptr(co(1)),  ptr(co(3)),  ptr(co(15)), ptr(e3), Sense::Reversed, ptr(loop_base));
+    sat.add_coedge(ptr(co(2)),  ptr(co(0)),  ptr(co(10)), ptr(e2), Sense::Reversed, ptr(loop_base));
+    sat.add_coedge(ptr(co(3)),  ptr(co(1)),  ptr(co(7)),  ptr(e1), Sense::Reversed, ptr(loop_base));
+    sat.add_coedge(ptr(co(0)),  ptr(co(2)),  ptr(co(4)),  ptr(e0), Sense::Reversed, ptr(loop_base));
+    // Front: A→B→E
+    sat.add_coedge(ptr(co(5)),  ptr(co(6)),  ptr(co(3)),  ptr(e0), Sense::Forward,  ptr(loop_base + 1));
+    sat.add_coedge(ptr(co(6)),  ptr(co(4)),  ptr(co(9)),  ptr(e5), Sense::Forward,  ptr(loop_base + 1));
+    sat.add_coedge(ptr(co(4)),  ptr(co(5)),  ptr(co(14)), ptr(e4), Sense::Reversed, ptr(loop_base + 1));
+    // Right: B→C→E
+    sat.add_coedge(ptr(co(8)),  ptr(co(9)),  ptr(co(2)),  ptr(e1), Sense::Forward,  ptr(loop_base + 2));
+    sat.add_coedge(ptr(co(9)),  ptr(co(7)),  ptr(co(12)), ptr(e6), Sense::Forward,  ptr(loop_base + 2));
+    sat.add_coedge(ptr(co(7)),  ptr(co(8)),  ptr(co(5)),  ptr(e5), Sense::Reversed, ptr(loop_base + 2));
+    // Back: C→D→E
+    sat.add_coedge(ptr(co(11)), ptr(co(12)), ptr(co(1)),  ptr(e2), Sense::Forward,  ptr(loop_base + 3));
+    sat.add_coedge(ptr(co(12)), ptr(co(10)), ptr(co(15)), ptr(e7), Sense::Forward,  ptr(loop_base + 3));
+    sat.add_coedge(ptr(co(10)), ptr(co(11)), ptr(co(8)),  ptr(e6), Sense::Reversed, ptr(loop_base + 3));
+    // Left: D→A→E
+    sat.add_coedge(ptr(co(14)), ptr(co(15)), ptr(co(0)),  ptr(e3), Sense::Forward,  ptr(loop_base + 4));
+    sat.add_coedge(ptr(co(15)), ptr(co(13)), ptr(co(6)),  ptr(e4), Sense::Forward,  ptr(loop_base + 4));
+    sat.add_coedge(ptr(co(13)), ptr(co(14)), ptr(co(11)), ptr(e7), Sense::Reversed, ptr(loop_base + 4));
+
+    sat.add_loop(SatPointer::NULL, ptr(co(0)),  ptr(face_base));
+    sat.add_loop(SatPointer::NULL, ptr(co(4)),  ptr(face_base + 1));
+    sat.add_loop(SatPointer::NULL, ptr(co(7)),  ptr(face_base + 2));
+    sat.add_loop(SatPointer::NULL, ptr(co(10)), ptr(face_base + 3));
+    sat.add_loop(SatPointer::NULL, ptr(co(13)), ptr(face_base + 4));
+
+    sat.add_face(ptr(face_base + 1), ptr(loop_base),     ptr(shell_idx), ptr(surf_base),  Sense::Forward, Sidedness::Single);
+    sat.add_face(ptr(face_base + 2), ptr(loop_base + 1), ptr(shell_idx), ptr(surf_front), Sense::Forward, Sidedness::Single);
+    sat.add_face(ptr(face_base + 3), ptr(loop_base + 2), ptr(shell_idx), ptr(surf_right), Sense::Forward, Sidedness::Single);
+    sat.add_face(ptr(face_base + 4), ptr(loop_base + 3), ptr(shell_idx), ptr(surf_back),  Sense::Forward, Sidedness::Single);
+    sat.add_face(SatPointer::NULL,   ptr(loop_base + 4), ptr(shell_idx), ptr(surf_left),  Sense::Forward, Sidedness::Single);
+
+    sat.add_shell(ptr(face_base), ptr(lump_idx));
+    sat.add_lump(ptr(shell_idx), body_idx);
+
+    if let Some(body_rec) = sat.record_mut(0) {
+        body_rec.tokens[1] = SatToken::Pointer(ptr(lump_idx));
+    }
+    sat
+}
+
+/// Build a cylinder centered at `center` with the given `radius` and `height`.
+///
+/// The cylinder axis is along Z. The base sits at `center.z` and the top at
+/// `center.z + height`.
+pub fn build_cylinder(center: [f64; 3], radius: f64, height: f64) -> SatDocument {
+    let mut sat = SatDocument::new_body();
+    let body_idx = SatPointer::new(0);
+    let [cx, cy, cz] = center;
+    let tau = std::f64::consts::TAU;
+
+    let p0 = sat.add_point(cx + radius, cy, cz);
+    let p1 = sat.add_point(cx + radius, cy, cz + height);
+
+    let surf_bot = sat.add_plane_surface([cx, cy, cz],          [0.0, 0.0, -1.0], [1.0, 0.0, 0.0]);
+    let surf_top = sat.add_plane_surface([cx, cy, cz + height], [0.0, 0.0,  1.0], [1.0, 0.0, 0.0]);
+    let surf_cyl = sat.add_cone_surface(
+        [cx, cy, cz], [0.0, 0.0, 1.0], [radius, 0.0, 0.0],
+        1.0, 1.0, 0.0,
+    );
+
+    let crv_bot  = sat.add_ellipse_curve([cx, cy, cz],          [0.0, 0.0, 1.0], [radius, 0.0, 0.0], 1.0);
+    let crv_top  = sat.add_ellipse_curve([cx, cy, cz + height], [0.0, 0.0, 1.0], [radius, 0.0, 0.0], 1.0);
+    let crv_seam = sat.add_straight_curve([cx + radius, cy, cz], [0.0, 0.0, 1.0]);
+
+    let v0 = sat.add_vertex(SatPointer::NULL, ptr(p0));
+    let v1 = sat.add_vertex(SatPointer::NULL, ptr(p1));
+
+    let e_bot  = sat.add_edge(ptr(v0), 0.0, ptr(v0), tau,    SatPointer::NULL, ptr(crv_bot),  Sense::Forward);
+    let e_top  = sat.add_edge(ptr(v1), 0.0, ptr(v1), tau,    SatPointer::NULL, ptr(crv_top),  Sense::Forward);
+    let e_seam = sat.add_edge(ptr(v0), 0.0, ptr(v1), height, SatPointer::NULL, ptr(crv_seam), Sense::Forward);
+
+    let base = sat.records.len() as i32;
+    let co = |i: i32| base + i;
+    let loop_base = base + 6;
+    let face_base = base + 9;
+    let shell_idx = base + 12;
+    let lump_idx  = base + 13;
+
+    sat.add_coedge(ptr(co(0)), ptr(co(0)), ptr(co(4)), ptr(e_bot), Sense::Reversed, ptr(loop_base));
+    sat.add_coedge(ptr(co(1)), ptr(co(1)), ptr(co(2)), ptr(e_top), Sense::Forward, ptr(loop_base + 1));
+    sat.add_coedge(ptr(co(5)), ptr(co(3)), ptr(co(1)), ptr(e_top),  Sense::Reversed, ptr(loop_base + 2));
+    sat.add_coedge(ptr(co(2)), ptr(co(4)), ptr(co(5)), ptr(e_seam), Sense::Forward,  ptr(loop_base + 2));
+    sat.add_coedge(ptr(co(3)), ptr(co(5)), ptr(co(0)), ptr(e_bot),  Sense::Forward,  ptr(loop_base + 2));
+    sat.add_coedge(ptr(co(4)), ptr(co(2)), ptr(co(3)), ptr(e_seam), Sense::Reversed, ptr(loop_base + 2));
+
+    sat.add_loop(SatPointer::NULL, ptr(co(0)), ptr(face_base));
+    sat.add_loop(SatPointer::NULL, ptr(co(1)), ptr(face_base + 1));
+    sat.add_loop(SatPointer::NULL, ptr(co(2)), ptr(face_base + 2));
+
+    sat.add_face(ptr(face_base + 1), ptr(loop_base),     ptr(shell_idx), ptr(surf_bot), Sense::Forward, Sidedness::Single);
+    sat.add_face(ptr(face_base + 2), ptr(loop_base + 1), ptr(shell_idx), ptr(surf_top), Sense::Forward, Sidedness::Single);
+    sat.add_face(SatPointer::NULL,   ptr(loop_base + 2), ptr(shell_idx), ptr(surf_cyl), Sense::Forward, Sidedness::Single);
+
+    sat.add_shell(ptr(face_base), ptr(lump_idx));
+    sat.add_lump(ptr(shell_idx), body_idx);
+
+    if let Some(body_rec) = sat.record_mut(0) {
+        body_rec.tokens[1] = SatToken::Pointer(ptr(lump_idx));
+    }
+    sat
+}
+
+/// Build a cone with its base centered at `center`.
+///
+/// - `radius`: radius of the circular base
+/// - `height`: distance from the base to the apex along Z
+///
+/// The apex is at `center.z + height`.
+pub fn build_cone(center: [f64; 3], radius: f64, height: f64) -> SatDocument {
+    let mut sat = SatDocument::new_body();
+    let body_idx = SatPointer::new(0);
+    let [cx, cy, cz] = center;
+    let tau = std::f64::consts::TAU;
+    let hyp = (radius * radius + height * height).sqrt();
+    let sin_half = -radius / hyp;
+    let cos_half = height / hyp;
+
+    let p0 = sat.add_point(cx + radius, cy, cz);
+
+    let surf_base = sat.add_plane_surface([cx, cy, cz], [0.0, 0.0, -1.0], [1.0, 0.0, 0.0]);
+    let surf_cone = sat.add_cone_surface(
+        [cx, cy, cz], [0.0, 0.0, 1.0], [radius, 0.0, 0.0],
+        1.0, cos_half, sin_half,
+    );
+
+    let crv_base = sat.add_ellipse_curve(
+        [cx, cy, cz], [0.0, 0.0, 1.0], [radius, 0.0, 0.0], 1.0,
+    );
+
+    let v0 = sat.add_vertex(SatPointer::NULL, ptr(p0));
+    let e0 = sat.add_edge(ptr(v0), 0.0, ptr(v0), tau, SatPointer::NULL, ptr(crv_base), Sense::Forward);
+
+    let base = sat.records.len() as i32;
+    let co = |i: i32| base + i;
+    let loop_base = base + 2;
+    let face_base = base + 4;
+    let shell_idx = base + 6;
+    let lump_idx  = base + 7;
+
+    sat.add_coedge(ptr(co(0)), ptr(co(0)), ptr(co(1)), ptr(e0), Sense::Reversed, ptr(loop_base));
+    sat.add_coedge(ptr(co(1)), ptr(co(1)), ptr(co(0)), ptr(e0), Sense::Forward,  ptr(loop_base + 1));
+
+    sat.add_loop(SatPointer::NULL, ptr(co(0)), ptr(face_base));
+    sat.add_loop(SatPointer::NULL, ptr(co(1)), ptr(face_base + 1));
+
+    sat.add_face(ptr(face_base + 1), ptr(loop_base),     ptr(shell_idx), ptr(surf_base), Sense::Forward, Sidedness::Single);
+    sat.add_face(SatPointer::NULL,   ptr(loop_base + 1), ptr(shell_idx), ptr(surf_cone), Sense::Forward, Sidedness::Single);
+
+    sat.add_shell(ptr(face_base), ptr(lump_idx));
+    sat.add_lump(ptr(shell_idx), body_idx);
+
+    if let Some(body_rec) = sat.record_mut(0) {
+        body_rec.tokens[1] = SatToken::Pointer(ptr(lump_idx));
+    }
+    sat
+}
+
+/// Build a sphere centered at `center` with the given `radius`.
+///
+/// Produces a single-face closed surface (no loop entity).
+pub fn build_sphere(center: [f64; 3], radius: f64) -> SatDocument {
+    let mut sat = SatDocument::new_body();
+    let body_idx = SatPointer::new(0);
+
+    let surf = sat.add_sphere_surface(center, radius, [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+
+    let base = sat.records.len() as i32;
+    let face_idx  = base;
+    let shell_idx = base + 1;
+    let lump_idx  = base + 2;
+
+    sat.add_face(SatPointer::NULL, SatPointer::NULL, ptr(shell_idx), ptr(surf), Sense::Forward, Sidedness::Single);
+    sat.add_shell(ptr(face_idx), ptr(lump_idx));
+    sat.add_lump(ptr(shell_idx), body_idx);
+
+    if let Some(body_rec) = sat.record_mut(0) {
+        body_rec.tokens[1] = SatToken::Pointer(ptr(lump_idx));
+    }
+    sat
+}
+
+/// Build a torus centered at `center` with the given radii.
+///
+/// - `major_radius`: distance from the center to the tube center
+/// - `minor_radius`: radius of the tube
+///
+/// The torus axis is along Z. Produces a single-face closed surface (no loop
+/// entity).
+pub fn build_torus(center: [f64; 3], major_radius: f64, minor_radius: f64) -> SatDocument {
+    let mut sat = SatDocument::new_body();
+    let body_idx = SatPointer::new(0);
+
+    let surf = sat.add_torus_surface(
+        center, [0.0, 0.0, 1.0], major_radius, minor_radius, [1.0, 0.0, 0.0],
+    );
+
+    let base = sat.records.len() as i32;
+    let face_idx  = base;
+    let shell_idx = base + 1;
+    let lump_idx  = base + 2;
+
+    sat.add_face(SatPointer::NULL, SatPointer::NULL, ptr(shell_idx), ptr(surf), Sense::Forward, Sidedness::Single);
+    sat.add_shell(ptr(face_idx), ptr(lump_idx));
+    sat.add_lump(ptr(shell_idx), body_idx);
+
+    if let Some(body_rec) = sat.record_mut(0) {
+        body_rec.tokens[1] = SatToken::Pointer(ptr(lump_idx));
+    }
+    sat
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn box_topology() {
+        let sat = build_box([0.0, 0.0, 0.0], 10.0, 10.0, 10.0);
+        assert_eq!(sat.faces().len(), 6);
+        assert_eq!(sat.edges().len(), 12);
+        assert_eq!(sat.vertices().len(), 8);
+        assert!(sat.validate().is_empty(), "box validation errors: {:?}", sat.validate());
+    }
+
+    #[test]
+    fn box_offset_center() {
+        let sat = build_box([5.0, 5.0, 5.0], 4.0, 6.0, 8.0);
+        assert_eq!(sat.faces().len(), 6);
+        assert!(sat.validate().is_empty());
+    }
+
+    #[test]
+    fn wedge_topology() {
+        let sat = build_wedge([0.0, 0.0, 0.0], 10.0, 10.0, 10.0);
+        assert_eq!(sat.faces().len(), 5);
+        assert_eq!(sat.edges().len(), 9);
+        assert_eq!(sat.vertices().len(), 6);
+        assert!(sat.validate().is_empty(), "wedge validation errors: {:?}", sat.validate());
+    }
+
+    #[test]
+    fn pyramid_topology() {
+        let sat = build_pyramid([0.0, 0.0, 0.0], 10.0, 10.0);
+        assert_eq!(sat.faces().len(), 5);
+        assert_eq!(sat.edges().len(), 8);
+        assert_eq!(sat.vertices().len(), 5);
+        assert!(sat.validate().is_empty(), "pyramid validation errors: {:?}", sat.validate());
+    }
+
+    #[test]
+    fn cylinder_topology() {
+        let sat = build_cylinder([0.0, 0.0, 0.0], 5.0, 10.0);
+        assert_eq!(sat.faces().len(), 3);
+        assert_eq!(sat.edges().len(), 3);
+        assert_eq!(sat.vertices().len(), 2);
+        assert!(sat.validate().is_empty(), "cylinder validation errors: {:?}", sat.validate());
+    }
+
+    #[test]
+    fn cone_topology() {
+        let sat = build_cone([0.0, 0.0, 0.0], 5.0, 10.0);
+        assert_eq!(sat.faces().len(), 2);
+        assert_eq!(sat.edges().len(), 1);
+        assert_eq!(sat.vertices().len(), 1);
+        assert!(sat.validate().is_empty(), "cone validation errors: {:?}", sat.validate());
+    }
+
+    #[test]
+    fn sphere_topology() {
+        let sat = build_sphere([0.0, 0.0, 0.0], 5.0);
+        assert_eq!(sat.faces().len(), 1);
+        assert_eq!(sat.edges().len(), 0);
+        assert_eq!(sat.vertices().len(), 0);
+        assert!(sat.validate().is_empty(), "sphere validation errors: {:?}", sat.validate());
+    }
+
+    #[test]
+    fn torus_topology() {
+        let sat = build_torus([0.0, 0.0, 0.0], 5.0, 2.0);
+        assert_eq!(sat.faces().len(), 1);
+        assert_eq!(sat.edges().len(), 0);
+        assert_eq!(sat.vertices().len(), 0);
+        assert!(sat.validate().is_empty(), "torus validation errors: {:?}", sat.validate());
+    }
+}
