@@ -2065,6 +2065,11 @@ impl<'a> SectionReader<'a> {
             92 | 160 | 310 => {
                 Ok(true)
             }
+            // Paper space flag (67 = 1 means entity is in paper space).
+            // Ownership is determined by code 330, so we just consume this.
+            67 => {
+                Ok(true)
+            }
             _ => Ok(false),
         }
     }

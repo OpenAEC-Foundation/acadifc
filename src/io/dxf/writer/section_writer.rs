@@ -39,6 +39,8 @@ pub struct SectionWriter<'a, W: DxfStreamWriter> {
     dxf_version: DxfVersion,
     /// Collected SAB entries: (entity_handle, sab_binary_data) for ACDSDATA section
     sab_entries: Vec<(Handle, Vec<u8>)>,
+    /// Whether currently writing paper space entities (for group code 67)
+    writing_paper_space: bool,
 }
 
 impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
@@ -50,6 +52,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             handle_seed,
             dxf_version: DxfVersion::AC1024,
             sab_entries: Vec::new(),
+            writing_paper_space: false,
         }
     }
 
@@ -763,8 +766,8 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_handle(5, block_record.block_entity_handle)?;
         self.writer.write_handle(330, owner)?;
         self.writer.write_subclass("AcDbEntity")?;
-        // Paper space flag (group code 67) - 1 for paper space
-        if block_record.is_paper_space() {
+        // Paper space flag (group code 67) - only for active paper space (*Paper_Space)
+        if block_record.name() == "*Paper_Space" {
             self.writer.write_i16(67, 1)?;
         }
         self.writer.write_string(8, "0")?;
@@ -778,8 +781,12 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // Group code 1 is XRef path (empty for normal blocks)
         self.writer.write_string(1, "")?;
 
-        // Write entities in the block (only for non-model/paper space blocks)
-        if !block_record.is_model_space() && !block_record.is_paper_space() {
+        // Write entities inside block definition:
+        // - Model space entities go to ENTITIES section (not here)
+        // - Active paper space (*Paper_Space) entities go to ENTITIES section (not here)
+        // - Non-active paper spaces (*Paper_Space0, *Paper_Space1, ...) write entities here
+        // - Other blocks (inserts etc.) also write entities here
+        if !block_record.is_model_space() && block_record.name() != "*Paper_Space" {
             for entity in &block_record.entities {
                 self.write_entity_with_owner(entity, owner)?;
             }
@@ -790,8 +797,8 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_handle(5, block_record.block_end_handle)?;
         self.writer.write_handle(330, owner)?;
         self.writer.write_subclass("AcDbEntity")?;
-        // Paper space flag for ENDBLK too
-        if block_record.is_paper_space() {
+        // Paper space flag for ENDBLK too - only active paper space
+        if block_record.name() == "*Paper_Space" {
             self.writer.write_i16(67, 1)?;
         }
         self.writer.write_string(8, "0")?;
@@ -805,12 +812,25 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_section_start("ENTITIES")?;
 
         // Write entities from model space block record
+        self.writing_paper_space = false;
         if let Some(model_space) = document.block_records.get("*Model_Space") {
             let owner = model_space.handle();
             for entity in &model_space.entities {
                 self.write_entity_with_owner(entity, owner)?;
             }
         }
+
+        // Write entities from the active paper space (*Paper_Space) only.
+        // Non-active paper spaces (*Paper_Space0, *Paper_Space1, ...) have their
+        // entities written inside their BLOCK definitions in the BLOCKS section.
+        self.writing_paper_space = true;
+        if let Some(paper_space) = document.block_records.get("*Paper_Space") {
+            let owner = paper_space.handle();
+            for entity in &paper_space.entities {
+                self.write_entity_with_owner(entity, owner)?;
+            }
+        }
+        self.writing_paper_space = false;
 
         self.writer.write_section_end()?;
         Ok(())
@@ -888,6 +908,12 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         }
 
         self.writer.write_subclass("AcDbEntity")?;
+
+        // Paper space flag (code 67) — required for entities in paper space
+        if self.writing_paper_space {
+            self.writer.write_i16(67, 1)?;
+        }
+
         self.writer.write_string(8, &common.layer)?;
 
         // Write linetype if not default (ByLayer)
@@ -2082,7 +2108,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_double(141, 0.0)?; // Plot window Y2
         self.writer.write_double(142, 1.0)?; // Numerator of custom print scale
         self.writer.write_double(143, 1.0)?; // Denominator of custom print scale
-        self.writer.write_i16(70, layout.flags)?;
+        self.writer.write_i16(70, 0)?;
         self.writer.write_i16(72, 0)?; // Plot paper units
         self.writer.write_i16(73, 0)?; // Plot rotation
         self.writer.write_i16(74, 0)?; // Plot type
@@ -2210,11 +2236,11 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         };
         self.writer.write_i16(62, fill_color_index)?;
 
-        // Start angle (code 51)
-        self.writer.write_double(51, style.start_angle)?;
+        // Start angle (code 51) — DXF expects degrees
+        self.writer.write_double(51, style.start_angle.to_degrees())?;
 
-        // End angle (code 52)
-        self.writer.write_double(52, style.end_angle)?;
+        // End angle (code 52) — DXF expects degrees
+        self.writer.write_double(52, style.end_angle.to_degrees())?;
 
         // Number of elements (code 71)
         self.writer.write_i16(71, style.element_count() as i16)?;

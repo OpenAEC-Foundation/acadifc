@@ -1131,6 +1131,7 @@ impl CadDocument {
         paper_layout.owner = self.header.acad_layout_dict_handle;
         paper_layout.tab_order = 1;
         paper_layout.block_record = self.header.paper_space_block_handle;
+
         self.objects.insert(paper_layout_handle, ObjectType::Layout(paper_layout));
 
         // -- ACAD_PLOTSETTINGS dictionary (empty) --
@@ -1333,9 +1334,211 @@ impl CadDocument {
         self.entities.get_mut(&handle)
     }
 
+    /// Add an entity to the default paper space (`*Paper_Space` / "Layout1").
+    ///
+    /// This sets the entity's owner to the `*Paper_Space` block record and
+    /// stores it there.  Viewports must be placed in paper space to be
+    /// visible in a layout.
+    ///
+    /// For documents with multiple layouts, use
+    /// [`add_entity_to_layout`](Self::add_entity_to_layout) instead.
+    pub fn add_paper_space_entity(&mut self, entity: EntityType) -> Result<Handle> {
+        self.add_entity_to_block(entity, "*Paper_Space")
+    }
+
+    /// Add an entity to a named layout.
+    ///
+    /// Looks up the [`Layout`](crate::objects::Layout) object by name (e.g.
+    /// `"Layout1"`, `"Layout2"`) and adds the entity to the layout's
+    /// backing block record.  Returns an error if the layout is not found.
+    ///
+    /// # Example
+    /// ```ignore
+    /// use acadrust::entities::{Viewport, EntityType};
+    ///
+    /// let vp = Viewport::new();
+    /// document.add_entity_to_layout(EntityType::Viewport(vp), "Layout1")?;
+    /// ```
+    pub fn add_entity_to_layout(
+        &mut self,
+        entity: EntityType,
+        layout_name: &str,
+    ) -> Result<Handle> {
+        // Find the Layout object by name to get its block_record handle
+        let block_handle = self
+            .objects
+            .values()
+            .find_map(|obj| match obj {
+                ObjectType::Layout(layout) if layout.name == layout_name => {
+                    Some(layout.block_record)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| {
+                crate::error::DxfError::Custom(format!(
+                    "Layout '{}' not found",
+                    layout_name
+                ))
+            })?;
+
+        // Find the block record name for this handle
+        let block_name = self
+            .block_records
+            .iter()
+            .find(|br| br.handle == block_handle)
+            .map(|br| br.name().to_string())
+            .ok_or_else(|| {
+                crate::error::DxfError::Custom(format!(
+                    "Block record for layout '{}' not found",
+                    layout_name
+                ))
+            })?;
+
+        self.add_entity_to_block(entity, &block_name)
+    }
+
+    /// Add an entity to a named block record.
+    ///
+    /// Sets the entity's owner handle and routes it to the specified block
+    /// record.  Used internally by [`add_entity`](Self::add_entity),
+    /// [`add_paper_space_entity`](Self::add_paper_space_entity), and
+    /// [`add_entity_to_layout`](Self::add_entity_to_layout).
+    fn add_entity_to_block(
+        &mut self,
+        mut entity: EntityType,
+        block_name: &str,
+    ) -> Result<Handle> {
+        // Allocate a handle if the entity doesn't have one
+        let handle = if entity.common().handle.is_null() {
+            let h = self.allocate_handle();
+            entity.as_entity_mut().set_handle(h);
+            h
+        } else {
+            let h = entity.common().handle;
+            if h.value() >= self.next_handle {
+                self.next_handle = h.value() + 1;
+                self.header.handle_seed = self.next_handle;
+            }
+            h
+        };
+
+        // Set owner to the target block record
+        if let Some(br) = self.block_records.get(block_name) {
+            entity.common_mut().owner_handle = br.handle;
+        }
+
+        // Route entity to the block record
+        let owner = entity.common().owner_handle;
+        let mut added_to_block = false;
+        if !owner.is_null() {
+            for br in self.block_records.iter_mut() {
+                if br.handle == owner {
+                    br.entities.push(entity.clone());
+                    added_to_block = true;
+                    break;
+                }
+            }
+        }
+        if !added_to_block {
+            if let Some(target) = self.block_records.get_mut(block_name) {
+                target.entities.push(entity.clone());
+            }
+        }
+
+        // Store in the flat entity map
+        self.entities.insert(handle, entity);
+        Ok(handle)
+    }
+
     /// Remove an entity by handle
     pub fn remove_entity(&mut self, handle: Handle) -> Option<EntityType> {
         self.entities.remove(&handle)
+    }
+
+    /// Add a new paper space layout to the document.
+    ///
+    /// Creates the backing `*Paper_Space<N>` block record, a [`Layout`]
+    /// object, and registers both in the ACAD_LAYOUT dictionary.  Returns
+    /// the layout handle.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let layout_handle = document.add_layout("Layout2")?;
+    /// // Then add entities to it:
+    /// document.add_entity_to_layout(EntityType::Viewport(vp), "Layout2")?;
+    /// ```
+    pub fn add_layout(&mut self, name: &str) -> Result<Handle> {
+        // Check for duplicate layout name
+        let already_exists = self.objects.values().any(|obj| {
+            matches!(obj, ObjectType::Layout(l) if l.name == name)
+        });
+        if already_exists {
+            return Err(crate::error::DxfError::Custom(format!(
+                "Layout '{}' already exists",
+                name
+            )));
+        }
+
+        // Determine the next *Paper_Space block name.
+        // AutoCAD uses: *Paper_Space, *Paper_Space0, *Paper_Space1, …
+        let ps_count = self
+            .block_records
+            .iter()
+            .filter(|br| br.is_paper_space())
+            .count();
+        let block_name = if ps_count == 0 {
+            "*Paper_Space".to_string()
+        } else {
+            format!("*Paper_Space{}", ps_count - 1)
+        };
+
+        // Create the block record
+        let mut block_record = BlockRecord::new(&block_name);
+        block_record.set_handle(self.allocate_handle());
+        block_record.block_entity_handle = self.allocate_handle();
+        block_record.block_end_handle = self.allocate_handle();
+        let br_handle = block_record.handle;
+
+        // Create the Layout object
+        let layout_handle = self.allocate_handle();
+        let mut layout = crate::objects::Layout::new(name);
+        layout.handle = layout_handle;
+        layout.owner = self.header.acad_layout_dict_handle;
+        layout.tab_order = ps_count as i16 + 1;
+        layout.block_record = br_handle;
+
+        // Link block record → layout
+        block_record.layout = layout_handle;
+        self.block_records.add(block_record).map_err(|e| {
+            crate::error::DxfError::Custom(e)
+        })?;
+
+        // Create the overall paper space viewport (ID=1) for this layout.
+        // Every paper space layout requires this entity.
+        let mut overall_vp = crate::entities::Viewport::new();
+        overall_vp.id = 1;
+        overall_vp.status = crate::entities::ViewportStatusFlags::default_on();
+        let overall_vp_handle = self.allocate_handle();
+        overall_vp.common.handle = overall_vp_handle;
+        overall_vp.common.owner_handle = br_handle;
+        layout.viewport = overall_vp_handle;
+
+        if let Some(br) = self.block_records.get_mut(&block_name) {
+            br.entities.push(EntityType::Viewport(overall_vp.clone()));
+        }
+        self.entities.insert(overall_vp_handle, EntityType::Viewport(overall_vp));
+
+        // Register in ACAD_LAYOUT dictionary
+        if let Some(ObjectType::Dictionary(dict)) =
+            self.objects.get_mut(&self.header.acad_layout_dict_handle)
+        {
+            dict.add_entry(name, layout_handle);
+        }
+
+        // Store the Layout object
+        self.objects.insert(layout_handle, ObjectType::Layout(layout));
+
+        Ok(layout_handle)
     }
 
     /// Get the number of entities
