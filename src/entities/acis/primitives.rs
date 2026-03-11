@@ -403,8 +403,8 @@ pub fn build_cylinder(center: [f64; 3], radius: f64, height: f64) -> SatDocument
         1.0, 1.0, 0.0,
     );
 
-    let crv_bot  = sat.add_ellipse_curve([cx, cy, cz],          [0.0, 0.0, 1.0], [radius, 0.0, 0.0], 1.0);
-    let crv_top  = sat.add_ellipse_curve([cx, cy, cz + height], [0.0, 0.0, 1.0], [radius, 0.0, 0.0], 1.0);
+    let crv_bot  = sat.add_ellipse_curve([cx, cy, cz],          [0.0, 0.0, -1.0], [radius, 0.0, 0.0], 1.0);
+    let crv_top  = sat.add_ellipse_curve([cx, cy, cz + height], [0.0, 0.0,  1.0], [radius, 0.0, 0.0], 1.0);
 
     let v0 = sat.add_vertex(SatPointer::NULL, ptr(p0));
     let v1 = sat.add_vertex(SatPointer::NULL, ptr(p1));
@@ -476,7 +476,7 @@ pub fn build_cone(center: [f64; 3], radius: f64, height: f64) -> SatDocument {
     );
 
     let crv_base = sat.add_ellipse_curve(
-        [cx, cy, cz], [0.0, 0.0, 1.0], [radius, 0.0, 0.0], 1.0,
+        [cx, cy, cz], [0.0, 0.0, -1.0], [radius, 0.0, 0.0], 1.0,
     );
 
     let v0 = sat.add_vertex(SatPointer::NULL, ptr(p_base));

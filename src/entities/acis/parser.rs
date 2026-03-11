@@ -313,6 +313,17 @@ impl SatParser {
             tokens.push(token);
         }
 
+        // Normalize v400 (pre-7.0) records to v700 token layout.
+        //
+        // ACIS 7.0+ added an extra sentinel `$-1` pointer to most entity
+        // records (right after the attribute/id fields).  Without this
+        // normalization step all typed accessors (SatFace, SatBody, …)
+        // would need version-aware token indexing.  Inserting the
+        // synthetic sentinel here keeps every downstream consumer simple.
+        if version.major < 7 {
+            normalize_v400_tokens(&entity_type, &mut tokens);
+        }
+
         Ok(SatRecord {
             index,
             entity_type,
@@ -535,6 +546,47 @@ fn looks_like_negative_index(s: &str) -> bool {
         return false;
     }
     s[1..].chars().all(|c| c.is_ascii_digit())
+}
+
+/// Normalize a pre-7.0 (v400) record's token list to match the 7.0+ layout.
+///
+/// ACIS 7.0 added a sentinel `$-1` pointer to most entity record types.
+/// The position of that sentinel varies by entity type:
+///
+/// | Entity types                                       | Sentinel position |
+/// |----------------------------------------------------|-------------------|
+/// | body, face, loop, coedge, edge, vertex,            | 0                 |
+/// | point, transform, *-surface, *-curve               |                   |
+/// | lump                                               | 1                 |
+/// | shell                                              | 2                 |
+///
+/// By inserting a synthetic `$-1` here the rest of the codebase can use
+/// a single set of token indices regardless of the source ACIS version.
+fn normalize_v400_tokens(entity_type: &str, tokens: &mut Vec<SatToken>) {
+    let sentinel = SatToken::Pointer(SatPointer::NULL);
+    match entity_type {
+        // Sentinel at position 0
+        "body" | "face" | "loop" | "vertex" | "coedge" | "edge"
+        | "point" | "transform"
+        | "plane-surface" | "cone-surface" | "sphere-surface" | "torus-surface"
+        | "spline-surface" | "meshsurf-surface" | "bs3-surface"
+        | "straight-curve" | "ellipse-curve" | "intcurve-curve" | "bs2-curve"
+        | "bs3-curve" | "exactcur-curve" => {
+            tokens.insert(0, sentinel);
+        }
+        // Sentinel at position 1
+        "lump" => {
+            let pos = 1.min(tokens.len());
+            tokens.insert(pos, sentinel);
+        }
+        // Sentinel at position 2
+        "shell" => {
+            let pos = 2.min(tokens.len());
+            tokens.insert(pos, sentinel);
+        }
+        // Unknown entity types (attributes, etc.): leave unchanged
+        _ => {}
+    }
 }
 
 /// Read a `@<len> <text>` counted string.

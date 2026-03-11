@@ -92,8 +92,31 @@ impl SatWriter {
             output.push_str(&format!(" {}", record.subtype_id));
         }
 
+        // Determine which token index to skip for pre-7.0 output.
+        // The parser inserts a synthetic sentinel $-1 to normalize v400
+        // records to v700 layout; the writer must strip it when producing
+        // v400 output.
+        let skip_index: Option<usize> = if version.major < 7 {
+            match record.entity_type.as_str() {
+                "body" | "face" | "loop" | "vertex" | "coedge" | "edge"
+                | "point" | "transform"
+                | "plane-surface" | "cone-surface" | "sphere-surface" | "torus-surface"
+                | "spline-surface" | "meshsurf-surface" | "bs3-surface"
+                | "straight-curve" | "ellipse-curve" | "intcurve-curve" | "bs2-curve"
+                | "bs3-curve" | "exactcur-curve" => Some(0),
+                "lump" => Some(1),
+                "shell" => Some(2),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
         // Remaining tokens
-        for token in &record.tokens {
+        for (i, token) in record.tokens.iter().enumerate() {
+            if Some(i) == skip_index {
+                continue; // skip the synthetic sentinel
+            }
             output.push(' ');
             Self::write_token(output, token, version);
         }
