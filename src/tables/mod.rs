@@ -104,6 +104,12 @@ impl<T: TableEntry> Table<T> {
         Ok(())
     }
 
+    /// Add or replace an entry in the table (parsed data wins over defaults)
+    pub fn add_or_replace(&mut self, entry: T) {
+        let name = entry.name().to_uppercase();
+        self.entries.insert(name, entry);
+    }
+
     /// Get an entry by name (case-insensitive)
     pub fn get(&self, name: &str) -> Option<&T> {
         self.entries.get(&name.to_uppercase())

@@ -1465,7 +1465,7 @@ impl<'a> SectionReader<'a> {
 
             if pair.code == 0 && pair.value_string == "LAYER" {
                 if let Some(layer) = self.read_layer_entry()? {
-                    let _ = document.layers.add(layer);
+                    document.layers.add_or_replace(layer);
                 }
             }
         }
@@ -1484,6 +1484,7 @@ impl<'a> SectionReader<'a> {
             }
 
             match pair.code {
+                5 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { layer.handle = Handle::new(h); } }
                 2 => layer.name = pair.value_string.clone(),
                 62 => {
                     if let Some(color_index) = pair.as_i16() {
@@ -1524,7 +1525,7 @@ impl<'a> SectionReader<'a> {
 
             if pair.code == 0 && pair.value_string == "LTYPE" {
                 if let Some(linetype) = self.read_linetype_entry()? {
-                    let _ = document.line_types.add(linetype);
+                    document.line_types.add_or_replace(linetype);
                 }
             }
         }
@@ -1542,6 +1543,7 @@ impl<'a> SectionReader<'a> {
             }
 
             match pair.code {
+                5 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { linetype.handle = Handle::new(h); } }
                 2 => linetype.name = pair.value_string.clone(),
                 3 => linetype.description = pair.value_string.clone(),
                 73 => {
@@ -1575,7 +1577,7 @@ impl<'a> SectionReader<'a> {
 
             if pair.code == 0 && pair.value_string == "STYLE" {
                 if let Some(style) = self.read_textstyle_entry()? {
-                    let _ = document.text_styles.add(style);
+                    document.text_styles.add_or_replace(style);
                 }
             }
         }
@@ -1593,6 +1595,7 @@ impl<'a> SectionReader<'a> {
             }
 
             match pair.code {
+                5 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { style.handle = Handle::new(h); } }
                 2 => style.name = pair.value_string.clone(),
                 3 => style.font_file = pair.value_string.clone(),
                 4 => style.big_font_file = pair.value_string.clone(),
@@ -1744,7 +1747,7 @@ impl<'a> SectionReader<'a> {
 
             if pair.code == 0 && pair.value_string == "DIMSTYLE" {
                 if let Some(dimstyle) = self.read_dimstyle_entry()? {
-                    let _ = document.dim_styles.add(dimstyle);
+                    document.dim_styles.add_or_replace(dimstyle);
                 }
             }
         }
@@ -1762,7 +1765,7 @@ impl<'a> SectionReader<'a> {
             }
 
             match pair.code {
-                5 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { ds.handle = Handle::new(h); } }
+                5 | 105 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { ds.handle = Handle::new(h); } }
                 2 => ds.name = pair.value_string.clone(),
                 3 => ds.dimpost = pair.value_string.clone(),
                 4 => ds.dimapost = pair.value_string.clone(),
@@ -1858,7 +1861,7 @@ impl<'a> SectionReader<'a> {
 
             if pair.code == 0 && pair.value_string == "APPID" {
                 if let Some(appid) = self.read_appid_entry()? {
-                    let _ = document.app_ids.add(appid);
+                    document.app_ids.add_or_replace(appid);
                 }
             }
         }
@@ -1875,8 +1878,10 @@ impl<'a> SectionReader<'a> {
                 break;
             }
 
-            if pair.code == 2 {
-                appid.name = pair.value_string.clone();
+            match pair.code {
+                5 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { appid.handle = Handle::new(h); } }
+                2 => appid.name = pair.value_string.clone(),
+                _ => {}
             }
         }
 
@@ -1892,7 +1897,7 @@ impl<'a> SectionReader<'a> {
 
             if pair.code == 0 && pair.value_string == "VIEW" {
                 if let Some(view) = self.read_view_entry()? {
-                    let _ = document.views.add(view);
+                    document.views.add_or_replace(view);
                 }
             }
         }
@@ -1913,6 +1918,7 @@ impl<'a> SectionReader<'a> {
             }
 
             match pair.code {
+                5 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { view.handle = Handle::new(h); } }
                 2 => view.name = pair.value_string.clone(),
                 10 | 20 | 30 => { center.add_coordinate(&pair); }
                 11 | 21 | 31 => { target.add_coordinate(&pair); }
@@ -1953,7 +1959,7 @@ impl<'a> SectionReader<'a> {
 
             if pair.code == 0 && pair.value_string == "VPORT" {
                 if let Some(vport) = self.read_vport_entry()? {
-                    let _ = document.vports.add(vport);
+                    document.vports.add_or_replace(vport);
                 }
             }
         }
@@ -1970,8 +1976,10 @@ impl<'a> SectionReader<'a> {
                 break;
             }
 
-            if pair.code == 2 {
-                vport.name = pair.value_string.clone();
+            match pair.code {
+                5 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { vport.handle = Handle::new(h); } }
+                2 => vport.name = pair.value_string.clone(),
+                _ => {}
             }
         }
 
@@ -1987,7 +1995,7 @@ impl<'a> SectionReader<'a> {
 
             if pair.code == 0 && pair.value_string == "UCS" {
                 if let Some(ucs) = self.read_ucs_entry()? {
-                    let _ = document.ucss.add(ucs);
+                    document.ucss.add_or_replace(ucs);
                 }
             }
         }
@@ -2008,6 +2016,7 @@ impl<'a> SectionReader<'a> {
             }
 
             match pair.code {
+                5 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { ucs.handle = Handle::new(h); } }
                 2 => ucs.name = pair.value_string.clone(),
                 10 | 20 | 30 => { origin.add_coordinate(&pair); }
                 11 | 21 | 31 => { x_axis.add_coordinate(&pair); }

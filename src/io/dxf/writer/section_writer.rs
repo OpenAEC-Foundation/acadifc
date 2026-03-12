@@ -18,18 +18,6 @@ use crate::xdata::{ExtendedData, XDataValue};
 
 use super::stream_writer::{DxfStreamWriter, DxfStreamWriterExt};
 
-/// Standard table handles (well-known values used by AutoCAD)
-/// These are consistent across DXF files for interoperability
-const HANDLE_VPORT_TABLE: u64 = 0x8;
-const HANDLE_LTYPE_TABLE: u64 = 0x5;
-const HANDLE_LAYER_TABLE: u64 = 0x2;
-const HANDLE_STYLE_TABLE: u64 = 0x3;
-const HANDLE_VIEW_TABLE: u64 = 0x6;
-const HANDLE_UCS_TABLE: u64 = 0x7;
-const HANDLE_APPID_TABLE: u64 = 0x9;
-const HANDLE_DIMSTYLE_TABLE: u64 = 0xA;
-const HANDLE_BLOCK_RECORD_TABLE: u64 = 0x1;
-
 /// Writes all DXF sections
 pub struct SectionWriter<'a, W: DxfStreamWriter> {
     writer: &'a mut W,
@@ -290,10 +278,11 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
     /// Write VPORT table
     fn write_vport_table(&mut self, document: &CadDocument) -> Result<()> {
-        self.write_table_header("VPORT", document.vports.len(), Handle::new(HANDLE_VPORT_TABLE))?;
+        let table_handle = document.vports.handle();
+        self.write_table_header("VPORT", document.vports.len(), table_handle)?;
 
         for vport in document.vports.iter() {
-            self.write_vport_entry(vport, Handle::new(HANDLE_VPORT_TABLE))?;
+            self.write_vport_entry(vport, table_handle)?;
         }
 
         self.write_table_end()?;
@@ -365,10 +354,11 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
     /// Write LTYPE table
     fn write_ltype_table(&mut self, document: &CadDocument) -> Result<()> {
-        self.write_table_header("LTYPE", document.line_types.len(), Handle::new(HANDLE_LTYPE_TABLE))?;
+        let table_handle = document.line_types.handle();
+        self.write_table_header("LTYPE", document.line_types.len(), table_handle)?;
 
         for ltype in document.line_types.iter() {
-            self.write_ltype_entry(ltype, Handle::new(HANDLE_LTYPE_TABLE))?;
+            self.write_ltype_entry(ltype, table_handle)?;
         }
 
         self.write_table_end()?;
@@ -397,10 +387,11 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
     /// Write LAYER table
     fn write_layer_table(&mut self, document: &CadDocument) -> Result<()> {
-        self.write_table_header("LAYER", document.layers.len(), Handle::new(HANDLE_LAYER_TABLE))?;
+        let table_handle = document.layers.handle();
+        self.write_table_header("LAYER", document.layers.len(), table_handle)?;
 
         for layer in document.layers.iter() {
-            self.write_layer_entry(layer, Handle::new(HANDLE_LAYER_TABLE))?;
+            self.write_layer_entry(layer, table_handle)?;
         }
 
         self.write_table_end()?;
@@ -452,10 +443,11 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
     /// Write STYLE table (text styles)
     fn write_style_table(&mut self, document: &CadDocument) -> Result<()> {
-        self.write_table_header("STYLE", document.text_styles.len(), Handle::new(HANDLE_STYLE_TABLE))?;
+        let table_handle = document.text_styles.handle();
+        self.write_table_header("STYLE", document.text_styles.len(), table_handle)?;
 
         for style in document.text_styles.iter() {
-            self.write_style_entry(style, Handle::new(HANDLE_STYLE_TABLE))?;
+            self.write_style_entry(style, table_handle)?;
         }
 
         self.write_table_end()?;
@@ -483,10 +475,11 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
     /// Write VIEW table
     fn write_view_table(&mut self, document: &CadDocument) -> Result<()> {
-        self.write_table_header("VIEW", document.views.len(), Handle::new(HANDLE_VIEW_TABLE))?;
+        let table_handle = document.views.handle();
+        self.write_table_header("VIEW", document.views.len(), table_handle)?;
 
         for view in document.views.iter() {
-            self.write_view_entry(view, Handle::new(HANDLE_VIEW_TABLE))?;
+            self.write_view_entry(view, table_handle)?;
         }
 
         self.write_table_end()?;
@@ -520,10 +513,11 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
     /// Write UCS table
     fn write_ucs_table(&mut self, document: &CadDocument) -> Result<()> {
-        self.write_table_header("UCS", document.ucss.len(), Handle::new(HANDLE_UCS_TABLE))?;
+        let table_handle = document.ucss.handle();
+        self.write_table_header("UCS", document.ucss.len(), table_handle)?;
 
         for ucs in document.ucss.iter() {
-            self.write_ucs_entry(ucs, Handle::new(HANDLE_UCS_TABLE))?;
+            self.write_ucs_entry(ucs, table_handle)?;
         }
 
         self.write_table_end()?;
@@ -552,10 +546,11 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
     /// Write APPID table
     fn write_appid_table(&mut self, document: &CadDocument) -> Result<()> {
-        self.write_table_header("APPID", document.app_ids.len(), Handle::new(HANDLE_APPID_TABLE))?;
+        let table_handle = document.app_ids.handle();
+        self.write_table_header("APPID", document.app_ids.len(), table_handle)?;
 
         for appid in document.app_ids.iter() {
-            self.write_appid_entry(appid, Handle::new(HANDLE_APPID_TABLE))?;
+            self.write_appid_entry(appid, table_handle)?;
         }
 
         self.write_table_end()?;
@@ -575,11 +570,13 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
     /// Write DIMSTYLE table
     fn write_dimstyle_table(&mut self, document: &CadDocument) -> Result<()> {
-        self.write_table_header("DIMSTYLE", document.dim_styles.len(), Handle::new(HANDLE_DIMSTYLE_TABLE))?;
+        let table_handle = document.dim_styles.handle();
+        self.write_table_header("DIMSTYLE", document.dim_styles.len(), table_handle)?;
         self.writer.write_subclass("AcDbDimStyleTable")?;
+        self.writer.write_i16(71, document.dim_styles.len() as i16)?;
 
         for dimstyle in document.dim_styles.iter() {
-            self.write_dimstyle_entry(dimstyle, Handle::new(HANDLE_DIMSTYLE_TABLE))?;
+            self.write_dimstyle_entry(dimstyle, table_handle)?;
         }
 
         self.write_table_end()?;
@@ -688,10 +685,11 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
     /// Write BLOCK_RECORD table
     fn write_block_record_table(&mut self, document: &CadDocument) -> Result<()> {
-        self.write_table_header("BLOCK_RECORD", document.block_records.len(), Handle::new(HANDLE_BLOCK_RECORD_TABLE))?;
+        let table_handle = document.block_records.handle();
+        self.write_table_header("BLOCK_RECORD", document.block_records.len(), table_handle)?;
 
         for block_record in document.block_records.iter() {
-            self.write_block_record_entry(block_record, Handle::new(HANDLE_BLOCK_RECORD_TABLE))?;
+            self.write_block_record_entry(block_record, table_handle)?;
         }
 
         self.write_table_end()?;

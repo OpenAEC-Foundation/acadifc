@@ -1621,7 +1621,177 @@ impl CadDocument {
 
         self.next_handle = max_handle;
 
-        // --- 2. Assign owner handles ---
+        // --- 1b. Resolve table handle collisions ---
+        // Collect ALL handles used by entries, entities, and objects so we can
+        // detect when a table control handle collides with ANY of them.
+        let mut used_handles = std::collections::HashSet::new();
+        for e in self.layers.iter()       { if !e.handle().is_null() { used_handles.insert(e.handle().value()); } }
+        for e in self.line_types.iter()    { if !e.handle().is_null() { used_handles.insert(e.handle().value()); } }
+        for e in self.text_styles.iter()   { if !e.handle().is_null() { used_handles.insert(e.handle().value()); } }
+        for e in self.vports.iter()        { if !e.handle().is_null() { used_handles.insert(e.handle().value()); } }
+        for e in self.views.iter()         { if !e.handle().is_null() { used_handles.insert(e.handle().value()); } }
+        for e in self.ucss.iter()          { if !e.handle().is_null() { used_handles.insert(e.handle().value()); } }
+        for e in self.app_ids.iter()       { if !e.handle().is_null() { used_handles.insert(e.handle().value()); } }
+        for e in self.dim_styles.iter()    { if !e.handle().is_null() { used_handles.insert(e.handle().value()); } }
+        for e in self.block_records.iter() { if !e.handle().is_null() { used_handles.insert(e.handle().value()); } }
+        for e in self.entities.iter()      { let h = e.common().handle.value(); if h > 0 { used_handles.insert(h); } }
+        for (h, _) in &self.objects        { let v = h.value(); if v > 0 { used_handles.insert(v); } }
+
+        // Reassign any table control handle that collides with a used handle
+        if used_handles.contains(&self.vports.handle().value()) {
+            let h = Handle::new(self.next_handle); self.next_handle += 1;
+            self.vports.set_handle(h); self.header.vport_control_handle = h;
+        }
+        if used_handles.contains(&self.line_types.handle().value()) {
+            let h = Handle::new(self.next_handle); self.next_handle += 1;
+            self.line_types.set_handle(h); self.header.linetype_control_handle = h;
+        }
+        if used_handles.contains(&self.layers.handle().value()) {
+            let h = Handle::new(self.next_handle); self.next_handle += 1;
+            self.layers.set_handle(h); self.header.layer_control_handle = h;
+        }
+        if used_handles.contains(&self.text_styles.handle().value()) {
+            let h = Handle::new(self.next_handle); self.next_handle += 1;
+            self.text_styles.set_handle(h); self.header.style_control_handle = h;
+        }
+        if used_handles.contains(&self.views.handle().value()) {
+            let h = Handle::new(self.next_handle); self.next_handle += 1;
+            self.views.set_handle(h); self.header.view_control_handle = h;
+        }
+        if used_handles.contains(&self.ucss.handle().value()) {
+            let h = Handle::new(self.next_handle); self.next_handle += 1;
+            self.ucss.set_handle(h); self.header.ucs_control_handle = h;
+        }
+        if used_handles.contains(&self.app_ids.handle().value()) {
+            let h = Handle::new(self.next_handle); self.next_handle += 1;
+            self.app_ids.set_handle(h); self.header.appid_control_handle = h;
+        }
+        if used_handles.contains(&self.dim_styles.handle().value()) {
+            let h = Handle::new(self.next_handle); self.next_handle += 1;
+            self.dim_styles.set_handle(h); self.header.dimstyle_control_handle = h;
+        }
+        if used_handles.contains(&self.block_records.handle().value()) {
+            let h = Handle::new(self.next_handle); self.next_handle += 1;
+            self.block_records.set_handle(h); self.header.block_control_handle = h;
+        }
+
+        // --- 1c. Resolve block entity/end handle collisions ---
+        // block_entity_handle and block_end_handle are pre-allocated during
+        // initialize_defaults() and may collide with entry/entity handles
+        // read from the file.
+        for br in self.block_records.iter_mut() {
+            if !br.block_entity_handle.is_null()
+                && used_handles.contains(&br.block_entity_handle.value())
+            {
+                let h = Handle::new(self.next_handle); self.next_handle += 1;
+                br.block_entity_handle = h;
+            }
+            if !br.block_end_handle.is_null()
+                && used_handles.contains(&br.block_end_handle.value())
+            {
+                let h = Handle::new(self.next_handle); self.next_handle += 1;
+                br.block_end_handle = h;
+            }
+        }
+
+        // --- 1d. Resolve object handle collisions ---
+        // Dictionary and other objects created by initialize_defaults() may
+        // have handles that collide with file-sourced handles.
+        let mut remap: Vec<(Handle, Handle)> = Vec::new();
+        let obj_handles: Vec<Handle> = self.objects.keys().copied().collect();
+        for old_h in obj_handles {
+            if used_handles.contains(&old_h.value()) {
+                let new_h = Handle::new(self.next_handle); self.next_handle += 1;
+                remap.push((old_h, new_h));
+            }
+        }
+        for (old_h, new_h) in &remap {
+            if let Some(mut obj) = self.objects.remove(old_h) {
+                // Update the object's own handle field
+                match &mut obj {
+                    ObjectType::Dictionary(d) => d.handle = *new_h,
+                    ObjectType::Layout(l) => l.handle = *new_h,
+                    ObjectType::MLineStyle(m) => m.handle = *new_h,
+                    ObjectType::PlaceHolder(p) => p.handle = *new_h,
+                    ObjectType::DictionaryWithDefault(d) => d.handle = *new_h,
+                    _ => {}
+                }
+                self.objects.insert(*new_h, obj);
+            }
+        }
+        // Update cross-references: dictionary entries and owner handles
+        if !remap.is_empty() {
+            let remap_map: std::collections::HashMap<u64, Handle> =
+                remap.iter().map(|(o, n)| (o.value(), *n)).collect();
+
+            // Update dictionary entry values that reference remapped handles
+            for (_, obj) in self.objects.iter_mut() {
+                match obj {
+                    ObjectType::Dictionary(d) => {
+                        if let Some(new_owner) = remap_map.get(&d.owner.value()) {
+                            d.owner = *new_owner;
+                        }
+                        for (_, entry_handle) in d.entries.iter_mut() {
+                            if let Some(new_h) = remap_map.get(&entry_handle.value()) {
+                                *entry_handle = *new_h;
+                            }
+                        }
+                    }
+                    ObjectType::Layout(l) => {
+                        if let Some(new_owner) = remap_map.get(&l.owner.value()) {
+                            l.owner = *new_owner;
+                        }
+                    }
+                    ObjectType::MLineStyle(m) => {
+                        if let Some(new_owner) = remap_map.get(&m.owner.value()) {
+                            m.owner = *new_owner;
+                        }
+                    }
+                    ObjectType::PlaceHolder(p) => {
+                        if let Some(new_owner) = remap_map.get(&p.owner.value()) {
+                            p.owner = *new_owner;
+                        }
+                    }
+                    ObjectType::DictionaryWithDefault(d) => {
+                        if let Some(new_owner) = remap_map.get(&d.owner.value()) {
+                            d.owner = *new_owner;
+                        }
+                        for (_, entry_handle) in d.entries.iter_mut() {
+                            if let Some(new_h) = remap_map.get(&entry_handle.value()) {
+                                *entry_handle = *new_h;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // Update header handles that reference remapped objects
+            let header_handles = [
+                &mut self.header.named_objects_dict_handle,
+                &mut self.header.acad_group_dict_handle,
+                &mut self.header.acad_mlinestyle_dict_handle,
+                &mut self.header.acad_layout_dict_handle,
+                &mut self.header.acad_plotsettings_dict_handle,
+                &mut self.header.acad_plotstylename_dict_handle,
+                &mut self.header.acad_material_dict_handle,
+                &mut self.header.acad_color_dict_handle,
+                &mut self.header.acad_visualstyle_dict_handle,
+                &mut self.header.current_multiline_style_handle,
+            ];
+            for handle in header_handles {
+                if let Some(new_h) = remap_map.get(&handle.value()) {
+                    *handle = *new_h;
+                }
+            }
+
+            // Update block record layout references
+            for br in self.block_records.iter_mut() {
+                if let Some(new_h) = remap_map.get(&br.layout.value()) {
+                    br.layout = *new_h;
+                }
+            }
+        }
         let model_handle = self.header.model_space_block_handle;
         let paper_handle = self.header.paper_space_block_handle;
 
