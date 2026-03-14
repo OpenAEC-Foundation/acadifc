@@ -2116,6 +2116,18 @@ impl<'a> SectionReader<'a> {
             67 => {
                 Ok(true)
             }
+            // Extended data - read and store
+            1001 => {
+                // Push back the pair and read XDATA
+                self.reader.push_back(pair.clone());
+                let (extended_data, next_pair) = self.read_extended_data()?;
+                common.extended_data = extended_data;
+                // Push back the non-XDATA pair for next iteration
+                if let Some(p) = next_pair {
+                    self.reader.push_back(p);
+                }
+                Ok(true)
+            }
             _ => Ok(false),
         }
     }
@@ -2324,13 +2336,6 @@ impl<'a> SectionReader<'a> {
                     }
                 }
                 210 | 220 | 230 => { normal.add_coordinate(&pair); }
-                // Extended data - read and store
-                1001 => {
-                    // Push back the pair and read XDATA
-                    self.reader.push_back(pair);
-                    let (extended_data, _next_pair) = self.read_extended_data()?;
-                    line.common.extended_data = extended_data;
-                }
                 _ => { self.try_read_common_entity_code(&pair, &mut line.common)?; }
             }
         }
