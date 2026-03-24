@@ -12,7 +12,7 @@ Inspired by [ACadSharp](https://github.com/DomCR/ACadSharp). Supports DXF (ASCII
 
 ```toml
 [dependencies]
-acadrust = "0.3.0"
+acadrust = "0.3.1"
 ```
 
 ```rust
@@ -35,6 +35,8 @@ fn main() -> acadrust::Result<()> {
 - **DXF Read/Write** — ASCII and Binary formats, R12–R2018+
 - **DWG Read/Write** — Native binary, R13–R2018 (208/208 roundtrip-perfect)
 - **41 Entity Types** — Lines, arcs, polylines, hatches, dimensions, 3D solids, viewports, and more
+- **Entity Explode** — Decompose complex entities into primitives with `explode()`
+- **Transform / Mirror / Translate** — Centralized geometric operations on all entity types
 - **3D Solid Creation** — ACIS SAT/SAB builder for box, cylinder, cone, sphere, torus, wedge, pyramid
 - **Paper Space & Layouts** — Multiple layouts, viewport-to-layout ownership, `add_layout()` API
 - **Tables & Objects** — Layers, linetypes, styles, dictionaries, layouts, materials
@@ -146,6 +148,12 @@ Full API docs: [docs.rs/acadrust](https://docs.rs/acadrust)
 ---
 
 ## Changelog
+
+### 0.3.1
+
+- **Entity explode** — `EntityType::explode()` decomposes complex entities (polylines, hatches, meshes, dimensions, etc.) into simpler primitives (lines, arcs, faces); `CadDocument::explode_entity()` allocates handles automatically
+
+- **Centralized transform/mirror/translate** — Transformation logic extracted from 38 entity files into `translate.rs`, `transform.rs`, and `mirror.rs` modules; all Entity trait implementations delegate to these centralized functions. Direct `EntityType` dispatch methods added (`entity.translate()`, `entity.apply_transform()`, `entity.mirror_x()`, etc.) alongside the existing trait-based API.
 
 ### 0.3.0
 
