@@ -835,9 +835,15 @@ impl<'a> DwgObjectWriter<'a> {
         // Cloning flags
         self.writer.write_bit_short(xrec.cloning_flags as i16);
 
-        // Data size — we write zero for simplified implementation
-        // (full XRecord data encoding is complex, involving typed DXF values)
-        self.writer.write_bit_long(0);
+        // Write raw data bytes if present (from DWG roundtrip)
+        if !xrec.raw_data.is_empty() {
+            self.writer.write_bit_long(xrec.raw_data.len() as i32);
+            for &b in &xrec.raw_data {
+                self.writer.write_byte(b);
+            }
+        } else {
+            self.writer.write_bit_long(0);
+        }
 
         self.register_object(xrec.handle);
     }

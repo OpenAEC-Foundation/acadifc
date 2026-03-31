@@ -279,6 +279,8 @@ pub struct XRecord {
     pub cloning_flags: DictionaryCloningFlags,
     /// Collection of data entries
     pub entries: Vec<XRecordEntry>,
+    /// Raw DWG data bytes (for roundtripping when entries are not parsed)
+    pub raw_data: Vec<u8>,
 }
 
 impl XRecord {
@@ -293,6 +295,7 @@ impl XRecord {
             name: String::new(),
             cloning_flags: DictionaryCloningFlags::NotApplicable,
             entries: Vec::new(),
+            raw_data: Vec::new(),
         }
     }
 

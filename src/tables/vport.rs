@@ -33,6 +33,28 @@ pub struct VPort {
     pub aspect_ratio: f64,
     /// Lens length
     pub lens_length: f64,
+    /// View twist angle
+    pub view_twist: f64,
+    /// Front clipping plane distance
+    pub front_clip: f64,
+    /// Back clipping plane distance
+    pub back_clip: f64,
+    /// UCS follow mode
+    pub ucsfollow: bool,
+    /// Circle zoom percent
+    pub circle_zoom: i16,
+    /// Fast zoom enabled
+    pub fast_zoom: bool,
+    /// Grid on/off
+    pub grid_on: bool,
+    /// Snap on/off
+    pub snap_on: bool,
+    /// Snap style (isometric)
+    pub snap_style: bool,
+    /// Snap isometric pair
+    pub snap_isopair: i16,
+    /// Snap rotation angle
+    pub snap_rotation: f64,
 }
 
 impl VPort {
@@ -52,6 +74,17 @@ impl VPort {
             view_height: 10.0,
             aspect_ratio: 1.0,
             lens_length: 50.0,
+            view_twist: 0.0,
+            front_clip: 0.0,
+            back_clip: 0.0,
+            ucsfollow: false,
+            circle_zoom: 100,
+            fast_zoom: true,
+            grid_on: false,
+            snap_on: false,
+            snap_style: false,
+            snap_isopair: 0,
+            snap_rotation: 0.0,
         }
     }
 

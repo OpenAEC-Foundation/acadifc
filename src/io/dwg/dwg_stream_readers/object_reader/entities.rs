@@ -115,6 +115,16 @@ pub struct InsertData {
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct MInsertData {
+    pub insert: InsertData,
+    pub column_count: i16,
+    pub row_count: i16,
+    pub column_spacing: f64,
+    pub row_spacing: f64,
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LwPolylineVertex {
     pub x: f64,
     pub y: f64,
@@ -405,6 +415,15 @@ pub fn read_insert(reader: &mut DwgMergedReader, version: DwgVersion) -> InsertD
     let block_handle = reader.read_handle();
 
     InsertData { insert_point, x_scale, y_scale, z_scale, rotation, normal, has_attribs, block_handle }
+}
+
+pub fn read_minsert(reader: &mut DwgMergedReader, version: DwgVersion) -> MInsertData {
+    let insert = read_insert(reader, version);
+    let column_count = reader.read_bit_short();
+    let row_count = reader.read_bit_short();
+    let column_spacing = reader.read_bit_double();
+    let row_spacing = reader.read_bit_double();
+    MInsertData { insert, column_count, row_count, column_spacing, row_spacing }
 }
 
 pub fn read_lwpolyline(reader: &mut DwgMergedReader, version: DwgVersion) -> LwPolylineData {
@@ -882,6 +901,13 @@ pub struct HatchPatternLine { pub angle: f64, pub base_point: Vector2, pub offse
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HatchData {
     pub gradient_enabled: bool,
+    pub gradient_reserved: i32,
+    pub gradient_angle: f64,
+    pub gradient_shift: f64,
+    pub gradient_single_color: bool,
+    pub gradient_tint: f64,
+    pub gradient_colors: Vec<(f64, crate::types::Color)>,
+    pub gradient_name: String,
     pub elevation: f64,
     pub normal: Vector3,
     pub pattern_name: String,
@@ -917,15 +943,28 @@ pub struct ViewportData {
     pub snap_spacing: Vector2,
     pub grid_spacing: Vector2,
     pub circle_sides: i16,
+    pub grid_major: i16,
     pub frozen_layer_count: i32,
     pub status_flags: i32,
     pub render_mode: u8,
+    pub ucs_per_viewport: bool,
+    pub ucs_origin: Vector3,
+    pub ucs_x_axis: Vector3,
+    pub ucs_y_axis: Vector3,
+    pub ucs_elevation: f64,
+    pub ucs_ortho_type: i16,
+    pub shade_plot_mode: i16,
+    pub default_lighting: bool,
+    pub default_lighting_type: u8,
+    pub brightness: f64,
+    pub contrast: f64,
 }
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Polyline2DData {
     pub flags: i16,
+    pub smooth_surface: i16,
     pub start_width: f64,
     pub end_width: f64,
     pub thickness: f64,
@@ -1245,21 +1284,28 @@ pub fn read_hatch_boundary_path(reader: &mut DwgMergedReader, version: DwgVersio
 
 pub fn read_hatch(reader: &mut DwgMergedReader, version: DwgVersion) -> HatchData {
     let mut gradient_enabled = false;
+    let mut gradient_reserved = 0i32;
+    let mut gradient_angle = 0.0;
+    let mut gradient_shift = 0.0;
+    let mut gradient_single_color = false;
+    let mut gradient_tint = 0.0;
+    let mut gradient_colors = Vec::new();
+    let mut gradient_name = String::new();
     if version.r2004_plus() {
         let is_gradient = reader.read_bit_long();
         gradient_enabled = is_gradient != 0;
-        // Skip gradient fields (reserve + angle + shift + single_color + tint)
-        let _reserved = reader.read_bit_long();
-        let _angle = reader.read_bit_double();
-        let _shift = reader.read_bit_double();
-        let _single_color = reader.read_bit_long();
-        let _tint = reader.read_bit_double();
+        gradient_reserved = reader.read_bit_long();
+        gradient_angle = reader.read_bit_double();
+        gradient_shift = reader.read_bit_double();
+        gradient_single_color = reader.read_bit_long() != 0;
+        gradient_tint = reader.read_bit_double();
         let num_colors = safe_count(reader.read_bit_long());
         for _ in 0..num_colors {
-            let _value = reader.read_bit_double();
-            let _color = reader.read_cm_color();
+            let value = reader.read_bit_double();
+            let color = reader.read_cm_color();
+            gradient_colors.push((value, color));
         }
-        let _grad_name = reader.read_variable_text();
+        gradient_name = reader.read_variable_text();
     }
 
     let elevation = reader.read_bit_double();
@@ -1309,7 +1355,9 @@ pub fn read_hatch(reader: &mut DwgMergedReader, version: DwgVersion) -> HatchDat
     // boundary handles are read externally (for each path, path.boundary_handle_count handles)
 
     HatchData {
-        gradient_enabled, elevation, normal, pattern_name, is_solid, is_associative,
+        gradient_enabled, gradient_reserved, gradient_angle, gradient_shift,
+        gradient_single_color, gradient_tint, gradient_colors, gradient_name,
+        elevation, normal, pattern_name, is_solid, is_associative,
         paths, style, pattern_type, pattern_angle, pattern_scale, is_double,
         pattern_lines, pixel_size, seed_points,
     }
@@ -1335,9 +1383,11 @@ pub fn read_viewport(reader: &mut DwgMergedReader, version: DwgVersion, _dxf_ver
     let grid_spacing = reader.read_2raw_double();
     let circle_sides = reader.read_bit_short();
 
-    if version.r2007_plus() {
-        let _grid_major = reader.read_bit_short();
-    }
+    let grid_major = if version.r2007_plus() {
+        reader.read_bit_short()
+    } else {
+        0
+    };
 
     // Status/UCS data (read for all versions)
     let frozen_layer_count = reader.read_bit_long();
@@ -1345,42 +1395,50 @@ pub fn read_viewport(reader: &mut DwgMergedReader, version: DwgVersion, _dxf_ver
     let _style_sheet = reader.read_variable_text();
     let render_mode = reader.read_byte();
     let _ucs_at_origin = reader.read_bit();
-    let _ucs_per_viewport = reader.read_bit();
-    let _ucs_origin = reader.read_3bit_double();
-    let _ucs_x_axis = reader.read_3bit_double();
-    let _ucs_y_axis = reader.read_3bit_double();
-    let _ucs_elevation = reader.read_bit_double();
-    let _ucs_ortho_type = reader.read_bit_short();
+    let ucs_per_viewport = reader.read_bit();
+    let ucs_origin = reader.read_3bit_double();
+    let ucs_x_axis = reader.read_3bit_double();
+    let ucs_y_axis = reader.read_3bit_double();
+    let ucs_elevation = reader.read_bit_double();
+    let ucs_ortho_type = reader.read_bit_short();
 
-    if version.r2004_plus() {
-        let _shade_plot_mode = reader.read_bit_short();
-    }
-    if version.r2007_plus() {
-        let _default_lighting = reader.read_bit();
-        let _default_lighting_type = reader.read_byte();
-        let _brightness = reader.read_bit_double();
-        let _contrast = reader.read_bit_double();
+    let shade_plot_mode = if version.r2004_plus() {
+        reader.read_bit_short()
+    } else {
+        0
+    };
+    let (default_lighting, default_lighting_type, brightness, contrast) = if version.r2007_plus() {
+        let dl = reader.read_bit();
+        let dlt = reader.read_byte();
+        let br = reader.read_bit_double();
+        let co = reader.read_bit_double();
         let _ambient_color = reader.read_cm_color();
-    }
+        (dl, dlt, br, co)
+    } else {
+        (false, 0, 0.0, 0.0)
+    };
 
     ViewportData {
         center, width, height, view_target, view_direction,
         twist_angle, view_height, lens_length, front_clip_z, back_clip_z,
         snap_angle, view_center, snap_base, snap_spacing, grid_spacing,
-        circle_sides, frozen_layer_count, status_flags, render_mode,
+        circle_sides, grid_major, frozen_layer_count, status_flags, render_mode,
+        ucs_per_viewport, ucs_origin, ucs_x_axis, ucs_y_axis, ucs_elevation,
+        ucs_ortho_type, shade_plot_mode, default_lighting, default_lighting_type,
+        brightness, contrast,
     }
 }
 
 pub fn read_polyline2d(reader: &mut DwgMergedReader, version: DwgVersion) -> Polyline2DData {
     let flags = reader.read_bit_short();
-    let _smooth_surface = reader.read_bit_short(); // BS 75: curves and smooth surface type
+    let smooth_surface = reader.read_bit_short();
     let start_width = reader.read_bit_double();
     let end_width = reader.read_bit_double();
     let thickness = reader.read_bit_thickness();
     let elevation = reader.read_bit_double();
     let normal = reader.read_bit_extrusion();
     let owned_count = if version.r2004_plus() { reader.read_bit_long() } else { 0 };
-    Polyline2DData { flags, start_width, end_width, thickness, elevation, normal, owned_count }
+    Polyline2DData { flags, smooth_surface, start_width, end_width, thickness, elevation, normal, owned_count }
 }
 
 pub fn read_vertex2d(reader: &mut DwgMergedReader, version: DwgVersion) -> Vertex2DData {

@@ -411,6 +411,10 @@ impl DwgDocumentBuilder {
                     layer.line_type = maps.linetypes.get(&data.linetype_handle)
                         .cloned()
                         .unwrap_or_else(|| "Continuous".to_string());
+                    // Material handle
+                    if let Some(mh) = data.material_handle {
+                        layer.material = Handle::from(mh);
+                    }
                     // Remove default entry if it exists, then add
                     let _ = document.layers.remove(&data.name);
                     let _ = document.layers.add(layer);
@@ -581,6 +585,17 @@ impl DwgDocumentBuilder {
                         1.0
                     };
                     vp.lens_length = data.lens_length;
+                    vp.view_twist = data.view_twist;
+                    vp.front_clip = data.front_clip;
+                    vp.back_clip = data.back_clip;
+                    vp.ucsfollow = data.ucsfollow;
+                    vp.circle_zoom = data.circle_zoom;
+                    vp.fast_zoom = data.fast_zoom;
+                    vp.grid_on = data.grid_on;
+                    vp.snap_on = data.snap_on;
+                    vp.snap_style = data.snap_style;
+                    vp.snap_isopair = data.snap_isopair;
+                    vp.snap_rotation = data.snap_rotation;
                     let _ = document.vports.remove(&data.name);
                     let _ = document.vports.add(vp);
                 },
@@ -952,7 +967,7 @@ impl DwgDocumentBuilder {
                 },
 
                 // ── Moderate entities ──────────────────────────────
-                OBJ_INSERT | OBJ_MINSERT => {
+                OBJ_INSERT => {
                     let data = entities::read_insert(&mut reader, self.obj_reader.version());
                     let block_name = maps.block_name(data.block_handle);
                     let mut e = Insert::new(block_name, data.insert_point);
@@ -962,6 +977,22 @@ impl DwgDocumentBuilder {
                     e.set_z_scale(data.z_scale);
                     e.rotation = data.rotation;
                     e.normal = data.normal;
+                    let _ = document.add_entity(EntityType::Insert(e));
+                },
+                OBJ_MINSERT => {
+                    let data = entities::read_minsert(&mut reader, self.obj_reader.version());
+                    let block_name = maps.block_name(data.insert.block_handle);
+                    let mut e = Insert::new(block_name, data.insert.insert_point);
+                    e.common = entity_common;
+                    e.set_x_scale(data.insert.x_scale);
+                    e.set_y_scale(data.insert.y_scale);
+                    e.set_z_scale(data.insert.z_scale);
+                    e.rotation = data.insert.rotation;
+                    e.normal = data.insert.normal;
+                    e.column_count = data.column_count as u16;
+                    e.row_count = data.row_count as u16;
+                    e.column_spacing = data.column_spacing;
+                    e.row_spacing = data.row_spacing;
                     let _ = document.add_entity(EntityType::Insert(e));
                 },
                 OBJ_LWPOLYLINE => {
@@ -1044,6 +1075,9 @@ impl DwgDocumentBuilder {
                     e.insertion_point = data.insertion_point;
                     e.height = data.height;
                     e.rectangle_width = data.rectangle_width;
+                    if data.rectangle_height != 0.0 {
+                        e.rectangle_height = Some(data.rectangle_height);
+                    }
                     e.normal = data.normal;
                     e.attachment_point = match data.attachment_point {
                         2 => AttachmentPoint::TopCenter,
@@ -1075,6 +1109,18 @@ impl DwgDocumentBuilder {
                     e.normal = data.normal;
                     e.horizontal_direction = data.horizontal_direction;
                     e.annotation_handle = Handle::from(data.annotation_handle);
+                    e.dimension_style = maps.dimstyle_name(data.dimstyle_handle);
+                    e.arrow_enabled = data.arrowhead_on;
+                    e.path_type = LeaderPathType::from_value(data.path_type);
+                    e.creation_type = LeaderCreationType::from_value(data.annotation_type);
+                    e.hookline_direction = HooklineDirection::from_value(data.hookline_on_x_dir as i16);
+                    // text_height/text_width only present in DWG for versions < R2010
+                    if !self.obj_reader.version().r2010_plus() {
+                        e.text_height = data.text_height;
+                        e.text_width = data.text_width;
+                    }
+                    e.block_offset = data.block_offset;
+                    e.annotation_offset = data.annotation_offset;
                     let _ = document.add_entity(EntityType::Leader(e));
                 },
                 OBJ_TOLERANCE => {
@@ -1186,6 +1232,17 @@ impl DwgDocumentBuilder {
                         bp
                     }).collect();
                     e.seed_points = data.seed_points;
+                    // Map gradient data
+                    e.gradient_color.enabled = data.gradient_enabled;
+                    e.gradient_color.reserved = data.gradient_reserved;
+                    e.gradient_color.angle = data.gradient_angle;
+                    e.gradient_color.shift = data.gradient_shift;
+                    e.gradient_color.is_single_color = data.gradient_single_color;
+                    e.gradient_color.color_tint = data.gradient_tint;
+                    e.gradient_color.colors = data.gradient_colors.into_iter().map(|(value, color)| {
+                        crate::entities::hatch::GradientColorEntry { value, color }
+                    }).collect();
+                    e.gradient_color.name = data.gradient_name;
                     // Read boundary object handles from handle stream
                     for (path, &count) in e.paths.iter_mut().zip(boundary_handle_counts.iter()) {
                         for _ in 0..count {
@@ -1214,12 +1271,46 @@ impl DwgDocumentBuilder {
                     e.front_clip_z = data.front_clip_z;
                     e.back_clip_z = data.back_clip_z;
                     e.twist_angle = data.twist_angle;
+                    e.snap_angle = data.snap_angle;
+                    e.snap_base = crate::types::Vector3::new(data.snap_base.x, data.snap_base.y, 0.0);
+                    e.snap_spacing = crate::types::Vector3::new(data.snap_spacing.x, data.snap_spacing.y, 0.0);
+                    e.grid_spacing = crate::types::Vector3::new(data.grid_spacing.x, data.grid_spacing.y, 0.0);
+                    e.circle_sides = data.circle_sides;
+                    if self.obj_reader.version().r2007_plus() {
+                        e.grid_major = data.grid_major;
+                    }
+                    e.status = ViewportStatusFlags::from_bits(data.status_flags);
+                    e.render_mode = ViewportRenderMode::from_value(data.render_mode as i16);
+                    e.ucs_per_viewport = data.ucs_per_viewport;
+                    e.ucs_origin = data.ucs_origin;
+                    e.ucs_x_axis = data.ucs_x_axis;
+                    e.ucs_y_axis = data.ucs_y_axis;
+                    e.elevation = data.ucs_elevation;
+                    e.ucs_ortho_type = data.ucs_ortho_type;
+                    if self.obj_reader.version().r2004_plus() {
+                        e.shade_plot_mode = data.shade_plot_mode;
+                    }
+                    if self.obj_reader.version().r2007_plus() {
+                        e.default_lighting = data.default_lighting;
+                        e.default_lighting_type = data.default_lighting_type as i16;
+                        e.brightness = data.brightness;
+                        e.contrast = data.contrast;
+                    }
+                    // Read frozen layer handles
+                    for _ in 0..data.frozen_layer_count {
+                        let h = reader.read_handle();
+                        if h != 0 {
+                            e.frozen_layers.push(Handle::new(h));
+                        }
+                    }
                     let _ = document.add_entity(EntityType::Viewport(e));
                 },
                 OBJ_POLYLINE_2D => {
                     let data = entities::read_polyline2d(&mut reader, self.obj_reader.version());
                     let mut e = Polyline2D::new();
                     e.common = entity_common;
+                    e.flags = PolylineFlags::from_bits(data.flags as u16);
+                    e.smooth_surface = SmoothSurfaceType::from(data.smooth_surface);
                     e.elevation = data.elevation;
                     e.thickness = data.thickness;
                     e.normal = data.normal;
@@ -1247,9 +1338,10 @@ impl DwgDocumentBuilder {
                         data.second_point,
                     );
                     dim.base.common = entity_common;
-                    dim.base.text_middle_point = data.common.text_middle_point;
-                    dim.base.normal = data.common.normal;
+                    map_dimension_common(&mut dim.base, &data.common, &maps);
+                    dim.definition_point = data.definition_point;
                     dim.rotation = data.rotation;
+                    dim.ext_line_rotation = data.ext_line_rotation;
                     let _ = document.add_entity(EntityType::Dimension(
                         Dimension::Linear(dim),
                     ));
@@ -1263,8 +1355,9 @@ impl DwgDocumentBuilder {
                         data.second_point,
                     );
                     dim.base.common = entity_common;
-                    dim.base.text_middle_point = data.common.text_middle_point;
-                    dim.base.normal = data.common.normal;
+                    map_dimension_common(&mut dim.base, &data.common, &maps);
+                    dim.definition_point = data.definition_point;
+                    dim.ext_line_rotation = data.ext_line_rotation;
                     let _ = document.add_entity(EntityType::Dimension(
                         Dimension::Aligned(dim),
                     ));
@@ -1278,7 +1371,7 @@ impl DwgDocumentBuilder {
                         data.definition_point,
                     );
                     dim.base.common = entity_common;
-                    dim.base.text_middle_point = data.common.text_middle_point;
+                    map_dimension_common(&mut dim.base, &data.common, &maps);
                     dim.leader_length = data.leader_length;
                     let _ = document.add_entity(EntityType::Dimension(
                         Dimension::Radius(dim),
@@ -1293,7 +1386,7 @@ impl DwgDocumentBuilder {
                         data.definition_point,
                     );
                     dim.base.common = entity_common;
-                    dim.base.text_middle_point = data.common.text_middle_point;
+                    map_dimension_common(&mut dim.base, &data.common, &maps);
                     dim.leader_length = data.leader_length;
                     let _ = document.add_entity(EntityType::Dimension(
                         Dimension::Diameter(dim),
@@ -1305,7 +1398,8 @@ impl DwgDocumentBuilder {
                     );
                     let mut dim = DimensionAngular2Ln::default();
                     dim.base.common = entity_common;
-                    dim.base.text_middle_point = data.common.text_middle_point;
+                    map_dimension_common(&mut dim.base, &data.common, &maps);
+                    dim.dimension_arc = crate::types::Vector3::new(data.dimension_arc.x, data.dimension_arc.y, 0.0);
                     dim.first_point = data.first_point;
                     dim.second_point = data.second_point;
                     dim.angle_vertex = data.angle_vertex;
@@ -1320,7 +1414,7 @@ impl DwgDocumentBuilder {
                     );
                     let mut dim = DimensionAngular3Pt::default();
                     dim.base.common = entity_common;
-                    dim.base.text_middle_point = data.common.text_middle_point;
+                    map_dimension_common(&mut dim.base, &data.common, &maps);
                     dim.first_point = data.first_point;
                     dim.second_point = data.second_point;
                     dim.angle_vertex = data.angle_vertex;
@@ -1339,7 +1433,8 @@ impl DwgDocumentBuilder {
                         data.is_ordinate_type_x,
                     );
                     dim.base.common = entity_common;
-                    dim.base.text_middle_point = data.common.text_middle_point;
+                    map_dimension_common(&mut dim.base, &data.common, &maps);
+                    dim.definition_point = data.definition_point;
                     let _ = document.add_entity(EntityType::Dimension(
                         Dimension::Ordinate(dim),
                     ));
@@ -1708,18 +1803,16 @@ impl DwgDocumentBuilder {
                     let mut obj = crate::objects::DictionaryWithDefault::new();
                     obj.handle = Handle::from(handle);
                     obj.owner = owner_handle;
+                    obj.hard_owner = data.hard_owner;
+                    obj.duplicate_cloning = data.duplicate_cloning;
+                    obj.default_handle = Handle::from(data.default_handle);
+                    for entry in data.entries {
+                        obj.entries.push((entry.name, Handle::from(entry.handle)));
+                    }
                     document.objects.insert(
                         Handle::from(handle),
                         crate::objects::ObjectType::DictionaryWithDefault(obj),
                     );
-                    // Also store entries in a regular dict for lookup
-                    let mut dict = crate::objects::Dictionary::new();
-                    dict.handle = Handle::from(handle);
-                    dict.hard_owner = data.hard_owner;
-                    dict.duplicate_cloning = data.duplicate_cloning;
-                    for entry in data.entries {
-                        dict.add_entry(entry.name, Handle::from(entry.handle));
-                    }
                 },
                 OBJ_DICTIONARYVAR => {
                     let data = objects::read_dictionary_variable(&mut reader);
@@ -1820,10 +1913,12 @@ impl DwgDocumentBuilder {
                     );
                 },
                 OBJ_XRECORD => {
-                    let _data = objects::read_xrecord(&mut reader);
+                    let data = objects::read_xrecord(&mut reader);
                     let mut obj = crate::objects::XRecord::new();
                     obj.handle = Handle::from(handle);
                     obj.owner = owner_handle;
+                    obj.cloning_flags = crate::objects::DictionaryCloningFlags::from_value(data.cloning_flags);
+                    obj.raw_data = data.raw_data;
                     document.objects.insert(
                         Handle::from(handle),
                         crate::objects::ObjectType::XRecord(obj),
@@ -2059,6 +2154,36 @@ impl DwgDocumentBuilder {
             raw
         }
     }
+}
+
+fn map_dimension_common(
+    base: &mut crate::entities::dimension::DimensionBase,
+    common: &entities::DimensionCommonData,
+    maps: &HandleMaps,
+) {
+    base.version = common.version_byte;
+    base.normal = common.normal;
+    base.text_middle_point = common.text_middle_point;
+    base.text = common.text.clone();
+    base.text_rotation = common.text_rotation;
+    base.horizontal_direction = common.horizontal_direction;
+    base.attachment_point = match common.attachment_point {
+        1 => crate::entities::dimension::AttachmentPointType::TopLeft,
+        2 => crate::entities::dimension::AttachmentPointType::TopCenter,
+        3 => crate::entities::dimension::AttachmentPointType::TopRight,
+        4 => crate::entities::dimension::AttachmentPointType::MiddleLeft,
+        5 => crate::entities::dimension::AttachmentPointType::MiddleCenter,
+        6 => crate::entities::dimension::AttachmentPointType::MiddleRight,
+        7 => crate::entities::dimension::AttachmentPointType::BottomLeft,
+        8 => crate::entities::dimension::AttachmentPointType::BottomCenter,
+        9 => crate::entities::dimension::AttachmentPointType::BottomRight,
+        _ => crate::entities::dimension::AttachmentPointType::MiddleCenter,
+    };
+    base.line_spacing_factor = common.linespacing_factor;
+    base.actual_measurement = common.actual_measurement;
+    base.insertion_point = crate::types::Vector3::new(common.insertion_point.x, common.insertion_point.y, 0.0);
+    base.style_name = maps.dimstyle_name(common.dimstyle_handle);
+    base.block_name = maps.block_name(common.block_handle);
 }
 
 fn map_entity_common(

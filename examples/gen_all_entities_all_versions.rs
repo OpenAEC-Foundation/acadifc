@@ -19,7 +19,7 @@ use acadrust::entities::mline::MLine;
 use acadrust::entities::multileader::MultiLeader;
 use acadrust::entities::polyface_mesh::PolyfaceMesh;
 use acadrust::types::{DxfVersion, Vector2, Vector3};
-use acadrust::{CadDocument, DwgWriter};
+use acadrust::{BlockRecord, CadDocument, DwgWriter, TableEntry};
 
 /// All DWG versions to test
 const VERSIONS: &[(DxfVersion, &str)] = &[
@@ -192,9 +192,7 @@ fn main() {
             EntityType::Viewport(Viewport::new())
         });
 
-        gen(version, ver_str, &dir, "INSERT", &mut ok, &mut fail, &mut skip, || {
-            EntityType::Insert(Insert::new("*Model_Space", Vector3::new(0.0, 0.0, 0.0)))
-        });
+        gen_insert(version, ver_str, &dir, "INSERT", &mut ok, &mut fail, &mut skip);
 
         // ── Hatch (all versions) ────────────────────────────────────
 
@@ -376,6 +374,73 @@ where
         *_skip += 1;
         return;
     }
+    match DwgWriter::write_to_file(&path, &doc) {
+        Ok(()) => {
+            let sz = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            println!("  OK   {:<20} ({} bytes)", name, sz);
+            *ok += 1;
+        }
+        Err(e) => {
+            println!("  FAIL {:<20} {:?}", name, e);
+            *fail += 1;
+        }
+    }
+}
+
+/// Generate a DWG file with a proper block definition + INSERT reference.
+///
+/// Creates a user-defined block "TestBlock" containing a circle and a line,
+/// then inserts it at (50, 50, 0). This avoids the cyclic reference that
+/// would occur if INSERT referenced *Model_Space.
+fn gen_insert(
+    version: DxfVersion,
+    ver_str: &str,
+    dir: &str,
+    name: &str,
+    ok: &mut u32,
+    fail: &mut u32,
+    _skip: &mut u32,
+) {
+    let path = format!("{}/entity_{}_{}.dwg", dir, ver_str, name);
+    let mut doc = CadDocument::with_version(version);
+
+    // 1. Create a block record for "TestBlock"
+    let mut br = BlockRecord::new("TestBlock");
+    let br_handle = doc.allocate_handle();
+    br.set_handle(br_handle);
+    br.block_entity_handle = doc.allocate_handle();
+    br.block_end_handle = doc.allocate_handle();
+    if let Err(e) = doc.block_records.add(br) {
+        println!("  SKIP {:<20} block_records.add error: {}", name, e);
+        *_skip += 1;
+        return;
+    }
+
+    // 2. Add geometry to the block by pre-setting owner_handle
+    let mut circle = EntityType::Circle(Circle::from_coords(0.0, 0.0, 0.0, 10.0));
+    circle.common_mut().owner_handle = br_handle;
+    if let Err(e) = doc.add_entity(circle) {
+        println!("  SKIP {:<20} add circle error: {:?}", name, e);
+        *_skip += 1;
+        return;
+    }
+
+    let mut line = EntityType::Line(Line::from_coords(-10.0, 0.0, 0.0, 10.0, 0.0, 0.0));
+    line.common_mut().owner_handle = br_handle;
+    if let Err(e) = doc.add_entity(line) {
+        println!("  SKIP {:<20} add line error: {:?}", name, e);
+        *_skip += 1;
+        return;
+    }
+
+    // 3. Add an INSERT entity referencing "TestBlock"
+    let insert = Insert::new("TestBlock", Vector3::new(50.0, 50.0, 0.0));
+    if let Err(e) = doc.add_entity(EntityType::Insert(insert)) {
+        println!("  SKIP {:<20} add_entity error: {:?}", name, e);
+        *_skip += 1;
+        return;
+    }
+
     match DwgWriter::write_to_file(&path, &doc) {
         Ok(()) => {
             let sz = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
