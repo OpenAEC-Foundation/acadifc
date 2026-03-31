@@ -75,6 +75,8 @@ pub struct EntityCommonData {
     pub layer_handle: u64,
     /// Linetype flags (00=bylayer, 01=byblock, 10=continuous, 11=handle)
     pub linetype_flags: u8,
+    /// Linetype handle (only valid if linetype_flags == 0b11)
+    pub linetype_handle: u64,
     /// Previous entity handle (pre-R2004)
     pub prev_entity_handle: Option<u64>,
     /// Next entity handle (pre-R2004)
@@ -312,6 +314,10 @@ impl DwgObjectReader {
         // Handle (absolute, from main stream)
         let handle = reader.main_mut().read_handle();
 
+        // Set this object's handle as the reference for subsequent
+        // offset-based handle codes (6/8/A/C) in the handle stream.
+        reader.set_ref_handle(handle);
+
         // Extended data (read and skip)
         let xdata_size = self.skip_extended_data(reader);
 
@@ -390,8 +396,11 @@ impl DwgObjectReader {
         let mut linetype_flags = 0u8;
         if self.version.r13_14_only() {
             layer_handle = reader.read_handle();
-            let _is_bylayer_lt = reader.read_bit();
-            // If not by-layer, would read linetype handle
+            let is_bylayer_lt = reader.read_bit();
+            if !is_bylayer_lt {
+                // Linetype handle (hard pointer) — present if NOT by-layer
+                let _linetype_handle = reader.read_handle();
+            }
         }
 
         // Pre-R2004: Nolinks + prev/next (R13/R14 and R2000-R2002)
@@ -406,12 +415,16 @@ impl DwgObjectReader {
         }
 
         // Color
-        let (color, transparency) = if self.version.r2000_plus() {
-            let (c, t, _has_handle) = reader.read_en_color();
-            (c, t)
+        let (color, transparency, has_color_handle) = if self.version.r2000_plus() {
+            reader.read_en_color()
         } else {
-            (reader.read_cm_color(), Transparency::default())
+            (reader.read_cm_color(), Transparency::default(), false)
         };
+
+        // R2004+: Color book color handle (hard pointer) — only if flagged
+        if self.version.r2004_plus() && has_color_handle {
+            let _color_book_handle = reader.read_handle();
+        }
 
         // Linetype scale
         let linetype_scale = reader.read_bit_double();
@@ -435,6 +448,7 @@ impl DwgObjectReader {
                 invisible,
                 layer_handle,
                 linetype_flags,
+                linetype_handle: 0,
                 prev_entity_handle,
                 next_entity_handle,
             };
@@ -445,25 +459,44 @@ impl DwgObjectReader {
             layer_handle = reader.read_handle();
         }
 
-        // Linetype flags (2 bits)
+        // Linetype flags (2 bits): 00=bylayer, 01=byblock, 10=continuous, 11=handle present
+        let mut linetype_handle = 0u64;
         linetype_flags = reader.main_mut().read_2bits();
+        if linetype_flags == 0b11 {
+            // Linetype handle (hard pointer) — present when flags == 11
+            linetype_handle = reader.read_handle();
+        }
 
         // R2007+: material flags + shadow flags
         if self.version.r2007_plus() {
-            let _material_flags = reader.main_mut().read_2bits();
+            let material_flags = reader.main_mut().read_2bits();
+            // Material handle (hard pointer) — present when flags == 0b11
+            if material_flags == 0b11 {
+                let _material_handle = reader.read_handle();
+            }
             let _shadow_flags = reader.read_byte();
         }
 
-        // R2000+: Plotstyle flags
+        // R2000+: Plotstyle flags (00=bylayer, 01=byblock, 11=handle present)
         if self.version.r2000_plus() {
-            let _plotstyle_flags = reader.main_mut().read_2bits();
+            let plotstyle_flags = reader.main_mut().read_2bits();
+            if plotstyle_flags == 0b11 {
+                // Plotstyle handle (hard pointer)
+                let _plotstyle_handle = reader.read_handle();
+            }
         }
 
-        // R2010+: visual style bits
+        // R2010+: visual style bits — each bit conditionally followed by a handle
         if self.version.r2010_plus() {
-            let _has_full_visual = reader.read_bit();
-            let _has_face_visual = reader.read_bit();
-            let _has_edge_visual = reader.read_bit();
+            if reader.read_bit() {
+                let _full_visual_style_handle = reader.read_handle();
+            }
+            if reader.read_bit() {
+                let _face_visual_style_handle = reader.read_handle();
+            }
+            if reader.read_bit() {
+                let _edge_visual_style_handle = reader.read_handle();
+            }
         }
 
         // Invisibility
@@ -491,6 +524,7 @@ impl DwgObjectReader {
             invisible,
             layer_handle,
             linetype_flags,
+            linetype_handle,
             prev_entity_handle,
             next_entity_handle,
         }
@@ -551,39 +585,37 @@ impl DwgObjectReader {
 
     /// Skip extended data and return the total size skipped.
     ///
-    /// XData format: BL app_count, for each: TV app_name + items until end marker.
-    /// For now, we just read the count and skip by reading zero items
-    /// (since the writer writes count=0).
+    /// EED format: repeating [BS size | H app_handle | RC×size data] until size==0.
+    /// The application handle is ALWAYS in the main stream (even for R2007+),
+    /// unlike entity reference handles which go to the handle stream.
     fn skip_extended_data(&self, reader: &mut DwgMergedReader) -> usize {
-        // XData: BS count of registered applications with xdata
-        let count = reader.read_bit_short();
-        if count <= 0 {
-            return 0;
-        }
-
-        // TODO: Full xdata parsing — for now we expect count=0
-        // from our writer. If non-zero, we'd need to parse each block.
+        // EED: repeating [ BS size (main) | H app_handle (main!) | RC×size data (main) ] until size==0
         let mut total_size: usize = 0;
-        for _ in 0..count {
-            // Each app block: RS(app_size) + data items
-            let app_size = reader.read_raw_short();
-            let app_size_u = app_size.max(0) as usize;
-            total_size = total_size.wrapping_add(app_size_u);
-            // Read handle reference for the app
-            let _ = reader.read_handle();
-            // Read xdata items (app_size bytes worth)
-            self.skip_xdata_items(reader, app_size_u);
+        loop {
+            let size = reader.read_bit_short();
+            if size <= 0 {
+                break;
+            }
+            let size_u = size as usize;
+            total_size += size_u;
+            // Application handle — always from MAIN stream (not handle stream).
+            // Per ACadSharp reference: EED handles are inline in the object data,
+            // not in the handle chain.
+            let _ = reader.main_mut().read_handle();
+            // Raw xdata bytes (from main stream)
+            self.skip_xdata_items(reader, size_u);
         }
         total_size
     }
 
     /// Skip xdata items for a single application block.
-    fn skip_xdata_items(&self, _reader: &mut DwgMergedReader, _remaining: usize) {
-        // Each xdata item starts with a group code byte:
-        // 0=string, 2=open_brace, 3=layer_ref, 5=handle,
-        // 10/20/30=3RD, 40=BD, 70=BS, 71=BL
-        // For now, this is a stub — our writer never produces xdata.
-        // Full implementation would parse by group code until end marker.
+    fn skip_xdata_items(&self, reader: &mut DwgMergedReader, remaining: usize) {
+        // Each EED application block has `remaining` raw bytes of xdata
+        // items in the main stream.  We must consume them to keep the
+        // bit position aligned for subsequent reads.
+        for _ in 0..remaining {
+            reader.read_byte();
+        }
     }
 
     /// Get the list of all handles in the handle map.

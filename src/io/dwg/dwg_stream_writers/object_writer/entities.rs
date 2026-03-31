@@ -1,4 +1,4 @@
-//! Entity serialization for DWG object records.
+﻿//! Entity serialization for DWG object records.
 //!
 //! Each entity writer:
 //! 1. Calls `write_common_entity_data()` (type code + preamble)
@@ -16,7 +16,7 @@ use super::common;
 use super::DwgObjectWriter;
 
 impl<'a> DwgObjectWriter<'a> {
-    // ── Entity dispatch ─────────────────────────────────────────────
+    // â”€â”€ Entity dispatch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// Write a single entity record.
     pub(super) fn write_entity(&mut self, entity: &EntityType) {
@@ -62,19 +62,19 @@ impl<'a> DwgObjectWriter<'a> {
             EntityType::Body(e) => self.write_body(e),
             EntityType::Table(_)
             | EntityType::Underlay(_) => {
-                // Not yet supported — silently skip
+                // Not yet supported â€” silently skip
             }
             EntityType::Unknown(e) => {
                 // Write raw DWG data verbatim if available
                 if let Some(ref raw_data) = e.raw_dwg_data {
                     self.register_raw_object(e.common.handle, raw_data, e.dwg_handle_bits);
                 }
-                // else: no raw data → silently skip (DXF-only unknown)
+                // else: no raw data â†’ silently skip (DXF-only unknown)
             }
         }
     }
 
-    // ── Helper: write entity preamble ───────────────────────────────
+    // â”€â”€ Helper: write entity preamble â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn entity_preamble(&mut self, type_code: i16, c: &EntityCommon) {
         self.write_common_entity_data(
@@ -87,13 +87,14 @@ impl<'a> DwgObjectWriter<'a> {
             &c.transparency,
             c.invisible,
             c.linetype_scale,
+            &c.linetype,
             &c.extended_data,
             &c.reactors,
             &c.xdictionary_handle,
         );
     }
 
-    // ── Point ───────────────────────────────────────────────────────
+    // â”€â”€ Point â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_point(&mut self, e: &Point) {
         self.entity_preamble(common::OBJ_POINT, &e.common);
@@ -104,7 +105,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(e.common.handle);
     }
 
-    // ── Line ────────────────────────────────────────────────────────
+    // â”€â”€ Line â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_line(&mut self, e: &Line) {
         self.entity_preamble(common::OBJ_LINE, &e.common);
@@ -135,7 +136,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(e.common.handle);
     }
 
-    // ── Circle ──────────────────────────────────────────────────────
+    // â”€â”€ Circle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_circle(&mut self, e: &Circle) {
         self.entity_preamble(common::OBJ_CIRCLE, &e.common);
@@ -146,7 +147,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(e.common.handle);
     }
 
-    // ── Arc ─────────────────────────────────────────────────────────
+    // â”€â”€ Arc â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_arc(&mut self, e: &Arc) {
         self.entity_preamble(common::OBJ_ARC, &e.common);
@@ -159,7 +160,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(e.common.handle);
     }
 
-    // ── Ellipse ─────────────────────────────────────────────────────
+    // â”€â”€ Ellipse â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_ellipse(&mut self, e: &Ellipse) {
         self.entity_preamble(common::OBJ_ELLIPSE, &e.common);
@@ -172,7 +173,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(e.common.handle);
     }
 
-    // ── Text ────────────────────────────────────────────────────────
+    // â”€â”€ Text â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_text(&mut self, e: &Text) {
         self.entity_preamble(common::OBJ_TEXT, &e.common);
@@ -209,7 +210,7 @@ impl<'a> DwgObjectWriter<'a> {
             // Vert align BS 73
             self.writer.write_bit_short(e.vertical_alignment as i16);
         } else {
-            // R2000+: DataFlags RC — presence bits for subsequent data
+            // R2000+: DataFlags RC â€” presence bits for subsequent data
             let mut data_flags: u8 = 0;
             // 0x01 = elevation (InsertPoint.Z) is 0
             if e.insertion_point.z == 0.0 {
@@ -246,14 +247,14 @@ impl<'a> DwgObjectWriter<'a> {
             }
             self.writer.write_byte(data_flags);
 
-            // Elevation RD — present if !(DataFlags & 0x01)
+            // Elevation RD â€” present if !(DataFlags & 0x01)
             if (data_flags & 0x01) == 0 {
                 self.writer.write_raw_double(e.insertion_point.z);
             }
             // Insertion pt 2RD 10
             self.writer.write_raw_double(e.insertion_point.x);
             self.writer.write_raw_double(e.insertion_point.y);
-            // Alignment pt 2DD 11 — present if !(DataFlags & 0x02)
+            // Alignment pt 2DD 11 â€” present if !(DataFlags & 0x02)
             // Uses insertion pt X,Y as default values
             if (data_flags & 0x02) == 0 {
                 self.writer
@@ -265,32 +266,32 @@ impl<'a> DwgObjectWriter<'a> {
             self.writer.write_bit_extrusion(e.normal);
             // Thickness BT 39
             self.writer.write_bit_thickness(0.0);
-            // Oblique ang RD 51 — present if !(DataFlags & 0x04)
+            // Oblique ang RD 51 â€” present if !(DataFlags & 0x04)
             if (data_flags & 0x04) == 0 {
                 self.writer.write_raw_double(e.oblique_angle);
             }
-            // Rotation ang RD 50 — present if !(DataFlags & 0x08)
+            // Rotation ang RD 50 â€” present if !(DataFlags & 0x08)
             if (data_flags & 0x08) == 0 {
                 self.writer.write_raw_double(e.rotation);
             }
             // Height RD 40 (always present)
             self.writer.write_raw_double(e.height);
-            // Width factor RD 41 — present if !(DataFlags & 0x10)
+            // Width factor RD 41 â€” present if !(DataFlags & 0x10)
             if (data_flags & 0x10) == 0 {
                 self.writer.write_raw_double(e.width_factor);
             }
             // Text value TV 1
             self.writer.write_variable_text(&e.value);
-            // Generation BS 71 — present if !(DataFlags & 0x20)
+            // Generation BS 71 â€” present if !(DataFlags & 0x20)
             if (data_flags & 0x20) == 0 {
                 self.writer.write_bit_short(0); // mirror = None
             }
-            // Horiz align BS 72 — present if !(DataFlags & 0x40)
+            // Horiz align BS 72 â€” present if !(DataFlags & 0x40)
             if (data_flags & 0x40) == 0 {
                 self.writer
                     .write_bit_short(e.horizontal_alignment as i16);
             }
-            // Vert align BS 73 — present if !(DataFlags & 0x80)
+            // Vert align BS 73 â€” present if !(DataFlags & 0x80)
             if (data_flags & 0x80) == 0 {
                 self.writer
                     .write_bit_short(e.vertical_alignment as i16);
@@ -310,14 +311,14 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(e.common.handle);
     }
 
-    // ── MText ───────────────────────────────────────────────────────
+    // â”€â”€ MText â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_mtext(&mut self, e: &MText) {
         self.entity_preamble(common::OBJ_MTEXT, &e.common);
 
         // Insertion pt 3BD 10
         self.writer.write_3bit_double(e.insertion_point);
-        // Extrusion 3BD 210 (NOT BitExtrusion — full 3BD per spec)
+        // Extrusion 3BD 210 (NOT BitExtrusion â€” full 3BD per spec)
         self.writer.write_3bit_double(e.normal);
 
         // X-axis dir 3BD 11 (alignment point / direction vector)
@@ -337,7 +338,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.writer.write_bit_double(e.height);
         // Attachment BS 71
         self.writer.write_bit_short(e.attachment_point as i16);
-        // Drawing dir BS 72 (unconditional — written for ALL versions)
+        // Drawing dir BS 72 (unconditional â€” written for ALL versions)
         self.writer.write_bit_short(e.drawing_direction as i16);
 
         // Extents ht BD (undocumented, not in DXF)
@@ -348,7 +349,7 @@ impl<'a> DwgObjectWriter<'a> {
         // Text TV 1
         self.writer.write_variable_text(&e.value);
 
-        // H 7 STYLE (hard pointer) — written BEFORE R2000+ block
+        // H 7 STYLE (hard pointer) â€” written BEFORE R2000+ block
         let style_handle = self
             .document
             .text_styles
@@ -381,7 +382,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(e.common.handle);
     }
 
-    // ── Solid ───────────────────────────────────────────────────────
+    // â”€â”€ Solid â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_solid(&mut self, e: &Solid) {
         self.entity_preamble(common::OBJ_SOLID, &e.common);
@@ -399,7 +400,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(e.common.handle);
     }
 
-    // ── Face3D ──────────────────────────────────────────────────────
+    // â”€â”€ Face3D â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_face3d(&mut self, e: &Face3D) {
         self.entity_preamble(common::OBJ_3DFACE, &e.common);
@@ -467,7 +468,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(e.common.handle);
     }
 
-    // ── Insert ──────────────────────────────────────────────────────
+    // â”€â”€ Insert â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_insert(&mut self, e: &Insert) {
         self.entity_preamble(common::OBJ_INSERT, &e.common);
@@ -529,13 +530,13 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(e.common.handle);
     }
 
-    // ── LwPolyline ──────────────────────────────────────────────────
+    // â”€â”€ LwPolyline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_lwpolyline(&mut self, e: &LwPolyline) {
         self.entity_preamble(common::OBJ_LWPOLYLINE, &e.common);
 
         let num_pts = e.vertices.len() as i32;
-        
+
         // Check for presence of optional data
         let has_widths = e.vertices.iter().any(|v| v.start_width != 0.0 || v.end_width != 0.0);
         let has_bulges = e.vertices.iter().any(|v| v.bulge != 0.0);
@@ -544,30 +545,15 @@ impl<'a> DwgObjectWriter<'a> {
         let has_thickness = e.thickness != 0.0;
         let has_normal = e.normal != Vector3::UNIT_Z;
 
-        // Build flags - must set flag bits for ALL optional fields
+        // Build flags
         let mut flag: i16 = 0;
-        if has_normal {
-            flag |= 0x1;
-        }
-        if has_thickness {
-            flag |= 0x2;
-        }
-        if has_constant_width {
-            flag |= 0x4;
-        }
-        if has_elevation {
-            flag |= 0x8;
-        }
-        if has_bulges {
-            flag |= 0x10;
-        }
-        if has_widths {
-            flag |= 0x20;
-        }
-        // 0x100 = Plinegen (not exposed in our struct, skip)
-        if e.is_closed {
-            flag |= 0x200;
-        }
+        if has_normal      { flag |= 0x1; }
+        if has_thickness    { flag |= 0x2; }
+        if has_constant_width { flag |= 0x4; }
+        if has_elevation    { flag |= 0x8; }
+        if has_bulges       { flag |= 0x10; }
+        if has_widths       { flag |= 0x20; }
+        if e.is_closed      { flag |= 0x200; }
 
         self.writer.write_bit_short(flag);
 
@@ -577,22 +563,19 @@ impl<'a> DwgObjectWriter<'a> {
         if has_elevation {
             self.writer.write_bit_double(e.elevation);
         }
+        // BT / BE types: self-compressing, but still flag-gated
         if has_thickness {
-            self.writer.write_bit_double(e.thickness);
+            self.writer.write_bit_thickness(e.thickness);
         }
         if has_normal {
-            self.writer.write_3bit_double(e.normal);
+            self.writer.write_bit_extrusion(e.normal);
         }
 
-        // Number of vertices
         self.writer.write_bit_long(num_pts);
 
-        // Bulge count = total vertices (if has bulges)
         if has_bulges {
             self.writer.write_bit_long(num_pts);
         }
-
-        // Width count = total vertices (if has widths)
         if has_widths {
             self.writer.write_bit_long(num_pts);
         }
@@ -619,14 +602,14 @@ impl<'a> DwgObjectWriter<'a> {
             }
         }
 
-        // Bulges - write ALL vertices (not just non-zero)
+        // Bulges
         if has_bulges {
             for v in &e.vertices {
                 self.writer.write_bit_double(v.bulge);
             }
         }
 
-        // Widths - write ALL vertices (not just non-zero)
+        // Widths
         if has_widths {
             for v in &e.vertices {
                 self.writer.write_bit_double(v.start_width);
@@ -634,10 +617,15 @@ impl<'a> DwgObjectWriter<'a> {
             }
         }
 
+        // R2010+: vertex IDs (none for now)
+        if self.version.r2010_plus() {
+            self.writer.write_bit_long(0); // num_vertex_ids = 0
+        }
+
         self.register_object(e.common.handle);
     }
 
-    // ── Ray ─────────────────────────────────────────────────────────
+    // â”€â”€ Ray â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_ray(&mut self, e: &Ray) {
         self.entity_preamble(common::OBJ_RAY, &e.common);
@@ -646,7 +634,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(e.common.handle);
     }
 
-    // ── XLine ───────────────────────────────────────────────────────
+    // â”€â”€ XLine â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_xline(&mut self, e: &XLine) {
         self.entity_preamble(common::OBJ_XLINE, &e.common);
@@ -655,7 +643,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(e.common.handle);
     }
 
-    // ── Spline ──────────────────────────────────────────────────────
+    // â”€â”€ Spline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_spline(&mut self, e: &Spline) {
         self.entity_preamble(common::OBJ_SPLINE, &e.common);
@@ -742,7 +730,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(e.common.handle);
     }
 
-    // ── Leader ──────────────────────────────────────────────────────
+    // â”€â”€ Leader â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_leader(&mut self, e: &Leader) {
         self.entity_preamble(common::OBJ_LEADER, &e.common);
@@ -770,7 +758,7 @@ impl<'a> DwgObjectWriter<'a> {
         // Offsettoblockinspt 3BD 212
         self.writer.write_3bit_double(e.block_offset);
 
-        // R14+: Endptproj 3BD (annotation offset) — not present in R13
+        // R14+: Endptproj 3BD (annotation offset) â€” not present in R13
         if self.dxf_version >= crate::types::DxfVersion::AC1014 {
             self.writer.write_3bit_double(e.annotation_offset);
         }
@@ -780,7 +768,7 @@ impl<'a> DwgObjectWriter<'a> {
             self.writer.write_bit_double(0.0); // DIMGAP * DIMSCALE
         }
 
-        // Common: text height / width (≤ R2007)
+        // Common: text height / width (â‰¤ R2007)
         if !self.version.r2010_plus() {
             self.writer.write_bit_double(e.text_height);
             self.writer.write_bit_double(e.text_width);
@@ -827,7 +815,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(e.common.handle);
     }
 
-    // ── Tolerance ───────────────────────────────────────────────────
+    // â”€â”€ Tolerance â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_tolerance(&mut self, e: &Tolerance) {
         self.entity_preamble(common::OBJ_TOLERANCE, &e.common);
@@ -865,7 +853,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(e.common.handle);
     }
 
-    // ── Shape ───────────────────────────────────────────────────────
+    // â”€â”€ Shape â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_shape(&mut self, e: &Shape) {
         self.entity_preamble(common::OBJ_SHAPE, &e.common);
@@ -895,7 +883,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(e.common.handle);
     }
 
-    // ── Hatch ───────────────────────────────────────────────────────
+    // â”€â”€ Hatch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_hatch(&mut self, e: &Hatch) {
         self.entity_preamble(common::OBJ_HATCH, &e.common);
@@ -976,7 +964,7 @@ impl<'a> DwgObjectWriter<'a> {
             }
         }
 
-        // Pixel size — only written when a Derived boundary path exists
+        // Pixel size â€” only written when a Derived boundary path exists
         if has_derived_boundary {
             self.writer.write_bit_double(e.pixel_size);
         }
@@ -1060,7 +1048,7 @@ impl<'a> DwgObjectWriter<'a> {
                             }
                         }
 
-                        // Fit data — R2010+ only
+                        // Fit data â€” R2010+ only
                         if self.version.r2010_plus() {
                             self.writer
                                 .write_bit_long(se.fit_points.len() as i32);
@@ -1121,7 +1109,7 @@ impl<'a> DwgObjectWriter<'a> {
             .write_bit_long(path.boundary_handles.len() as i32);
     }
 
-    // ── Viewport entity ─────────────────────────────────────────────
+    // â”€â”€ Viewport entity â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_viewport_entity(&mut self, e: &Viewport) {
         self.entity_preamble(common::OBJ_VIEWPORT, &e.common);
@@ -1243,7 +1231,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(e.common.handle);
     }
 
-    // ── Dimension (dispatch) ────────────────────────────────────────
+    // â”€â”€ Dimension (dispatch) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_dimension(&mut self, dim: &Dimension) {
         match dim {
@@ -1425,7 +1413,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(d.base.common.handle);
     }
 
-    // ── Polyline2D ──────────────────────────────────────────────────
+    // â”€â”€ Polyline2D â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_polyline2d(&mut self, e: &Polyline2D) {
         self.entity_preamble(common::OBJ_POLYLINE_2D, &e.common);
@@ -1469,7 +1457,7 @@ impl<'a> DwgObjectWriter<'a> {
 
         self.register_object(e.common.handle);
 
-        // Write vertices as child entities — set up internal entity chain
+        // Write vertices as child entities â€” set up internal entity chain
         let saved_prev = self.prev_handle.take();
         let saved_next = self.next_handle.take();
 
@@ -1482,7 +1470,7 @@ impl<'a> DwgObjectWriter<'a> {
             self.write_vertex2d(v, vh, e.common.handle, &e.common.layer, &e.common.color);
         }
 
-        // Write SEQEND — last in polyline chain
+        // Write SEQEND â€” last in polyline chain
         self.prev_handle = vertex_handles.last().copied();
         self.next_handle = None;
         self.write_common_entity_data(
@@ -1495,6 +1483,7 @@ impl<'a> DwgObjectWriter<'a> {
             &crate::types::Transparency::default(),
             false,
             1.0,
+            "ByLayer",
             &crate::xdata::ExtendedData::default(),
             &[],
             &None,
@@ -1524,6 +1513,7 @@ impl<'a> DwgObjectWriter<'a> {
             &crate::types::Transparency::default(),
             false,
             1.0,
+            "ByLayer",
             &crate::xdata::ExtendedData::default(),
             &[],
             &None,
@@ -1532,17 +1522,17 @@ impl<'a> DwgObjectWriter<'a> {
         // Flags EC 70 NOT bit-pair-coded
         self.writer.write_byte(v.flags.bits() as u8);
 
-        // Point 3BD 10 — Z must be 0.0 (elevation from polyline)
+        // Point 3BD 10 â€” Z must be 0.0 (elevation from polyline)
         self.writer.write_bit_double(v.location.x);
         self.writer.write_bit_double(v.location.y);
         self.writer.write_bit_double(0.0);
 
-        // Start width BD 40 — negative = compression trick
+        // Start width BD 40 â€” negative = compression trick
         if v.start_width != 0.0 && v.end_width == v.start_width {
             self.writer.write_bit_double(-v.start_width);
         } else {
             self.writer.write_bit_double(v.start_width);
-            // End width BD 41 — only present if start >= 0
+            // End width BD 41 â€” only present if start >= 0
             self.writer.write_bit_double(v.end_width);
         }
 
@@ -1560,14 +1550,14 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(vertex_handle);
     }
 
-    // ── Polyline3D ──────────────────────────────────────────────────
+    // â”€â”€ Polyline3D â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_polyline3d(&mut self, e: &Polyline3D) {
         self.entity_preamble(common::OBJ_POLYLINE_3D, &e.common);
 
         // Byte 1: smooth surface type (C# hardcodes 0)
         self.writer.write_byte(e.smooth_type as u8);
-        // Byte 2: closed flag only — bit 3 (Is3DPolyline) is implied by
+        // Byte 2: closed flag only â€” bit 3 (Is3DPolyline) is implied by
         // the object type code and must NOT be written in the DWG data
         let closed_flag = if e.flags.closed { 1u8 } else { 0u8 };
         self.writer.write_byte(closed_flag);
@@ -1603,7 +1593,7 @@ impl<'a> DwgObjectWriter<'a> {
 
         self.register_object(e.common.handle);
 
-        // Write vertices — set up internal entity chain
+        // Write vertices â€” set up internal entity chain
         let saved_prev = self.prev_handle.take();
         let saved_next = self.next_handle.take();
 
@@ -1616,7 +1606,7 @@ impl<'a> DwgObjectWriter<'a> {
             self.write_vertex3d(v, vh, e.common.handle, &e.common.layer, &e.common.color);
         }
 
-        // Write SEQEND — last in polyline chain
+        // Write SEQEND â€” last in polyline chain
         self.prev_handle = vertex_handles.last().copied();
         self.next_handle = None;
         self.write_common_entity_data(
@@ -1629,6 +1619,7 @@ impl<'a> DwgObjectWriter<'a> {
             &crate::types::Transparency::default(),
             false,
             1.0,
+            "ByLayer",
             &crate::xdata::ExtendedData::default(),
             &[],
             &None,
@@ -1658,6 +1649,7 @@ impl<'a> DwgObjectWriter<'a> {
             &crate::types::Transparency::default(),
             false,
             1.0,
+            "ByLayer",
             &crate::xdata::ExtendedData::default(),
             &[],
             &None,
@@ -1669,7 +1661,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(vertex_handle);
     }
 
-    // ── PolyfaceMesh ────────────────────────────────────────────────
+    // â”€â”€ PolyfaceMesh â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_polyface_mesh(&mut self, e: &PolyfaceMesh) {
         self.entity_preamble(common::OBJ_POLYLINE_PFACE, &e.common);
@@ -1695,7 +1687,7 @@ impl<'a> DwgObjectWriter<'a> {
         }
 
         if self.version.r13_15_only() {
-            // First / last child — last is always SEQEND
+            // First / last child â€” last is always SEQEND
             let first = vertex_handles.first()
                 .or_else(|| face_handles.first())
                 .copied()
@@ -1746,6 +1738,7 @@ impl<'a> DwgObjectWriter<'a> {
                 &crate::types::Transparency::default(),
                 false,
                 1.0,
+                "ByLayer",
                 &crate::xdata::ExtendedData::default(),
                 &[],
                 &None,
@@ -1770,6 +1763,7 @@ impl<'a> DwgObjectWriter<'a> {
                 &crate::types::Transparency::default(),
                 false,
                 1.0,
+                "ByLayer",
                 &crate::xdata::ExtendedData::default(),
                 &[],
                 &None,
@@ -1782,7 +1776,7 @@ impl<'a> DwgObjectWriter<'a> {
             sub_idx += 1;
         }
 
-        // Write SEQEND — last in polyface chain
+        // Write SEQEND â€” last in polyface chain
         self.prev_handle = if sub_idx > 0 { Some(all_sub_handles[sub_idx - 1]) } else { None };
         self.next_handle = None;
         self.write_common_entity_data(
@@ -1795,6 +1789,7 @@ impl<'a> DwgObjectWriter<'a> {
             &crate::types::Transparency::default(),
             false,
             1.0,
+            "ByLayer",
             &crate::xdata::ExtendedData::default(),
             &[],
             &None,
@@ -1806,7 +1801,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.next_handle = saved_next;
     }
 
-    // ── PolygonMesh ─────────────────────────────────────────────────
+    // â”€â”€ PolygonMesh â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_polygon_mesh(&mut self, e: &PolygonMeshEntity) {
         self.entity_preamble(common::OBJ_POLYLINE_MESH, &e.common);
@@ -1869,6 +1864,7 @@ impl<'a> DwgObjectWriter<'a> {
                 &crate::types::Transparency::default(),
                 false,
                 1.0,
+                "ByLayer",
                 &crate::xdata::ExtendedData::default(),
                 &[],
                 &None,
@@ -1878,7 +1874,7 @@ impl<'a> DwgObjectWriter<'a> {
             self.register_object(vh);
         }
 
-        // Write SEQEND — last in polygon mesh chain
+        // Write SEQEND â€” last in polygon mesh chain
         self.prev_handle = vertex_handles.last().copied();
         self.next_handle = None;
         self.write_common_entity_data(
@@ -1891,6 +1887,7 @@ impl<'a> DwgObjectWriter<'a> {
             &crate::types::Transparency::default(),
             false,
             1.0,
+            "ByLayer",
             &crate::xdata::ExtendedData::default(),
             &[],
             &None,
@@ -1902,17 +1899,17 @@ impl<'a> DwgObjectWriter<'a> {
         self.next_handle = saved_next;
     }
 
-    // ── Seqend ──────────────────────────────────────────────────────
+    // â”€â”€ Seqend â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_seqend(&mut self, e: &Seqend) {
         self.entity_preamble(common::OBJ_SEQEND, &e.common);
         self.register_object(e.common.handle);
     }
 
-    // ── Mesh (ACAD_MESH) ────────────────────────────────────────────
+    // â”€â”€ Mesh (ACAD_MESH) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_mesh(&mut self, e: &Mesh) {
-        // UNLISTED entity type — always use DXF class number (500+)
+        // UNLISTED entity type â€” always use DXF class number (500+)
         let type_code = self.class_type_code("MESH", common::OBJ_MESH);
         self.entity_preamble(type_code, &e.common);
 
@@ -1960,7 +1957,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(e.common.handle);
     }
 
-    // ── MLine ───────────────────────────────────────────────────────
+    // â”€â”€ MLine â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_mline(&mut self, e: &MLine) {
         self.entity_preamble(common::OBJ_MLINE, &e.common);
@@ -1970,11 +1967,11 @@ impl<'a> DwgObjectWriter<'a> {
         self.writer.write_3bit_double(e.start_point);
         self.writer.write_3bit_double(e.normal);
         
-        // Openclosed BS: open (1), closed (3) — always has HAS_VERTICES flag
+        // Openclosed BS: open (1), closed (3) â€” always has HAS_VERTICES flag
         let flag_value: i16 = if e.flags.contains(MLineFlags::CLOSED) { 3 } else { 1 };
         self.writer.write_bit_short(flag_value);
 
-        // Linesinstyle RC 73 — number of segments from first vertex
+        // Linesinstyle RC 73 â€” number of segments from first vertex
         let nlines: u8 = if let Some(first_v) = e.vertices.first() {
             first_v.segments.len() as u8
         } else {
@@ -2004,7 +2001,7 @@ impl<'a> DwgObjectWriter<'a> {
             }
         }
 
-        // MLine style handle — fall back to document's current MLine style
+        // MLine style handle â€” fall back to document's current MLine style
         let sh = e.style_handle
             .filter(|h| !h.is_null())
             .unwrap_or(self.document.header.current_multiline_style_handle);
@@ -2014,10 +2011,10 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(e.common.handle);
     }
 
-    // ── RasterImage ─────────────────────────────────────────────────
+    // â”€â”€ RasterImage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_raster_image(&mut self, e: &RasterImage) {
-        // UNLISTED entity type — always use DXF class number (500+)
+        // UNLISTED entity type â€” always use DXF class number (500+)
         let type_code = self.class_type_code("IMAGE", common::OBJ_IMAGE);
         self.entity_preamble(type_code, &e.common);
 
@@ -2078,10 +2075,10 @@ impl<'a> DwgObjectWriter<'a> {
         }
     }
 
-    // ── Wipeout ─────────────────────────────────────────────────────
+    // â”€â”€ Wipeout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_wipeout(&mut self, e: &Wipeout) {
-        // UNLISTED entity type — always use DXF class number (500+)
+        // UNLISTED entity type â€” always use DXF class number (500+)
         // Wipeout uses the "WIPEOUT" DXF class name
         let type_code = self.class_type_code("WIPEOUT", common::OBJ_IMAGE);
         self.entity_preamble(type_code, &e.common);
@@ -2121,7 +2118,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(e.common.handle);
     }
 
-    // ── OLE2Frame ───────────────────────────────────────────────────
+    // â”€â”€ OLE2Frame â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_ole2frame(&mut self, e: &Ole2Frame) {
         self.entity_preamble(common::OBJ_OLE2FRAME, &e.common);
@@ -2148,10 +2145,10 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(e.common.handle);
     }
 
-    // ── MultiLeader ─────────────────────────────────────────────────
+    // â”€â”€ MultiLeader â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_multileader(&mut self, e: &MultiLeader) {
-        // UNLISTED entity type — always use DXF class number (500+)
+        // UNLISTED entity type â€” always use DXF class number (500+)
         let type_code = self.class_type_code("MULTILEADER", common::OBJ_MULTILEADER);
         self.entity_preamble(type_code, &e.common);
 
@@ -2397,7 +2394,7 @@ impl<'a> DwgObjectWriter<'a> {
             self.writer.write_bit(false);
         }
 
-        // B 296 Has contents block — ALWAYS written (after text block)
+        // B 296 Has contents block â€” ALWAYS written (after text block)
         self.writer.write_bit(ctx.has_block_contents);
 
         if ctx.has_block_contents {
@@ -2520,7 +2517,7 @@ impl<'a> DwgObjectWriter<'a> {
         }
     }
 
-    // ── Attribute Definition ────────────────────────────────────────
+    // â”€â”€ Attribute Definition â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_attribute_definition(&mut self, e: &AttributeDefinition) {
         self.entity_preamble(common::OBJ_ATTDEF, &e.common);
@@ -2584,7 +2581,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(e.common.handle);
     }
 
-    // ── Attribute Entity ────────────────────────────────────────────
+    // â”€â”€ Attribute Entity â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_attribute_entity(&mut self, e: &AttributeEntity) {
         self.entity_preamble(common::OBJ_ATTRIB, &e.common);
@@ -2641,7 +2638,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.register_object(e.common.handle);
     }
 
-    // ── Shared text entity data (used by AttDef/AttEntity) ────────
+    // â”€â”€ Shared text entity data (used by AttDef/AttEntity) â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// Write the TEXT entity data structure shared by Text, AttDef, and AttEntity.
     /// This matches the C# `writeTextEntity` method.
@@ -2708,14 +2705,14 @@ impl<'a> DwgObjectWriter<'a> {
 
             self.writer.write_byte(data_flags);
 
-            // Elevation RD — if !(flags & 0x01)
+            // Elevation RD â€” if !(flags & 0x01)
             if (data_flags & 0x01) == 0 {
                 self.writer.write_raw_double(insertion_point.z);
             }
             // Insertion pt 2RD 10
             self.writer.write_raw_double(insertion_point.x);
             self.writer.write_raw_double(insertion_point.y);
-            // Alignment pt 2DD 11 — if !(flags & 0x02)
+            // Alignment pt 2DD 11 â€” if !(flags & 0x02)
             if (data_flags & 0x02) == 0 {
                 self.writer
                     .write_bit_double_with_default(alignment_point.x, insertion_point.x);
@@ -2726,41 +2723,41 @@ impl<'a> DwgObjectWriter<'a> {
             self.writer.write_bit_extrusion(normal);
             // Thickness BT 39
             self.writer.write_bit_thickness(thickness);
-            // Oblique ang RD 51 — if !(flags & 0x04)
+            // Oblique ang RD 51 â€” if !(flags & 0x04)
             if (data_flags & 0x04) == 0 {
                 self.writer.write_raw_double(oblique_angle);
             }
-            // Rotation ang RD 50 — if !(flags & 0x08)
+            // Rotation ang RD 50 â€” if !(flags & 0x08)
             if (data_flags & 0x08) == 0 {
                 self.writer.write_raw_double(rotation);
             }
             // Height RD 40
             self.writer.write_raw_double(height);
-            // Width factor RD 41 — if !(flags & 0x10)
+            // Width factor RD 41 â€” if !(flags & 0x10)
             if (data_flags & 0x10) == 0 {
                 self.writer.write_raw_double(width_factor);
             }
             // Text value TV 1
             self.writer.write_variable_text(text_value);
-            // Generation BS 71 — if !(flags & 0x20)
+            // Generation BS 71 â€” if !(flags & 0x20)
             if (data_flags & 0x20) == 0 {
                 self.writer.write_bit_short(generation);
             }
-            // Horiz align BS 72 — if !(flags & 0x40)
+            // Horiz align BS 72 â€” if !(flags & 0x40)
             if (data_flags & 0x40) == 0 {
                 self.writer.write_bit_short(horizontal_alignment);
             }
-            // Vert align BS 73 — if !(flags & 0x80)
+            // Vert align BS 73 â€” if !(flags & 0x80)
             if (data_flags & 0x80) == 0 {
                 self.writer.write_bit_short(vertical_alignment);
             }
         }
     }
 
-    // ── Legacy Polyline (2D) ────────────────────────────────────────
+    // â”€â”€ Legacy Polyline (2D) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_polyline_old(&mut self, e: &Polyline) {
-        // Legacy Polyline — convert to Polyline3D for DWG output.
+        // Legacy Polyline â€” convert to Polyline3D for DWG output.
         // The DXF reader collapses Polyline2D/3D/PolyfaceMesh into this
         // legacy variant; we re-emit as Polyline3D so data isn't lost.
         let mut p3d = Polyline3D::new();
@@ -2777,7 +2774,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.write_polyline3d(&p3d);
     }
 
-    // ── ACIS entities (3DSOLID, REGION, BODY) ───────────────────────
+    // â”€â”€ ACIS entities (3DSOLID, REGION, BODY) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_solid3d(&mut self, e: &Solid3D) {
         self.entity_preamble(common::OBJ_3DSOLID, &e.common);
@@ -2792,7 +2789,7 @@ impl<'a> DwgObjectWriter<'a> {
             self.write_acis_data(&e.acis_data, &e.wires, &e.silhouettes);
         }
 
-        // acis_empty_bit — second copy of the "empty" flag.
+        // acis_empty_bit â€” second copy of the "empty" flag.
         // Must match the acis_empty bit written above.
         self.writer.write_bit(acds);
 
@@ -2821,7 +2818,7 @@ impl<'a> DwgObjectWriter<'a> {
             self.write_acis_data(&e.acis_data, &e.wires, &e.silhouettes);
         }
 
-        // acis_empty_bit — must match acis_empty
+        // acis_empty_bit â€” must match acis_empty
         self.writer.write_bit(acds);
 
         // R2007+: unknown BL field (COMMON_3DSOLID)
@@ -2843,7 +2840,7 @@ impl<'a> DwgObjectWriter<'a> {
             self.write_acis_data(&e.acis_data, &e.wires, &e.silhouettes);
         }
 
-        // acis_empty_bit — must match acis_empty
+        // acis_empty_bit â€” must match acis_empty
         self.writer.write_bit(acds);
 
         // R2007+: unknown BL field (COMMON_3DSOLID)
@@ -2866,14 +2863,14 @@ impl<'a> DwgObjectWriter<'a> {
 
     /// Queue SAB data for writing into the AcDsPrototype_1b section.
     ///
-    /// Converts SAT text → SAB binary if needed (mirroring the DXF writer's
+    /// Converts SAT text â†’ SAB binary if needed (mirroring the DXF writer's
     /// `queue_sab_data()` approach).
     fn queue_sab_entry(&mut self, acis: &AcisData, entity_handle: Handle) {
         if acis.is_binary && !acis.sab_data.is_empty() {
             // Already have SAB binary data
             self.sab_entries.push((entity_handle, acis.sab_data.clone()));
         } else if !acis.sat_data.is_empty() {
-            // Convert SAT text → SAB binary via SatDocument
+            // Convert SAT text â†’ SAB binary via SatDocument
             if let Ok(mut sat_doc) =
                 crate::entities::acis::SatDocument::parse(&acis.sat_data)
             {
@@ -2892,7 +2889,7 @@ impl<'a> DwgObjectWriter<'a> {
     ///
     /// DWG entity streams always use SAT text (version 1) with the selective
     /// 159-cipher, regardless of the DWG file version.  SAB binary is a
-    /// DXF-only concept stored in the ACDSDATA section — it is never written
+    /// DXF-only concept stored in the ACDSDATA section â€” it is never written
     /// inline in the DWG entity stream.  If the entity contains SAB data,
     /// it is converted back to SAT text via [`SabReader`] + [`SatDocument`].
     fn write_acis_data(
@@ -2905,7 +2902,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.writer.write_bit(!has_data); // acis_empty (inverted: true = empty)
 
         if has_data {
-            // Unknown bit — per ODA spec / LibreDWG / ACadSharp this B
+            // Unknown bit â€” per ODA spec / LibreDWG / ACadSharp this B
             // is always present between acis_empty and the version BS.
             self.writer.write_bit(false);
 
@@ -2913,12 +2910,12 @@ impl<'a> DwgObjectWriter<'a> {
             // SAB binary (version 2) is only used in DXF ACDSDATA sections.
             self.writer.write_bit_short(1_i16);
 
-            // Obtain SAT text — convert from SAB if needed.
+            // Obtain SAT text â€” convert from SAB if needed.
             let sat_text = if !acis.sat_data.is_empty() {
                 // Already have SAT text
                 acis.sat_data.clone()
             } else if !acis.sab_data.is_empty() {
-                // Convert SAB binary → SAT text via SabReader + SatDocument
+                // Convert SAB binary â†’ SAT text via SabReader + SatDocument
                 match crate::entities::acis::SabReader::read(&acis.sab_data) {
                     Ok(sat_doc) => sat_doc.to_sat_string(),
                     Err(_) => String::new(),
@@ -2927,7 +2924,7 @@ impl<'a> DwgObjectWriter<'a> {
                 String::new()
             };
 
-            // SAT text — all DWG versions use the same encoding:
+            // SAT text â€” all DWG versions use the same encoding:
             // BL-sized blocks of encrypted bytes (cipher: 159 - byte)
             // terminated by BL(0).  Per LibreDWG dwg.spec.
             let stripped = AcisData::strip_sat_terminator(&sat_text);
@@ -2952,12 +2949,12 @@ impl<'a> DwgObjectWriter<'a> {
             self.writer.write_bit_long(0); // terminating empty block
         }
 
-        // ── COMMON_3DSOLID: Wireframe data (always present) ─────────
+        // â”€â”€ COMMON_3DSOLID: Wireframe data (always present) â”€â”€â”€â”€â”€â”€â”€â”€â”€
         let wireframe_present = has_data && !wires.is_empty();
         self.writer.write_bit(wireframe_present);
 
         if wireframe_present {
-            // Point of reference (first wire's anchor — use first wire's first point or ZERO)
+            // Point of reference (first wire's anchor â€” use first wire's first point or ZERO)
             let point = wires
                 .first()
                 .and_then(|w| w.points.first().copied())
@@ -2984,7 +2981,7 @@ impl<'a> DwgObjectWriter<'a> {
             }
         }
 
-        // NOTE: acis_empty_bit is NOT written here — the caller writes it
+        // NOTE: acis_empty_bit is NOT written here â€” the caller writes it
         // after this function returns, along with any entity-specific data.
     }
 

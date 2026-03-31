@@ -206,18 +206,18 @@ impl SectionWriter {
 ///
 /// # Returns
 /// Complete section bytes including sentinels and CRC.
-pub fn write_header(version: DxfVersion, header: &HeaderVariables) -> Vec<u8> {
+pub fn write_header(version: DxfVersion, header: &HeaderVariables, maintenance_version: u8) -> Vec<u8> {
     let mut w = SectionWriter::new(version);
     write_header_fields(&mut w, version, header);
     let section_data = w.finalize();
-    wrap_with_sentinels_and_crc(version, &section_data)
+    wrap_with_sentinels_and_crc(version, maintenance_version, &section_data)
 }
 
 // ════════════════════════════════════════════════════════════════════════════
 //  Sentinel + CRC wrapper (same pattern as classes_writer)
 // ════════════════════════════════════════════════════════════════════════════
 
-fn wrap_with_sentinels_and_crc(version: DxfVersion, section_data: &[u8]) -> Vec<u8> {
+fn wrap_with_sentinels_and_crc(version: DxfVersion, maintenance_version: u8, section_data: &[u8]) -> Vec<u8> {
     let mut output = Vec::with_capacity(16 + 4 + section_data.len() + 2 + 16 + 8);
 
     output.extend_from_slice(&start_sentinels::HEADER);
@@ -225,8 +225,8 @@ fn wrap_with_sentinels_and_crc(version: DxfVersion, section_data: &[u8]) -> Vec<
     let mut crc_content = Vec::with_capacity(4 + section_data.len());
     crc_content.extend_from_slice(&(section_data.len() as i32).to_le_bytes());
 
-    // R2010+ or R2018+: extra 4 zero bytes
-    if version > DxfVersion::AC1027 {
+    // Extra 4 zero bytes when: (AC1024+ && maintenance > 3) || AC1032+
+    if DwgVersion::has_section_extra_rl(version, maintenance_version) {
         crc_content.extend_from_slice(&0i32.to_le_bytes());
     }
 
@@ -912,7 +912,7 @@ mod tests {
     #[test]
     fn test_write_header_r2000_has_sentinels() {
         let h = HeaderVariables::default();
-        let data = write_header(DxfVersion::AC1015, &h);
+        let data = write_header(DxfVersion::AC1015, &h, 0);
 
         // Start sentinel
         assert_eq!(&data[..16], &start_sentinels::HEADER);
@@ -924,7 +924,7 @@ mod tests {
     #[test]
     fn test_write_header_size_field() {
         let h = HeaderVariables::default();
-        let data = write_header(DxfVersion::AC1015, &h);
+        let data = write_header(DxfVersion::AC1015, &h, 0);
 
         // Size at offset 16 (RL = 4 bytes LE)
         let size = i32::from_le_bytes([data[16], data[17], data[18], data[19]]);
@@ -934,7 +934,7 @@ mod tests {
     #[test]
     fn test_write_header_crc_valid() {
         let h = HeaderVariables::default();
-        let data = write_header(DxfVersion::AC1015, &h);
+        let data = write_header(DxfVersion::AC1015, &h, 0);
 
         // CRC is 2 bytes before end sentinel
         let end_sentinel_start = data.len() - 16;
@@ -953,8 +953,8 @@ mod tests {
     #[test]
     fn test_write_header_r2004_larger_than_r2000() {
         let h = HeaderVariables::default();
-        let data_2000 = write_header(DxfVersion::AC1015, &h);
-        let data_2004 = write_header(DxfVersion::AC1018, &h);
+        let data_2000 = write_header(DxfVersion::AC1015, &h, 0);
+        let data_2004 = write_header(DxfVersion::AC1018, &h, 0);
 
         assert!(
             data_2004.len() > data_2000.len(),
@@ -967,7 +967,7 @@ mod tests {
     #[test]
     fn test_write_header_r2007_uses_merged_format() {
         let h = HeaderVariables::default();
-        let data_2007 = write_header(DxfVersion::AC1021, &h);
+        let data_2007 = write_header(DxfVersion::AC1021, &h, 0);
 
         // Should have sentinels and be non-trivial size
         assert_eq!(&data_2007[..16], &start_sentinels::HEADER);
@@ -977,8 +977,8 @@ mod tests {
     #[test]
     fn test_write_header_r14_smaller_than_r2000() {
         let h = HeaderVariables::default();
-        let data_r14 = write_header(DxfVersion::AC1014, &h);
-        let data_2000 = write_header(DxfVersion::AC1015, &h);
+        let data_r14 = write_header(DxfVersion::AC1014, &h, 0);
+        let data_2000 = write_header(DxfVersion::AC1015, &h, 0);
 
         // R14 has fewer dimension handle fields, but more boolean R13_14 fields.
         // They should both be non-trivial.

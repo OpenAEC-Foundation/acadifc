@@ -49,6 +49,13 @@ pub struct DwgMergedReader {
     /// Handle-stream bit count from the R2010+ MC framing field.
     /// Stored so unknown entities can reproduce the correct framing on write.
     handle_bits: i64,
+    /// Reference handle for offset-based handle codes (6/8/A/C).
+    ///
+    /// In DWG, handle references with codes 6, 8, 0xA, 0xC are relative to
+    /// the current object's own handle.  This field should be set via
+    /// `set_ref_handle()` right after reading the object's handle from the
+    /// main stream.
+    ref_handle: u64,
 }
 
 impl DwgMergedReader {
@@ -101,6 +108,7 @@ impl DwgMergedReader {
                     dxf_version,
                     raw_data: None,
                     handle_bits: 0,
+                    ref_handle: 0,
                 }
             }
             MergeMode::ThreeStream => {
@@ -119,6 +127,7 @@ impl DwgMergedReader {
                     dxf_version,
                     raw_data: Some(data),
                     handle_bits: 0,
+                    ref_handle: 0,
                 }
             }
         }
@@ -147,6 +156,7 @@ impl DwgMergedReader {
             dxf_version,
             raw_data: None,
             handle_bits: 0,
+            ref_handle: 0,
         }
     }
 
@@ -275,11 +285,23 @@ impl DwgMergedReader {
     ///
     /// For R2007+, this reads from the separate handle stream.
     /// For pre-R2007, this reads from the main stream.
+    ///
+    /// Offset-type codes (6/8/A/C) are resolved relative to `ref_handle`,
+    /// which should be set to the current object's handle via
+    /// `set_ref_handle()` after reading the object preface.
     pub fn read_handle(&mut self) -> u64 {
         match &mut self.handle {
-            Some(handle_reader) => handle_reader.read_handle(),
-            None => self.main.read_handle(),
+            Some(handle_reader) => handle_reader.read_handle_relative(self.ref_handle),
+            None => self.main.read_handle_relative(self.ref_handle),
         }
+    }
+
+    /// Set the reference handle for offset-based handle codes.
+    ///
+    /// Must be called after reading the current object's own handle
+    /// from the main stream (via `read_common_data`).
+    pub fn set_ref_handle(&mut self, handle: u64) {
+        self.ref_handle = handle;
     }
 
     /// Read a handle reference relative to a base handle.

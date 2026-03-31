@@ -319,12 +319,13 @@ fn write_ac15<W: Write + Seek>(
     let corrected_header = prepare_header(document, &handle_map_u32, &extents);
 
     // ── Section: Header (uses synced + corrected header) ──
-    let header_data = header_writer::write_header(version, &corrected_header);
+    let maint = document.maintenance_version;
+    let header_data = header_writer::write_header(version, &corrected_header, maint);
     fhw.add_section(section_names::HEADER, header_data);
 
     // ── Section: Classes ──
     let classes: Vec<_> = document.classes.iter().cloned().collect();
-    let classes_data = classes_writer::write_classes(version, &classes);
+    let classes_data = classes_writer::write_classes(version, &classes, maint);
     fhw.add_section(section_names::CLASSES, classes_data);
 
     // ── Section: AcDbObjects (pre-computed) ──
@@ -371,7 +372,7 @@ fn write_ac18<W: Write + Seek>(
     version: DxfVersion,
 ) -> Result<()> {
     // AC18 writer reserves 0x100 bytes at file start for metadata
-    let mut fhw = DwgFileHeaderWriterAC18::new(version, output)?;
+    let mut fhw = DwgFileHeaderWriterAC18::new(version, document.maintenance_version, output)?;
 
     // R2004+ default page size for most sections
     const PAGE_SIZE: usize = 0x7400;
@@ -386,12 +387,13 @@ fn write_ac18<W: Write + Seek>(
     let corrected_header = prepare_header(document, &handle_map_u32, &extents);
 
     // ── Section: Header (uses synced + corrected header) ──
-    let header_data = header_writer::write_header(version, &corrected_header);
+    let maint = document.maintenance_version;
+    let header_data = header_writer::write_header(version, &corrected_header, maint);
     fhw.add_section(output, section_names::HEADER, &header_data, true, PAGE_SIZE)?;
 
     // ── Section: Classes ──
     let classes: Vec<_> = document.classes.iter().cloned().collect();
-    let classes_data = classes_writer::write_classes(version, &classes);
+    let classes_data = classes_writer::write_classes(version, &classes, maint);
     fhw.add_section(output, section_names::CLASSES, &classes_data, true, PAGE_SIZE)?;
 
     // ── Section: SummaryInfo ──
@@ -537,7 +539,8 @@ fn write_ac21_impl<W: Write + Seek>(
 
     // Classes
     let classes: Vec<_> = document.classes.iter().cloned().collect();
-    let classes_data = classes_writer::write_classes(version, &classes);
+    let maint = document.maintenance_version;
+    let classes_data = classes_writer::write_classes(version, &classes, maint);
     fhw.add_section(output, section_names::CLASSES, &classes_data)?;
 
     // AuxHeader (uses corrected HANDSEED)
@@ -545,7 +548,7 @@ fn write_ac21_impl<W: Write + Seek>(
     fhw.add_section(output, section_names::AUX_HEADER, &aux_data)?;
 
     // Header (uses corrected HANDSEED)
-    let header_data = header_writer::write_header(version, &corrected_header);
+    let header_data = header_writer::write_header(version, &corrected_header, maint);
     fhw.add_section(output, section_names::HEADER, &header_data)?;
 
     // ── Finalize: section map, page map, file header, metadata ──

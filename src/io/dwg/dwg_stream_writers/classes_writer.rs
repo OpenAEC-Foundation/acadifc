@@ -35,7 +35,7 @@ use crate::types::DxfVersion;
 ///
 /// # Returns
 /// Complete section bytes including sentinels and CRC.
-pub fn write_classes(version: DxfVersion, classes: &[DxfClass]) -> Vec<u8> {
+pub fn write_classes(version: DxfVersion, classes: &[DxfClass], maintenance_version: u8) -> Vec<u8> {
     let dwg_version =
         DwgVersion::from_dxf_version(version).unwrap_or(DwgVersion::AC15);
 
@@ -81,7 +81,7 @@ pub fn write_classes(version: DxfVersion, classes: &[DxfClass]) -> Vec<u8> {
 
         // merge() handles: RL patching, text-size flags, byte alignment
         let section_data = writer.merge();
-        write_size_and_crc(version, &section_data)
+        write_size_and_crc(version, maintenance_version, &section_data)
     } else {
         // Pre-R2007: use DwgMergedWriter (two-stream mode, text inline)
         let mut writer = DwgMergedWriter::new(dwg_version, version);
@@ -119,14 +119,14 @@ pub fn write_classes(version: DxfVersion, classes: &[DxfClass]) -> Vec<u8> {
         }
 
         let section_data = writer.merge();
-        write_size_and_crc(version, &section_data)
+        write_size_and_crc(version, maintenance_version, &section_data)
     }
 }
 
 /// Wrap section data with sentinels, size, and CRC-16.
 ///
 /// This implements the `writeSizeAndCrc()` pattern from C#.
-fn write_size_and_crc(version: DxfVersion, section_data: &[u8]) -> Vec<u8> {
+fn write_size_and_crc(version: DxfVersion, maintenance_version: u8, section_data: &[u8]) -> Vec<u8> {
     let mut output = Vec::with_capacity(
         16 + 4 + section_data.len() + 2 + 16 + 8,
     );
@@ -140,12 +140,8 @@ fn write_size_and_crc(version: DxfVersion, section_data: &[u8]) -> Vec<u8> {
     // RL: size of class data area
     crc_content.extend_from_slice(&(section_data.len() as i32).to_le_bytes());
 
-    // R2010+ (AC1024 maint>3) or R2013+ (AC1032): extra 4 zero bytes
-    // Note: the full C# condition is:
-    //   (version >= AC1024 && maintenanceVersion > 3) || version > AC1027
-    // We use the simplified check (AC1032+) since maintenance version is
-    // not tracked separately in our HeaderVariables.
-    if version > DxfVersion::AC1027 {
+    // Extra 4 zero bytes when: (AC1024+ && maintenance > 3) || AC1032+
+    if DwgVersion::has_section_extra_rl(version, maintenance_version) {
         crc_content.extend_from_slice(&0i32.to_le_bytes());
     }
 
@@ -191,9 +187,7 @@ mod tests {
 
     #[test]
     fn test_write_classes_empty() {
-        let data = write_classes(DxfVersion::AC1015, &[]);
-
-        // Should have start sentinel (16) + size(4) + section data + CRC(2) + end sentinel (16)
+        let data = write_classes(DxfVersion::AC1015, &[], 0);
         assert!(data.len() >= 16 + 4 + 2 + 16);
 
         // Start sentinel
@@ -205,9 +199,7 @@ mod tests {
 
     #[test]
     fn test_write_classes_r2004_has_trailing_zeros() {
-        let data = write_classes(DxfVersion::AC1018, &[]);
-
-        // R2004+: should end with 8 zero bytes after end sentinel
+        let data = write_classes(DxfVersion::AC1018, &[], 0);
         let last8 = &data[data.len() - 8..];
         assert_eq!(last8, &[0u8; 8]);
     }
@@ -215,9 +207,7 @@ mod tests {
     #[test]
     fn test_write_classes_with_one_class() {
         let cls = make_test_class(500, "PLACEHOLDER");
-        let data = write_classes(DxfVersion::AC1015, &[cls]);
-
-        // Should have sentinels
+        let data = write_classes(DxfVersion::AC1015, &[cls], 0);
         assert_eq!(&data[..16], &start_sentinels::CLASSES);
 
         // Size field at offset 16 (4 bytes LE)
@@ -228,10 +218,10 @@ mod tests {
     #[test]
     fn test_write_classes_r2004_header() {
         let cls = make_test_class(500, "TEST");
-        let data = write_classes(DxfVersion::AC1018, &[cls.clone()]);
+        let data = write_classes(DxfVersion::AC1018, &[cls.clone()], 0);
 
         // Should be longer than R2000 version (extra per-class fields + section header)
-        let data_r2000 = write_classes(DxfVersion::AC1015, &[cls]);
+        let data_r2000 = write_classes(DxfVersion::AC1015, &[cls], 0);
         assert!(
             data.len() > data_r2000.len(),
             "R2004 classes should be longer than R2000: {} vs {}",
@@ -243,9 +233,7 @@ mod tests {
     #[test]
     fn test_write_classes_crc_present() {
         let cls = make_test_class(500, "X");
-        let data = write_classes(DxfVersion::AC1015, &[cls]);
-
-        // CRC is 2 bytes before end sentinel
+        let data = write_classes(DxfVersion::AC1015, &[cls], 0);
         let end_sentinel_start = data.len() - 16;
         let crc_bytes = &data[end_sentinel_start - 2..end_sentinel_start];
 

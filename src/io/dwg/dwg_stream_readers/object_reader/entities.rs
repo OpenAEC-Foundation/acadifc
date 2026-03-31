@@ -418,8 +418,9 @@ pub fn read_lwpolyline(reader: &mut DwgMergedReader, version: DwgVersion) -> LwP
 
     let constant_width = if has_constant_width { reader.read_bit_double() } else { 0.0 };
     let elevation = if has_elevation { reader.read_bit_double() } else { 0.0 };
-    let thickness = if has_thickness { reader.read_bit_double() } else { 0.0 };
-    let normal = if has_normal { reader.read_3bit_double() } else { Vector3::UNIT_Z };
+    // BT / BE types: self-compressing, but still flag-gated
+    let thickness = if has_thickness { reader.read_bit_thickness() } else { 0.0 };
+    let normal = if has_normal { reader.read_bit_extrusion() } else { Vector3::UNIT_Z };
 
     let num_pts = safe_count(reader.read_bit_long());
     let num_bulges = if has_bulges { safe_count(reader.read_bit_long()) } else { 0 };
@@ -465,6 +466,14 @@ pub fn read_lwpolyline(reader: &mut DwgMergedReader, version: DwgVersion) -> LwP
                 start_widths[i] = reader.read_bit_double();
                 end_widths[i] = reader.read_bit_double();
             }
+        }
+    }
+
+    // R2010+: consume vertex IDs if present
+    if version.r2010_plus() {
+        let num_vertex_ids = safe_count(reader.read_bit_long());
+        for _ in 0..num_vertex_ids {
+            let _vertex_id = reader.read_bit_long();
         }
     }
 

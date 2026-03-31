@@ -917,12 +917,36 @@ impl DwgDocumentBuilder {
                     e.common = entity_common;
                     e.elevation = data.elevation;
                     e.normal = data.normal;
-                    e.pattern = HatchPattern::new(&data.pattern_name);
+                    let mut pat = HatchPattern::new(&data.pattern_name);
+                    pat.lines = data.pattern_lines.into_iter().map(|pl| {
+                        crate::entities::hatch::HatchPatternLine {
+                            angle: pl.angle,
+                            base_point: pl.base_point,
+                            offset: pl.offset,
+                            dash_lengths: pl.dashes,
+                        }
+                    }).collect();
+                    e.pattern = pat;
                     e.is_solid = data.is_solid;
                     e.is_associative = data.is_associative;
                     e.is_double = data.is_double;
                     e.pattern_angle = data.pattern_angle;
                     e.pattern_scale = data.pattern_scale;
+                    e.pattern_type = match data.pattern_type {
+                        0 => crate::entities::hatch::HatchPatternType::UserDefined,
+                        2 => crate::entities::hatch::HatchPatternType::Custom,
+                        _ => crate::entities::hatch::HatchPatternType::Predefined,
+                    };
+                    e.style = match data.style {
+                        1 => crate::entities::hatch::HatchStyleType::Outer,
+                        2 => crate::entities::hatch::HatchStyleType::Ignore,
+                        _ => crate::entities::hatch::HatchStyleType::Normal,
+                    };
+                    e.pixel_size = data.pixel_size;
+                    // Collect boundary handle counts before consuming paths
+                    let boundary_handle_counts: Vec<i32> = data.paths.iter()
+                        .map(|p| p.boundary_handle_count)
+                        .collect();
                     // Convert DWG boundary paths to entity BoundaryPath
                     e.paths = data.paths.into_iter().map(|hp| {
                         use crate::entities::hatch::*;
@@ -984,6 +1008,15 @@ impl DwgDocumentBuilder {
                         bp
                     }).collect();
                     e.seed_points = data.seed_points;
+                    // Read boundary object handles from handle stream
+                    for (path, &count) in e.paths.iter_mut().zip(boundary_handle_counts.iter()) {
+                        for _ in 0..count {
+                            let h = reader.read_handle();
+                            if h != 0 {
+                                path.add_boundary_handle(Handle::new(h));
+                            }
+                        }
+                    }
                     let _ = document.add_entity(EntityType::Hatch(e));
                 },
                 OBJ_VIEWPORT => {
@@ -1567,6 +1600,37 @@ impl DwgDocumentBuilder {
                     let mut obj = crate::objects::MLineStyle::new(&data.name);
                     obj.handle = Handle::from(handle);
                     obj.owner = owner_handle;
+                    obj.description = data.description;
+                    obj.fill_color = data.fill_color;
+                    obj.start_angle = data.start_angle;
+                    obj.end_angle = data.end_angle;
+                    // DWG binary swaps some flag pairs vs DXF:
+                    //   DWG bit 1=DisplayJoints, 2=FillOn (DXF: 1=FillOn, 2=DisplayJoints)
+                    //   DWG bit 0x20=StartRound, 0x40=StartInner (DXF: 0x20=StartInner, 0x40=StartRound)
+                    //   DWG bit 0x200=EndRound, 0x400=EndInner (DXF: 0x200=EndInner, 0x400=EndRound)
+                    let f = data.flags as i32;
+                    obj.flags = crate::objects::MLineStyleFlags {
+                        display_joints: (f & 1) != 0,
+                        fill_on: (f & 2) != 0,
+                        start_square_cap: (f & 16) != 0,
+                        start_round_cap: (f & 0x20) != 0,
+                        start_inner_arcs_cap: (f & 0x40) != 0,
+                        end_square_cap: (f & 0x100) != 0,
+                        end_round_cap: (f & 0x200) != 0,
+                        end_inner_arcs_cap: (f & 0x400) != 0,
+                    };
+                    // Transfer elements
+                    obj.elements = data.elements.iter().map(|e| {
+                        let linetype = if self.obj_reader.version().r2018_plus(self.obj_reader.dxf_version()) {
+                            maps.linetypes.get(&e.linetype_index_or_handle)
+                                .cloned()
+                                .unwrap_or_else(|| "BYLAYER".to_string())
+                        } else {
+                            // Pre-R2018: linetype index (0 = BYLAYER)
+                            "BYLAYER".to_string()
+                        };
+                        crate::objects::MLineStyleElement::full(e.offset, e.color, linetype)
+                    }).collect();
                     document.objects.insert(
                         Handle::from(handle),
                         crate::objects::ObjectType::MLineStyle(obj),
@@ -1633,7 +1697,7 @@ impl DwgDocumentBuilder {
                     obj.path_type = crate::objects::MultiLeaderPathType::from(data.path_type);
                     obj.line_color = data.line_color;
                     obj.line_type_handle = if data.line_type_handle != 0 { Some(Handle::from(data.line_type_handle)) } else { None };
-                    obj.line_weight = LineWeight::from_value(data.line_weight);
+                    obj.line_weight = LineWeight::from_value(data.line_weight as i16);
                     obj.enable_landing = data.enable_landing;
                     obj.landing_gap = data.landing_gap;
                     obj.enable_dogleg = data.enable_dogleg;
@@ -1661,6 +1725,7 @@ impl DwgDocumentBuilder {
                     obj.enable_block_rotation = data.enable_block_rotation;
                     obj.block_content_connection = crate::objects::BlockContentConnectionType::from(data.block_content_connection);
                     obj.scale_factor = data.scale_factor;
+                    obj.property_changed = data.property_changed;
                     obj.is_annotative = data.is_annotative;
                     obj.break_gap_size = data.break_gap_size;
                     obj.text_attachment_direction = crate::objects::TextAttachmentDirectionType::from(data.text_attachment_direction);
@@ -1835,5 +1900,24 @@ fn map_entity_common(
     common.invisible = data.invisible;
     common.linetype_scale = data.linetype_scale;
     common.layer = maps.layer_name(data.layer_handle);
+    // Line weight (raw DWG byte → LineWeight)
+    // The reader stores as_i16() as u8, so negative values (ByLayer=-1, ByBlock=-2, 
+    // Default=-3) wrap to 255/254/253. Casting through i8 recovers the sign.
+    common.line_weight = crate::types::LineWeight::from_value(data.line_weight as i8 as i16);
+    // Reactors
+    common.reactors = data.reactors.iter().map(|&h| Handle::from(h)).collect();
+    // XDictionary handle
+    common.xdictionary_handle = data.xdictionary_handle.map(Handle::from);
+    // Linetype (from flags + optional handle)
+    // EntityCommon uses empty string for "ByLayer" convention
+    common.linetype = match data.linetype_flags {
+        0b00 => String::new(), // ByLayer → empty (EntityCommon convention)
+        0b01 => "ByBlock".to_string(),
+        0b10 => "Continuous".to_string(),
+        0b11 => maps.linetypes.get(&data.linetype_handle)
+            .cloned()
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
     common
 }

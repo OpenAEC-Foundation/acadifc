@@ -50,19 +50,43 @@ impl<'a> DwgObjectWriter<'a> {
         }
     }
 
+    // ── Helpers ──────────────────────────────────────────────────────
+
+    /// Returns `true` when the object at `handle` will actually be
+    /// serialized by `write_object`.  Entries pointing to un-writable
+    /// objects (VisualStyle, Material, TableStyle, etc.) must be
+    /// excluded from dictionary records so the DWG doesn't contain
+    /// dangling handle references.
+    fn is_writable_object(&self, handle: &Handle) -> bool {
+        match self.document.objects.get(handle) {
+            None => false,
+            Some(obj) => !matches!(
+                obj,
+                ObjectType::GeoData(_)
+                    | ObjectType::SpatialFilter(_)
+                    | ObjectType::VisualStyle(_)
+                    | ObjectType::Material(_)
+                    | ObjectType::TableStyle(_)
+                    | ObjectType::Unknown { .. }
+            ),
+        }
+    }
+
     // ── Dictionary ──────────────────────────────────────────────────
 
     fn write_dictionary(&mut self, dict: &Dictionary) {
         // For pre-R2000, filter out R2000+-only dictionary entries
         // (PLOTSTYLENAME, LAYOUT, PLOTSETTINGS, MATERIAL, COLOR, VISUALSTYLE)
         let entries: Vec<&(String, Handle)> = if self.version.r2000_plus() {
-            dict.entries.iter().collect()
+            dict.entries.iter()
+                .filter(|(_, h)| h.is_null() || self.is_writable_object(h))
+                .collect()
         } else {
-            dict.entries.iter().filter(|(name, _)| {
+            dict.entries.iter().filter(|(name, h)| {
                 !matches!(name.as_str(),
                     "ACAD_PLOTSTYLENAME" | "ACAD_LAYOUT" | "ACAD_PLOTSETTINGS" |
                     "ACAD_MATERIAL" | "ACAD_COLOR" | "ACAD_VISUALSTYLE"
-                )
+                ) && (h.is_null() || self.is_writable_object(h))
             }).collect()
         };
 
@@ -137,14 +161,19 @@ impl<'a> DwgObjectWriter<'a> {
             &None,
         );
 
+        // Filter out entries referencing un-writable objects
+        let entries: Vec<&(String, Handle)> = dict.entries.iter()
+            .filter(|(_, h)| h.is_null() || self.is_writable_object(h))
+            .collect();
+
         // Same as dictionary
-        self.writer.write_bit_long(dict.entries.len() as i32);
+        self.writer.write_bit_long(entries.len() as i32);
 
         // R2000+: Cloning flag (BS) + Hard-owner flag (RC)
         self.writer.write_bit_short(dict.duplicate_cloning as i16);
         self.writer.write_byte(if dict.hard_owner { 1 } else { 0 });
 
-        for (name, handle) in &dict.entries {
+        for (name, handle) in &entries {
             self.writer.write_variable_text(name);
             let ref_type = if dict.hard_owner {
                 DwgReferenceType::HardOwnership
@@ -575,6 +604,11 @@ impl<'a> DwgObjectWriter<'a> {
             &None,
         );
 
+        // R2010+: Version (BS, expected 2)
+        if self.version.r2010_plus() {
+            self.writer.write_bit_short(2);
+        }
+
         // Content type
         self.writer
             .write_bit_short(style.content_type as i16);
@@ -602,7 +636,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.writer
             .write_handle(DwgReferenceType::HardPointer, lt.value());
         self.writer
-            .write_bit_short(style.line_weight.as_i16());
+            .write_bit_long(style.line_weight.as_i16() as i32);
 
         self.writer.write_bit(style.enable_landing);
         self.writer.write_bit_double(style.landing_gap);

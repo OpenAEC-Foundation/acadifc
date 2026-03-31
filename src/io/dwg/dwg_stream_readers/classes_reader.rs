@@ -30,7 +30,7 @@ use crate::types::DxfVersion;
 ///
 /// # Returns
 /// `DxfClassCollection` containing all parsed class definitions.
-pub fn read_classes(data: &[u8], version: DxfVersion) -> Result<DxfClassCollection> {
+pub fn read_classes(data: &[u8], version: DxfVersion, maintenance_version: u8) -> Result<DxfClassCollection> {
     let dwg = DwgVersion::from_dxf_version(version)?;
 
     // ── Verify start sentinel ──
@@ -48,10 +48,10 @@ pub fn read_classes(data: &[u8], version: DxfVersion) -> Result<DxfClassCollecti
     // ── Read section size (RL at offset 16) ──
     let section_size = i32::from_le_bytes([data[16], data[17], data[18], data[19]]) as usize;
 
-    // Section data starts after sentinel (16) + size field (4)
-    // R2018+ (AC1032+): extra 4 zero bytes after size field
+    // Section data starts after sentinel (16) + size field (4).
+    // Extra 4 zero bytes when: (AC1024+ && maintenance > 3) || AC1032+
     let mut data_start = 20;
-    if version > DxfVersion::AC1027 {
+    if DwgVersion::has_section_extra_rl(version, maintenance_version) {
         data_start += 4;
     }
     if data.len() < data_start + section_size + 2 + 16 {
@@ -156,10 +156,10 @@ mod tests {
 
         // Write classes section
         let class_vec: Vec<DxfClass> = classes.iter().cloned().collect();
-        let written = classes_writer::write_classes(DxfVersion::AC1015, &class_vec);
+        let written = classes_writer::write_classes(DxfVersion::AC1015, &class_vec, 0);
 
         // Read it back
-        let read_classes = read_classes(&written, DxfVersion::AC1015).unwrap();
+        let read_classes = read_classes(&written, DxfVersion::AC1015, 0).unwrap();
 
         // Should have the same number of classes
         assert_eq!(read_classes.len(), classes.len(),
@@ -173,8 +173,8 @@ mod tests {
         classes.update_defaults();
 
         let class_vec: Vec<DxfClass> = classes.iter().cloned().collect();
-        let written = classes_writer::write_classes(DxfVersion::AC1018, &class_vec);
-        let read_classes = read_classes(&written, DxfVersion::AC1018).unwrap();
+        let written = classes_writer::write_classes(DxfVersion::AC1018, &class_vec, 0);
+        let read_classes = read_classes(&written, DxfVersion::AC1018, 0).unwrap();
 
         assert_eq!(read_classes.len(), classes.len(),
             "Class count mismatch: wrote {}, read {}",
@@ -193,7 +193,7 @@ mod tests {
         let mut bad_data = vec![0u8; 50];
         // Wrong sentinel
         bad_data[..16].fill(0xFF);
-        let result = read_classes(&bad_data, DxfVersion::AC1015);
+        let result = read_classes(&bad_data, DxfVersion::AC1015, 0);
         assert!(result.is_err());
     }
 }

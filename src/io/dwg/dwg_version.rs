@@ -125,6 +125,20 @@ impl DwgVersion {
         dxf >= DxfVersion::AC1032
     }
 
+    /// Whether the Classes/Header sections contain an extra 4-byte RL field
+    /// after the section-size RL.
+    ///
+    /// The full condition (from ACadSharp) is:
+    ///   `(version >= AC1024 && maintenance_version > 3) || version > AC1027`
+    ///
+    /// In practice this means:
+    /// - AC1032+ (R2018): always
+    /// - AC1024/AC1027 (R2010/R2013): only when maintenance version > 3
+    /// - Older versions: never
+    pub fn has_section_extra_rl(dxf: DxfVersion, maintenance_version: u8) -> bool {
+        (dxf >= DxfVersion::AC1024 && maintenance_version > 3) || dxf > DxfVersion::AC1027
+    }
+
     /// Parse DWG version from the 6-byte version string in the file header.
     ///
     /// Returns `None` for unrecognized version strings.

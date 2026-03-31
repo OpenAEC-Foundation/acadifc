@@ -144,7 +144,7 @@ pub struct MultiLeaderStyleData {
     pub path_type: i16,
     pub line_color: Color,
     pub line_type_handle: u64,
-    pub line_weight: i16,
+    pub line_weight: i32,
     pub enable_landing: bool,
     pub landing_gap: f64,
     pub enable_dogleg: bool,
@@ -460,6 +460,11 @@ pub fn read_mlinestyle(reader: &mut DwgMergedReader, version: DwgVersion, dxf_ve
 }
 
 pub fn read_multileader_style(reader: &mut DwgMergedReader, version: DwgVersion) -> MultiLeaderStyleData {
+    // R2010+: Version (BS, expected 2)
+    if version.r2010_plus() {
+        let _style_version = reader.read_bit_short();
+    }
+
     let content_type = reader.read_bit_short();
     let multileader_draw_order = reader.read_bit_short();
     let leader_draw_order = reader.read_bit_short();
@@ -469,7 +474,7 @@ pub fn read_multileader_style(reader: &mut DwgMergedReader, version: DwgVersion)
     let path_type = reader.read_bit_short();
     let line_color = reader.read_cm_color();
     let line_type_handle = reader.read_handle();
-    let line_weight = reader.read_bit_short();
+    let line_weight = reader.read_bit_long();
     let enable_landing = reader.read_bit();
     let landing_gap = reader.read_bit_double();
     let enable_dogleg = reader.read_bit();

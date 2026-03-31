@@ -1,0 +1,23 @@
+Description
+When parsing a large DWG R2010 (AC1024) file, LWPOLYLINE entities are producing "garbage" coordinates (e.g., values like -1.8518597564982945e-231). This appears to be a bit-alignment issue where the DwgBitReader falls out of sync due to unconsumed or misread optional flags in the LWPOLYLINE object definition.
+
+Impact
+Data Corruption: LWPOLYLINE vertices are unreadable.
+File Bloat: Because the num_vertices field is misread as a massive integer due to the bit-shift, the exporter attempts to write millions of non-existent vertices, leading to massive JSON output (e.g., 1GB for a 140k entity file).
+Cascade Failure: Once one entity's bits are misaligned, subsequent entities in the object stream are often read from the wrong offset.
+
+Technical Analysis
+In the AC1024 spec, LWPOLYLINE is highly bit-packed. The desync likely occurs in src/io/dwg/dwg_stream_readers/entities.rs (or the equivalent LWPOLYLINE logic).
+The suspected culprit is the handling of optional bit-flags:
+The reader must check the has_bulges and has_widths bits.
+If these bits are set, the reader must consume the corresponding bit_double values for every vertex to maintain alignment.
+If the reader skips these or misinterprets the flag short at the start of the object, the coordinate read_bit_double calls will start at a bit-offset, resulting in the observed e-231 floating-point errors.
+
+Steps to Reproduce
+-Load a DWG R2010 file containing HVAC or MEP ductwork (which heavily uses LWPOLYLINE).
+-Attempt to export the entities to JSON or inspect the vertices array of an LwPolyline object.
+-Observe that LINE and MTEXT coordinates remain accurate, while LWPOLYLINE vertices are infinitesimal/garbage values.
+
+Evidence
+Healthy LINE/MTEXT: pos":[-78964.66, -39014.53], "text":"\A1;4500" (Correct).
+Corrupted LWPOLYLINE: [-1.8518597564982945e-231, 7.43929579302606e-310] (Bit-shifted).

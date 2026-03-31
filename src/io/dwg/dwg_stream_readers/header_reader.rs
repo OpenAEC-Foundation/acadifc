@@ -177,7 +177,7 @@ impl SectionReader {
 ///
 /// # Returns
 /// `HeaderVariables` populated with all header variables.
-pub fn read_header(data: &[u8], version: DxfVersion) -> Result<HeaderVariables> {
+pub fn read_header(data: &[u8], version: DxfVersion, maintenance_version: u8) -> Result<HeaderVariables> {
     // ── Verify start sentinel ──
     if data.len() < 36 {
         return Err(DxfError::Parse("Header section too short".to_string()));
@@ -194,8 +194,8 @@ pub fn read_header(data: &[u8], version: DxfVersion) -> Result<HeaderVariables> 
     ]) as usize;
     size_offset += 4;
 
-    // R2010+/R2018+: extra 4 zero bytes after size
-    if version > DxfVersion::AC1027 {
+    // Extra 4 zero bytes when: (AC1024+ && maintenance > 3) || AC1032+
+    if DwgVersion::has_section_extra_rl(version, maintenance_version) {
         size_offset += 4;
     }
 
@@ -806,8 +806,8 @@ mod tests {
     #[test]
     fn test_header_roundtrip_r2000() {
         let original = HeaderVariables::default();
-        let written = header_writer::write_header(DxfVersion::AC1015, &original);
-        let read = read_header(&written, DxfVersion::AC1015).unwrap();
+        let written = header_writer::write_header(DxfVersion::AC1015, &original, 0);
+        let read = read_header(&written, DxfVersion::AC1015, 0).unwrap();
 
         // Check sentinel verification worked
         assert_eq!(read.fill_mode, original.fill_mode);
@@ -823,8 +823,8 @@ mod tests {
     #[test]
     fn test_header_roundtrip_r2004() {
         let original = HeaderVariables::default();
-        let written = header_writer::write_header(DxfVersion::AC1018, &original);
-        let read = read_header(&written, DxfVersion::AC1018).unwrap();
+        let written = header_writer::write_header(DxfVersion::AC1018, &original, 0);
+        let read = read_header(&written, DxfVersion::AC1018, 0).unwrap();
 
         assert_eq!(read.fill_mode, original.fill_mode);
         assert_eq!(read.sort_entities, original.sort_entities);
@@ -836,8 +836,8 @@ mod tests {
         // R2007+ uses three-stream merge (main + text + handle).
         // This test verifies the reader correctly splits the streams.
         let original = HeaderVariables::default();
-        let written = header_writer::write_header(DxfVersion::AC1021, &original);
-        let read = read_header(&written, DxfVersion::AC1021).unwrap();
+        let written = header_writer::write_header(DxfVersion::AC1021, &original, 0);
+        let read = read_header(&written, DxfVersion::AC1021, 0).unwrap();
 
         // Verify core header variables survived the three-stream roundtrip
         assert_eq!(read.fill_mode, original.fill_mode);
@@ -860,8 +860,8 @@ mod tests {
     #[test]
     fn test_header_roundtrip_r2010() {
         let original = HeaderVariables::default();
-        let written = header_writer::write_header(DxfVersion::AC1024, &original);
-        let read = read_header(&written, DxfVersion::AC1024).unwrap();
+        let written = header_writer::write_header(DxfVersion::AC1024, &original, 0);
+        let read = read_header(&written, DxfVersion::AC1024, 0).unwrap();
 
         assert_eq!(read.fill_mode, original.fill_mode);
         assert_eq!(read.linear_unit_format, original.linear_unit_format);
@@ -873,7 +873,7 @@ mod tests {
     fn test_header_bad_sentinel_fails() {
         let mut bad_data = vec![0u8; 50];
         bad_data[..16].fill(0xFF);
-        let result = read_header(&bad_data, DxfVersion::AC1015);
+        let result = read_header(&bad_data, DxfVersion::AC1015, 0);
         assert!(result.is_err());
     }
 }

@@ -864,6 +864,13 @@ pub struct CadDocument {
     /// Document version
     pub version: DxfVersion,
     
+    /// AutoCAD maintenance release version (from file header byte 0x0B).
+    ///
+    /// Used to determine encoding variations within a major DWG version.
+    /// For AC1024 (R2010), maintenance > 3 triggers an extra 4-byte RL field
+    /// in the Classes and Header sections.  Preserved during roundtrip.
+    pub maintenance_version: u8,
+    
     /// Header variables containing drawing settings
     pub header: HeaderVariables,
     
@@ -918,6 +925,7 @@ impl CadDocument {
     pub fn new() -> Self {
         let mut doc = CadDocument {
             version: DxfVersion::AC1032, // DXF 2018
+            maintenance_version: 0,
             header: HeaderVariables::default(),
             layers: Table::new(),
             line_types: Table::new(),
@@ -1318,6 +1326,9 @@ impl CadDocument {
         if !added_to_block {
             if let Some(ms) = self.block_records.get_mut("*Model_Space") {
                 ms.entity_handles.push(handle);
+                // Fix the entity's owner so the writer can determine
+                // entity_mode correctly (model-space = 2).
+                entity.common_mut().owner_handle = ms.handle;
             }
         }
 

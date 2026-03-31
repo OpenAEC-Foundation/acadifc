@@ -274,6 +274,7 @@ impl<'a> DwgObjectWriter<'a> {
         transparency: &Transparency,
         invisible: bool,
         linetype_scale: f64,
+        linetype: &str,
         xdata: &crate::xdata::ExtendedData,
         reactors: &[Handle],
         xdictionary_handle: &Option<Handle>,
@@ -403,7 +404,25 @@ impl<'a> DwgObjectWriter<'a> {
 
         // ── MAIN: Linetype flags ──
         // 00 = bylayer, 01 = byblock, 10 = continuous, 11 = handle present
-        self.writer.write_2bits(0b00); // simplified: always by-layer
+        let lt_lower = linetype.to_ascii_lowercase();
+        if lt_lower == "bylayer" || lt_lower.is_empty() {
+            self.writer.write_2bits(0b00);
+        } else if lt_lower == "byblock" {
+            self.writer.write_2bits(0b01);
+        } else if lt_lower == "continuous" {
+            self.writer.write_2bits(0b10);
+        } else {
+            // Named linetype — write handle
+            self.writer.write_2bits(0b11);
+            let lt_handle = self
+                .document
+                .line_types
+                .get(linetype)
+                .map(|lt| lt.handle)
+                .unwrap_or(Handle::NULL);
+            self.writer
+                .write_handle(DwgReferenceType::HardPointer, lt_handle.value());
+        }
 
         // ── R2007+: material flags + shadow flags ──
         if self.version.r2007_plus() {

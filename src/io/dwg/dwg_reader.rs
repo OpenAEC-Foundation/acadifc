@@ -256,12 +256,14 @@ impl<R: Read + Seek> DwgReader<R> {
         let dxf_version = crate::types::DxfVersion::parse(&info.version_string)
             .unwrap_or(crate::types::DxfVersion::Unknown);
         let mut document = crate::document::CadDocument::with_version(dxf_version);
+        document.maintenance_version = info.acad_maintenance_version;
 
         // 2. Read Classes (AcDb:Classes)
         if let Ok(classes_buf) = self.get_section_buffer("AcDb:Classes", &info) {
             match crate::io::dwg::dwg_stream_readers::classes_reader::read_classes(
                 &classes_buf,
                 dxf_version,
+                info.acad_maintenance_version,
             ) {
                 Ok(classes) => document.classes = classes,
                 Err(e) => self.notifications.notify(
@@ -276,6 +278,7 @@ impl<R: Read + Seek> DwgReader<R> {
             match crate::io::dwg::dwg_stream_readers::header_reader::read_header(
                 &header_buf,
                 dxf_version,
+                info.acad_maintenance_version,
             ) {
                 Ok(header_vars) => document.header = header_vars,
                 Err(e) => self.notifications.notify(

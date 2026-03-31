@@ -49,6 +49,8 @@ const INNER_HEADER_ID: &[u8; 12] = b"AcFssFcAJMB\0";
 pub struct DwgFileHeaderWriterAC18 {
     /// DXF version being written.
     version: DxfVersion,
+    /// AutoCAD maintenance release version (preserved from source file).
+    maintenance_version: u8,
     /// Section descriptors, keyed by section name.
     descriptors: IndexMap<String, DwgSectionDescriptor>,
     /// All local section map entries (pages) across all sections.
@@ -85,13 +87,14 @@ impl DwgFileHeaderWriterAC18 {
     ///
     /// Writes `0x100` zero bytes to the output stream to reserve space
     /// for the file metadata that will be filled in by `write_file`.
-    pub fn new<W: Write + Seek>(version: DxfVersion, output: &mut W) -> Result<Self, DxfError> {
+    pub fn new<W: Write + Seek>(version: DxfVersion, maintenance_version: u8, output: &mut W) -> Result<Self, DxfError> {
         // Reserve 0x100 bytes at the start for file metadata
         let zeroes = [0u8; FILE_HEADER_SIZE];
         output.write_all(&zeroes)?;
 
         Ok(Self {
             version,
+            maintenance_version,
             descriptors: IndexMap::new(),
             local_section_maps: Vec::new(),
             compressor: DwgLZ77AC18Compressor::new(),
@@ -458,7 +461,7 @@ impl DwgFileHeaderWriterAC18 {
         output.write_all(&[0u8; 5])?;
 
         // 0x0B: Maintenance release version
-        output.write_all(&[0u8])?;
+        output.write_all(&[self.maintenance_version])?;
 
         // 0x0C: Byte (0x00, 0x01, or 0x03)
         output.write_all(&[3u8])?;
@@ -469,11 +472,14 @@ impl DwgFileHeaderWriterAC18 {
             .map_or(0u32, |s| (s.seeker as u32) + 0x20);
         output.write_u32::<LittleEndian>(preview_addr)?;
 
-        // 0x11: DWG version byte
+        // 0x11: DWG version byte (0x21 for AC1021, 0x21 for AC1024+)
+        // The ODA spec shows different values per version, but many real-world
+        // files (including our reference General.dwg) use 0x21 for AC1024.
+        // We preserve the original file's value via maintenance_version context.
         output.write_all(&[33u8])?;
 
         // 0x12: Maintenance release version (app)
-        output.write_all(&[0u8])?;
+        output.write_all(&[self.maintenance_version])?;
 
         // 0x13: Codepage (2 bytes)
         output.write_u16::<LittleEndian>(30)?; // ANSI_1252
@@ -690,7 +696,7 @@ mod tests {
     #[test]
     fn test_new_reserves_header_space() {
         let mut output = Cursor::new(Vec::new());
-        let _writer = DwgFileHeaderWriterAC18::new(DxfVersion::AC1018, &mut output).unwrap();
+        let _writer = DwgFileHeaderWriterAC18::new(DxfVersion::AC1018, 0, &mut output).unwrap();
 
         assert_eq!(output.position(), FILE_HEADER_SIZE as u64);
         assert_eq!(output.get_ref().len(), FILE_HEADER_SIZE);
@@ -701,7 +707,7 @@ mod tests {
     #[test]
     fn test_handle_section_offset_always_zero() {
         let mut output = Cursor::new(Vec::new());
-        let writer = DwgFileHeaderWriterAC18::new(DxfVersion::AC1018, &mut output).unwrap();
+        let writer = DwgFileHeaderWriterAC18::new(DxfVersion::AC1018, 0, &mut output).unwrap();
         assert_eq!(writer.handle_section_offset(), 0);
     }
 
@@ -715,7 +721,7 @@ mod tests {
     #[test]
     fn test_add_section_small_data() {
         let mut output = Cursor::new(Vec::new());
-        let mut writer = DwgFileHeaderWriterAC18::new(DxfVersion::AC1018, &mut output).unwrap();
+        let mut writer = DwgFileHeaderWriterAC18::new(DxfVersion::AC1018, 0, &mut output).unwrap();
 
         // Add a small section (less than one page)
         let data = vec![0xAA; 100];
@@ -734,7 +740,7 @@ mod tests {
     #[test]
     fn test_add_section_multi_page() {
         let mut output = Cursor::new(Vec::new());
-        let mut writer = DwgFileHeaderWriterAC18::new(DxfVersion::AC1018, &mut output).unwrap();
+        let mut writer = DwgFileHeaderWriterAC18::new(DxfVersion::AC1018, 0, &mut output).unwrap();
 
         // Add section larger than one page (2 × 0x7400 + remainder)
         let data = vec![0xBB; 0x7400 * 2 + 1000];
@@ -749,7 +755,7 @@ mod tests {
     #[test]
     fn test_add_multiple_sections() {
         let mut output = Cursor::new(Vec::new());
-        let mut writer = DwgFileHeaderWriterAC18::new(DxfVersion::AC1018, &mut output).unwrap();
+        let mut writer = DwgFileHeaderWriterAC18::new(DxfVersion::AC1018, 0, &mut output).unwrap();
 
         writer.add_section(&mut output, names::HEADER, &vec![0xAA; 100], true, DEFAULT_DECOMP_SIZE).unwrap();
         writer.add_section(&mut output, names::CLASSES, &vec![0xBB; 200], true, DEFAULT_DECOMP_SIZE).unwrap();
@@ -762,7 +768,7 @@ mod tests {
     #[test]
     fn test_inner_file_header_size() {
         let mut output = Cursor::new(Vec::new());
-        let writer = DwgFileHeaderWriterAC18::new(DxfVersion::AC1018, &mut output).unwrap();
+        let writer = DwgFileHeaderWriterAC18::new(DxfVersion::AC1018, 0, &mut output).unwrap();
 
         let header = writer.build_inner_file_header().unwrap();
         assert_eq!(header.len(), 0x6C);
@@ -771,7 +777,7 @@ mod tests {
     #[test]
     fn test_inner_file_header_magic_xor_roundtrip() {
         let mut output = Cursor::new(Vec::new());
-        let writer = DwgFileHeaderWriterAC18::new(DxfVersion::AC1018, &mut output).unwrap();
+        let writer = DwgFileHeaderWriterAC18::new(DxfVersion::AC1018, 0, &mut output).unwrap();
 
         let mut header = writer.build_inner_file_header().unwrap();
         // Undo magic sequence XOR
@@ -785,7 +791,7 @@ mod tests {
     #[test]
     fn test_write_complete_file() {
         let mut output = Cursor::new(Vec::new());
-        let mut writer = DwgFileHeaderWriterAC18::new(DxfVersion::AC1018, &mut output).unwrap();
+        let mut writer = DwgFileHeaderWriterAC18::new(DxfVersion::AC1018, 0, &mut output).unwrap();
 
         // Add minimal sections
         writer.add_section(&mut output, names::HEADER, &vec![0xAA; 100], true, DEFAULT_DECOMP_SIZE).unwrap();
@@ -813,7 +819,7 @@ mod tests {
     fn test_write_file_version_strings() {
         for version in [DxfVersion::AC1018, DxfVersion::AC1024, DxfVersion::AC1027, DxfVersion::AC1032] {
             let mut output = Cursor::new(Vec::new());
-            let mut writer = DwgFileHeaderWriterAC18::new(version, &mut output).unwrap();
+            let mut writer = DwgFileHeaderWriterAC18::new(version, 0, &mut output).unwrap();
 
             writer.add_section(&mut output, names::HEADER, &vec![0; 10], true, DEFAULT_DECOMP_SIZE).unwrap();
             writer.add_section(&mut output, names::CLASSES, &vec![0; 10], true, DEFAULT_DECOMP_SIZE).unwrap();
@@ -855,7 +861,7 @@ mod tests {
         // data must have a non-zero size. Previously, the clone in the list
         // retained stale size=0 due to Rust value semantics.
         let mut output = Cursor::new(Vec::new());
-        let mut writer = DwgFileHeaderWriterAC18::new(DxfVersion::AC1018, &mut output).unwrap();
+        let mut writer = DwgFileHeaderWriterAC18::new(DxfVersion::AC1018, 0, &mut output).unwrap();
 
         writer.add_section(&mut output, names::HEADER, &vec![0xAA; 100], true, DEFAULT_DECOMP_SIZE).unwrap();
         writer.add_section(&mut output, names::CLASSES, &vec![0xBB; 50], true, DEFAULT_DECOMP_SIZE).unwrap();
