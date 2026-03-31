@@ -12,7 +12,7 @@ Inspired by [ACadSharp](https://github.com/DomCR/ACadSharp). Supports DXF (ASCII
 
 ```toml
 [dependencies]
-acadrust = "0.3.1"
+acadrust = "0.3.2"
 ```
 
 ```rust
@@ -145,11 +145,14 @@ Full API docs: [docs.rs/acadrust](https://docs.rs/acadrust)
 
 ## Changelog
 
-### 0.3.1
+
+### 0.3.2
 
 - **Entity explode** — `EntityType::explode()` decomposes complex entities (polylines, hatches, meshes, dimensions, etc.) into simpler primitives (lines, arcs, faces); `CadDocument::explode_entity()` allocates handles automatically
 
 - **Centralized transform/mirror/translate** — Transformation logic extracted from 38 entity files into `translate.rs`, `transform.rs`, and `mirror.rs` modules; all Entity trait implementations delegate to these centralized functions. Direct `EntityType` dispatch methods added (`entity.translate()`, `entity.apply_transform()`, `entity.mirror_x()`, etc.) alongside the existing trait-based API.
+
+- **DWG Parser/Writer fixes.
 
 ### 0.3.0
 
