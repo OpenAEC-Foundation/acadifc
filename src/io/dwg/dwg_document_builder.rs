@@ -435,6 +435,7 @@ impl DwgDocumentBuilder {
                     br.units = data.units.unwrap_or(0);
                     br.explodable = data.explodable.unwrap_or(true);
                     br.scale_uniformly = data.scale_uniformly.map(|v| v != 0).unwrap_or(false);
+                    br.xref_path = data.xref_path.clone();
                     if let Some(layout_h) = data.layout_handle {
                         br.layout = Handle::from(layout_h);
                     }
@@ -462,6 +463,8 @@ impl DwgDocumentBuilder {
                     style.big_font_file = data.big_font_file.clone();
                     style.flags.backward = (data.generation & 2) != 0;
                     style.flags.upside_down = (data.generation & 4) != 0;
+                    // Only mark xref-dependent if the xref block record handle is valid
+                    style.xref_dependent = data.xref_dependent && data.xref_handle != 0;
                     let _ = document.text_styles.remove(&data.name);
                     let _ = document.text_styles.add(style);
                 },
@@ -470,6 +473,7 @@ impl DwgDocumentBuilder {
                     lt.handle = Handle::from(*h);
                     lt.description = data.description.clone();
                     lt.pattern_length = data.pattern_length;
+                    lt.xref_dependent = data.xref_dependent;
                     lt.elements = data.segments.iter().map(|s| {
                         crate::tables::LineTypeElement { length: s.length }
                     }).collect();
@@ -657,6 +661,15 @@ impl DwgDocumentBuilder {
                 }
             }
         }
+
+        // ── Clear default objects before reading file objects ─────────
+        //
+        // initialize_defaults() created placeholder dictionaries, layouts,
+        // and other objects.  The DWG file supplies its own complete set of
+        // objects, so the defaults must be removed to avoid phantom layouts
+        // (with stale block_record handles) and orphaned dictionary entries
+        // that corrupt the file when written back as DXF.
+        document.objects.clear();
 
         // ── Pass 2: Read entities and non-table objects ────────────────
         let mut pending = PendingPolylines {
@@ -852,6 +865,34 @@ impl DwgDocumentBuilder {
                         }
                     }
                 }
+            }
+        }
+
+        // ── Post-pass: Resolve root dictionary handle ──────────────────
+        //
+        // The DWG header often stores dictionary handles as relative
+        // references that resolve to 0 during header reading.  Now that
+        // all objects have been read, scan for the actual root dictionary
+        // (owner == NULL) and update the header.
+        if document.header.named_objects_dict_handle.is_null()
+            || !document.objects.contains_key(&document.header.named_objects_dict_handle)
+        {
+            let mut best = Handle::NULL;
+            let mut best_count = 0usize;
+            for (h, obj) in &document.objects {
+                if let crate::objects::ObjectType::Dictionary(dict) = obj {
+                    if dict.owner.is_null() {
+                        if dict.entries.len() > best_count
+                            || (dict.entries.len() == best_count && h.value() > best.value())
+                        {
+                            best = *h;
+                            best_count = dict.entries.len();
+                        }
+                    }
+                }
+            }
+            if !best.is_null() {
+                document.header.named_objects_dict_handle = best;
             }
         }
 
@@ -1896,6 +1937,23 @@ impl DwgDocumentBuilder {
                         data.max_extents.y,
                         data.max_extents.z,
                     );
+                    obj.elevation = data.elevation;
+                    obj.ucs_origin = (
+                        data.ucs_origin.x,
+                        data.ucs_origin.y,
+                        data.ucs_origin.z,
+                    );
+                    obj.ucs_x_axis = (
+                        data.x_axis.x,
+                        data.x_axis.y,
+                        data.x_axis.z,
+                    );
+                    obj.ucs_y_axis = (
+                        data.y_axis.x,
+                        data.y_axis.y,
+                        data.y_axis.z,
+                    );
+                    obj.ucs_ortho_type = data.ucs_ortho_type;
                     obj.block_record = Handle::from(data.block_record_handle);
                     obj.viewport = Handle::from(data.viewport_handle);
                     document.objects.insert(

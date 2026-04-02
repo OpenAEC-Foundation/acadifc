@@ -59,6 +59,8 @@ pub struct LineType {
     pub pattern_length: f64,
     /// Alignment (always 'A' for AutoCAD)
     pub alignment: char,
+    /// Whether this linetype is externally dependent on an xref
+    pub xref_dependent: bool,
 }
 
 impl LineType {
@@ -71,6 +73,7 @@ impl LineType {
             elements: Vec::new(),
             pattern_length: 0.0,
             alignment: 'A',
+            xref_dependent: false,
         }
     }
 
@@ -83,6 +86,7 @@ impl LineType {
             elements: Vec::new(),
             pattern_length: 0.0,
             alignment: 'A',
+            xref_dependent: false,
         }
     }
 
@@ -95,6 +99,7 @@ impl LineType {
             elements: Vec::new(),
             pattern_length: 0.0,
             alignment: 'A',
+            xref_dependent: false,
         }
     }
 
@@ -107,6 +112,7 @@ impl LineType {
             elements: Vec::new(),
             pattern_length: 0.0,
             alignment: 'A',
+            xref_dependent: false,
         }
     }
 

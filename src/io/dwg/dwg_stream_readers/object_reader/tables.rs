@@ -74,6 +74,7 @@ pub struct TextStyleData {
     pub last_height: f64,
     pub font_file: String,
     pub big_font_file: String,
+    pub xref_dependent: bool,
     pub xref_handle: u64,
 }
 
@@ -86,6 +87,7 @@ pub struct LinetypeData {
     pub pattern_length: f64,
     pub alignment: u8,
     pub segments: Vec<LinetypeSegment>,
+    pub xref_dependent: bool,
     pub xref_handle: u64,
     pub shape_handles: Vec<u64>,
 }
@@ -300,8 +302,8 @@ pub struct BlockHeaderData {
 fn read_xref_dependant_bits(reader: &mut DwgMergedReader, version: DwgVersion) -> bool {
     if version.r2007_plus() {
         let combined = reader.read_bit_short();
-        // Bit 0x40 = xref_64, bit 0x10 = xref_dep
-        (combined & 0x10) != 0
+        // Bits 0-7 = xrefindex+1, bit 8 (0x100) = xref_dependent
+        (combined & 0x100) != 0
     } else {
         // Pre-R2007 (R13/R14/R2000-R2006): B + BS + B
         let _xref_64 = reader.read_bit();
@@ -422,7 +424,7 @@ pub fn read_text_style(
     version: DwgVersion,
 ) -> TextStyleData {
     let name = reader.read_variable_text();
-    read_xref_dependant_bits(reader, version);
+    let xref_dependent = read_xref_dependant_bits(reader, version);
 
     let is_shape_file = reader.read_bit();
     let is_vertical = reader.read_bit();
@@ -439,7 +441,7 @@ pub fn read_text_style(
     TextStyleData {
         name, is_shape_file, is_vertical, height, width_factor,
         oblique_angle, generation, last_height, font_file,
-        big_font_file, xref_handle,
+        big_font_file, xref_dependent, xref_handle,
     }
 }
 
@@ -449,7 +451,7 @@ pub fn read_linetype(
     version: DwgVersion,
 ) -> LinetypeData {
     let name = reader.read_variable_text();
-    read_xref_dependant_bits(reader, version);
+    let xref_dependent = read_xref_dependant_bits(reader, version);
 
     let description = reader.read_variable_text();
     let pattern_length = reader.read_bit_double();
@@ -489,7 +491,7 @@ pub fn read_linetype(
 
     LinetypeData {
         name, description, pattern_length, alignment,
-        segments, xref_handle, shape_handles,
+        segments, xref_dependent, xref_handle, shape_handles,
     }
 }
 

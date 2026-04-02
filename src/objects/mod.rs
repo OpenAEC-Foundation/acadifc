@@ -132,6 +132,16 @@ pub struct Layout {
     pub min_extents: (f64, f64, f64),
     /// Maximum extents
     pub max_extents: (f64, f64, f64),
+    /// Elevation (code 146)
+    pub elevation: f64,
+    /// UCS origin (codes 13/23/33)
+    pub ucs_origin: (f64, f64, f64),
+    /// UCS X axis direction (codes 16/26/36)
+    pub ucs_x_axis: (f64, f64, f64),
+    /// UCS Y axis direction (codes 17/27/37)
+    pub ucs_y_axis: (f64, f64, f64),
+    /// UCS orthographic type (code 76)
+    pub ucs_ortho_type: i16,
     /// Associated block record handle
     pub block_record: Handle,
     /// Viewport handle
@@ -140,6 +150,12 @@ pub struct Layout {
     pub reactors: Vec<Handle>,
     /// Extended dictionary handle ({ACAD_XDICTIONARY})
     pub xdictionary_handle: Option<Handle>,
+    /// Raw DXF AcDbPlotSettings group-code pairs for round-trip preservation.
+    /// Layouts embed PlotSettings in the DXF LAYOUT object; since our Layout
+    /// struct does not duplicate all PlotSettings fields we capture the raw
+    /// pairs on read and replay them verbatim on write.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub raw_plot_settings_codes: Option<Vec<(i32, String)>>,
 }
 
 impl Layout {
@@ -156,10 +172,16 @@ impl Layout {
             insertion_base: (0.0, 0.0, 0.0),
             min_extents: (0.0, 0.0, 0.0),
             max_extents: (12.0, 9.0, 0.0),
+            elevation: 0.0,
+            ucs_origin: (0.0, 0.0, 0.0),
+            ucs_x_axis: (1.0, 0.0, 0.0),
+            ucs_y_axis: (0.0, 1.0, 0.0),
+            ucs_ortho_type: 0,
             block_record: Handle::NULL,
             viewport: Handle::NULL,
             reactors: Vec::new(),
             xdictionary_handle: None,
+            raw_plot_settings_codes: None,
         }
     }
 }
@@ -218,6 +240,15 @@ pub enum ObjectType {
         type_name: String,
         /// Object handle
         handle: Handle,
+        /// Owner handle
+        owner: Handle,
+        /// Raw DXF object-specific group-code pairs.
+        ///
+        /// Each entry is `(group_code, value_string)`. When present the
+        /// DXF writer emits the object type, handle, owner and these
+        /// pairs, reproducing the original object content.
+        #[cfg_attr(feature = "serde", serde(skip))]
+        raw_dxf_codes: Option<Vec<(i32, String)>>,
     },
 }
 

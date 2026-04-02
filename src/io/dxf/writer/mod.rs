@@ -79,11 +79,12 @@ impl<'a> DxfWriter<'a> {
 
     /// Write DXF content to a stream writer
     fn write_dxf<W: DxfStreamWriter>(&self, writer: &mut W) -> Result<()> {
-        let handle_start = self.document.next_handle();
+        let handle_start = compute_max_handle(&self.document);
         let extra_handles = count_extra_handles(&self.document);
-        let handle_seed = handle_start + extra_handles;
+        let handle_seed = handle_start + extra_handles + 1;
         let mut section_writer = SectionWriter::new(writer, handle_start, handle_seed);
         section_writer.set_version(self.document.version);
+        section_writer.build_valid_handles(&self.document);
 
         // Write all sections
         section_writer.write_header(&self.document)?;
@@ -107,6 +108,8 @@ impl<'a> DxfWriter<'a> {
 }
 
 fn count_extra_handles(document: &CadDocument) -> u64 {
+    use crate::objects::ObjectType;
+
     let mut count = 0u64;
 
     for entity in document.entities() {
@@ -152,11 +155,59 @@ fn count_extra_handles(document: &CadDocument) -> u64 {
                 // SEQEND always needs a handle
                 count += 1;
             }
+            EntityType::Insert(insert) => {
+                // SEQEND for attribute sequence
+                if insert.has_attributes() {
+                    count += 1;
+                }
+            }
             _ => {}
         }
     }
 
+    // Count SortEntitiesTable sort entries (allocate_handle used for each)
+    for obj in document.objects.values() {
+        if let ObjectType::SortEntitiesTable(table) = obj {
+            count += table.len() as u64;
+        }
+    }
+
     count
+}
+
+/// Compute the true maximum handle across all document objects.
+/// Returns max_handle + 1 (the first safe handle to allocate).
+/// This is needed because DWG-loaded documents may have next_handle
+/// below some object handles (DWG reader doesn't call resolve_references).
+fn compute_max_handle(document: &CadDocument) -> u64 {
+    let mut max = document.next_handle();
+
+    for entity in document.entities() {
+        let h = entity.common().handle.value();
+        if h >= max { max = h + 1; }
+    }
+    for (handle, _) in &document.objects {
+        let h = handle.value();
+        if h >= max { max = h + 1; }
+    }
+    for br in document.block_records.iter() {
+        let h = br.handle.value();
+        if h >= max { max = h + 1; }
+        for eh in &br.entity_handles {
+            let h = eh.value();
+            if h >= max { max = h + 1; }
+        }
+    }
+    for r in document.layers.iter() { let h = r.handle.value(); if h >= max { max = h + 1; } }
+    for r in document.line_types.iter() { let h = r.handle.value(); if h >= max { max = h + 1; } }
+    for r in document.text_styles.iter() { let h = r.handle.value(); if h >= max { max = h + 1; } }
+    for r in document.dim_styles.iter() { let h = r.handle.value(); if h >= max { max = h + 1; } }
+    for r in document.app_ids.iter() { let h = r.handle.value(); if h >= max { max = h + 1; } }
+    for r in document.views.iter() { let h = r.handle.value(); if h >= max { max = h + 1; } }
+    for r in document.vports.iter() { let h = r.handle.value(); if h >= max { max = h + 1; } }
+    for r in document.ucss.iter() { let h = r.handle.value(); if h >= max { max = h + 1; } }
+
+    max
 }
 
 /// Convenience function to write a document to a file

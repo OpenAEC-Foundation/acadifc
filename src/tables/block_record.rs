@@ -62,6 +62,8 @@ pub struct BlockRecord {
     pub scale_uniformly: bool,
     /// Handles of entities owned by this block
     pub entity_handles: Vec<Handle>,
+    /// XRef file path (empty for normal blocks)
+    pub xref_path: String,
 }
 
 impl BlockRecord {
@@ -78,6 +80,7 @@ impl BlockRecord {
             explodable: true,
             scale_uniformly: false,
             entity_handles: Vec::new(),
+            xref_path: String::new(),
         }
     }
 
@@ -94,6 +97,7 @@ impl BlockRecord {
             explodable: true,
             scale_uniformly: false,
             entity_handles: Vec::new(),
+            xref_path: String::new(),
         }
     }
 
@@ -110,6 +114,7 @@ impl BlockRecord {
             explodable: true,
             scale_uniformly: false,
             entity_handles: Vec::new(),
+            xref_path: String::new(),
         }
     }
 

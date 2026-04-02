@@ -53,6 +53,8 @@ pub struct TextStyle {
     pub big_font_file: String,
     /// True Type font name
     pub true_type_font: String,
+    /// Whether this style is xref-dependent
+    pub xref_dependent: bool,
 }
 
 impl TextStyle {
@@ -69,6 +71,7 @@ impl TextStyle {
             font_file: "txt".to_string(),
             big_font_file: String::new(),
             true_type_font: String::new(),
+            xref_dependent: false,
         }
     }
 
@@ -85,6 +88,7 @@ impl TextStyle {
             font_file: "txt".to_string(),
             big_font_file: String::new(),
             true_type_font: String::new(),
+            xref_dependent: false,
         }
     }
 

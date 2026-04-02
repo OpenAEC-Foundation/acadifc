@@ -580,6 +580,7 @@ impl<'a> SectionReader<'a> {
                         // Find the BlockRecord and set handles
                         if let Some(block_record) = document.block_records.get_mut(&block_name) {
                             block_record.entity_handles = entity_handles;
+                            block_record.xref_path = block.xref_path.clone();
                             if !handle.is_null() {
                                 block_record.block_entity_handle = handle;
                             }
@@ -1020,6 +1021,13 @@ impl<'a> SectionReader<'a> {
     
     /// Read the OBJECTS section
     pub fn read_objects(&mut self, document: &mut CadDocument) -> Result<()> {
+        // Clear default objects created by initialize_defaults() before
+        // reading the file's own objects.  The file supplies its own
+        // complete set of dictionaries, layouts, etc.  Keeping defaults
+        // causes phantom layouts with stale block_record handles and
+        // orphaned dictionary entries.
+        document.objects.clear();
+
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 && pair.value_string == "ENDSEC" {
                 break;
@@ -1141,8 +1149,13 @@ impl<'a> SectionReader<'a> {
                             format!("Object not supported, read as Unknown: {}", pair.value_string),
                         );
                         let type_name = pair.value_string.clone();
-                        let handle = self.read_unknown_object_handle()?;
-                        document.objects.insert(handle, ObjectType::Unknown { type_name, handle });
+                        let (handle, owner, raw_codes) = self.read_unknown_object_full()?;
+                        document.objects.insert(handle, ObjectType::Unknown {
+                            type_name,
+                            handle,
+                            owner,
+                            raw_dxf_codes: if raw_codes.is_empty() { None } else { Some(raw_codes) },
+                        });
                     }
                 }
             }
@@ -1210,67 +1223,129 @@ impl<'a> SectionReader<'a> {
     fn read_layout(&mut self) -> Result<Option<Layout>> {
         let mut layout = Layout::new("");
 
+        // Track which subclass we're in: 0=header, 1=AcDbPlotSettings, 2=AcDbLayout
+        let mut section = 0u8;
+        let mut plot_settings_codes: Vec<(i32, String)> = Vec::new();
+        // Track owner vs block_record — both use code 330
+        let mut owner_set = false;
+
         while let Some(pair) = self.reader.read_pair()? {
+            if pair.code == 0 {
+                self.reader.push_back(pair);
+                break;
+            }
             match pair.code {
-                0 => {
-                    // Next object - push back and break
-                    self.reader.push_back(pair);
-                    break;
-                }
-                5 => {
-                    // Handle
-                    if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) {
-                        layout.handle = Handle::new(h);
+                100 => {
+                    // Subclass marker transitions
+                    match pair.value_string.as_str() {
+                        "AcDbPlotSettings" => section = 1,
+                        "AcDbLayout" => section = 2,
+                        _ => {}
                     }
+                    continue;
                 }
-                330 => {
-                    // Owner handle
-                    if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) {
-                        layout.owner = Handle::new(h);
+                102 => {
+                    // Extension dictionary / reactor groups (header area)
+                    if pair.value_string == "{ACAD_XDICTIONARY" {
+                        // Next pair is the xdictionary handle (code 360), then closing "}"
+                        while let Some(p2) = self.reader.read_pair()? {
+                            if p2.code == 360 {
+                                if let Ok(h) = u64::from_str_radix(&p2.value_string, 16) {
+                                    layout.xdictionary_handle = Some(Handle::new(h));
+                                }
+                            }
+                            if p2.code == 102 { break; } // closing "}"
+                        }
+                    } else if pair.value_string == "{ACAD_REACTORS" {
+                        while let Some(p2) = self.reader.read_pair()? {
+                            if p2.code == 102 { break; }
+                            if p2.code == 330 {
+                                if let Ok(h) = u64::from_str_radix(&p2.value_string, 16) {
+                                    layout.reactors.push(Handle::new(h));
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+
+            match section {
+                0 => {
+                    // Before any subclass: handle, owner
+                    match pair.code {
+                        5 => {
+                            if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) {
+                                layout.handle = Handle::new(h);
+                            }
+                        }
+                        330 => {
+                            if !owner_set {
+                                if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) {
+                                    layout.owner = Handle::new(h);
+                                }
+                                owner_set = true;
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 1 => {
-                    // Layout name
-                    layout.name = pair.value_string.clone();
+                    // AcDbPlotSettings — capture all codes as raw pairs
+                    plot_settings_codes.push((pair.code, pair.value_string.clone()));
                 }
-                70 => {
-                    // Layout flags
-                    if let Some(value) = pair.as_i16() {
-                        layout.flags = value;
-                    }
-                }
-                71 => {
-                    // Tab order
-                    if let Some(value) = pair.as_i16() {
-                        layout.tab_order = value;
-                    }
-                }
-                10 => {
-                    // Min limits X
-                    if let Some(value) = pair.as_double() {
-                        layout.min_limits.0 = value;
-                    }
-                }
-                20 => {
-                    // Min limits Y
-                    if let Some(value) = pair.as_double() {
-                        layout.min_limits.1 = value;
-                    }
-                }
-                11 => {
-                    // Max limits X
-                    if let Some(value) = pair.as_double() {
-                        layout.max_limits.0 = value;
-                    }
-                }
-                21 => {
-                    // Max limits Y
-                    if let Some(value) = pair.as_double() {
-                        layout.max_limits.1 = value;
+                2 => {
+                    // AcDbLayout — parse the layout-specific fields
+                    match pair.code {
+                        1 => layout.name = pair.value_string.clone(),
+                        70 => { if let Some(v) = pair.as_i16() { layout.flags = v; } }
+                        71 => { if let Some(v) = pair.as_i16() { layout.tab_order = v; } }
+                        10 => { if let Some(v) = pair.as_double() { layout.min_limits.0 = v; } }
+                        20 => { if let Some(v) = pair.as_double() { layout.min_limits.1 = v; } }
+                        11 => { if let Some(v) = pair.as_double() { layout.max_limits.0 = v; } }
+                        21 => { if let Some(v) = pair.as_double() { layout.max_limits.1 = v; } }
+                        12 => { if let Some(v) = pair.as_double() { layout.insertion_base.0 = v; } }
+                        22 => { if let Some(v) = pair.as_double() { layout.insertion_base.1 = v; } }
+                        32 => { if let Some(v) = pair.as_double() { layout.insertion_base.2 = v; } }
+                        14 => { if let Some(v) = pair.as_double() { layout.min_extents.0 = v; } }
+                        24 => { if let Some(v) = pair.as_double() { layout.min_extents.1 = v; } }
+                        34 => { if let Some(v) = pair.as_double() { layout.min_extents.2 = v; } }
+                        15 => { if let Some(v) = pair.as_double() { layout.max_extents.0 = v; } }
+                        25 => { if let Some(v) = pair.as_double() { layout.max_extents.1 = v; } }
+                        35 => { if let Some(v) = pair.as_double() { layout.max_extents.2 = v; } }
+                        330 => {
+                            // In AcDbLayout, code 330 = block_record handle
+                            if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) {
+                                layout.block_record = Handle::new(h);
+                            }
+                        }
+                        331 => {
+                            // Viewport handle
+                            if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) {
+                                layout.viewport = Handle::new(h);
+                            }
+                        }
+                        146 => { if let Some(v) = pair.as_double() { layout.elevation = v; } }
+                        13 => { if let Some(v) = pair.as_double() { layout.ucs_origin.0 = v; } }
+                        23 => { if let Some(v) = pair.as_double() { layout.ucs_origin.1 = v; } }
+                        33 => { if let Some(v) = pair.as_double() { layout.ucs_origin.2 = v; } }
+                        16 => { if let Some(v) = pair.as_double() { layout.ucs_x_axis.0 = v; } }
+                        26 => { if let Some(v) = pair.as_double() { layout.ucs_x_axis.1 = v; } }
+                        36 => { if let Some(v) = pair.as_double() { layout.ucs_x_axis.2 = v; } }
+                        17 => { if let Some(v) = pair.as_double() { layout.ucs_y_axis.0 = v; } }
+                        27 => { if let Some(v) = pair.as_double() { layout.ucs_y_axis.1 = v; } }
+                        37 => { if let Some(v) = pair.as_double() { layout.ucs_y_axis.2 = v; } }
+                        76 => { if let Some(v) = pair.as_i16() { layout.ucs_ortho_type = v; } }
+                        _ => {} // codes not currently stored
                     }
                 }
                 _ => {}
             }
+        }
+
+        if !plot_settings_codes.is_empty() {
+            layout.raw_plot_settings_codes = Some(plot_settings_codes);
         }
 
         Ok(Some(layout))
@@ -1427,21 +1502,40 @@ impl<'a> SectionReader<'a> {
         Ok(obj)
     }
 
-    /// Read an unknown object, extracting only the handle, then skip remaining pairs.
-    fn read_unknown_object_handle(&mut self) -> Result<Handle> {
+    /// Read an unknown object, capturing handle, owner and all group-code pairs
+    /// for lossless DXF round-trip.
+    fn read_unknown_object_full(&mut self) -> Result<(Handle, Handle, Vec<(i32, String)>)> {
         let mut handle = Handle::NULL;
+        let mut owner = Handle::NULL;
+        let mut raw_codes: Vec<(i32, String)> = Vec::new();
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 {
                 self.reader.push_back(pair);
                 break;
             }
-            if pair.code == 5 {
-                if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) {
-                    handle = Handle::new(h);
+            match pair.code {
+                5 => {
+                    if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) {
+                        handle = Handle::new(h);
+                    }
+                }
+                330 => {
+                    // First 330 outside a 102-group is the owner.
+                    // Subsequent 330s inside reactor groups are stored as raw codes.
+                    if owner == Handle::NULL {
+                        if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) {
+                            owner = Handle::new(h);
+                        }
+                    } else {
+                        raw_codes.push((pair.code, pair.value_string.clone()));
+                    }
+                }
+                _ => {
+                    raw_codes.push((pair.code, pair.value_string.clone()));
                 }
             }
         }
-        Ok(handle)
+        Ok((handle, owner, raw_codes))
     }
     
     /// Skip to ENDTAB
@@ -1547,6 +1641,11 @@ impl<'a> SectionReader<'a> {
                 5 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { linetype.handle = Handle::new(h); } }
                 2 => linetype.name = pair.value_string.clone(),
                 3 => linetype.description = pair.value_string.clone(),
+                70 => {
+                    if let Some(flags) = pair.as_i16() {
+                        linetype.xref_dependent = (flags & 0x10) != 0;
+                    }
+                }
                 73 => {
                     if let Some(count) = pair.as_i16() {
                         linetype.elements.reserve(count as usize);
@@ -1598,6 +1697,11 @@ impl<'a> SectionReader<'a> {
             match pair.code {
                 5 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { style.handle = Handle::new(h); } }
                 2 => style.name = pair.value_string.clone(),
+                70 => {
+                    if let Some(f) = pair.as_i16() {
+                        style.xref_dependent = (f & 0x10) != 0;
+                    }
+                }
                 3 => style.font_file = pair.value_string.clone(),
                 4 => style.big_font_file = pair.value_string.clone(),
                 40 => {
@@ -1980,6 +2084,38 @@ impl<'a> SectionReader<'a> {
             match pair.code {
                 5 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { vport.handle = Handle::new(h); } }
                 2 => vport.name = pair.value_string.clone(),
+                10 => { if let Some(v) = pair.as_double() { vport.lower_left.x = v; } }
+                20 => { if let Some(v) = pair.as_double() { vport.lower_left.y = v; } }
+                11 => { if let Some(v) = pair.as_double() { vport.upper_right.x = v; } }
+                21 => { if let Some(v) = pair.as_double() { vport.upper_right.y = v; } }
+                12 => { if let Some(v) = pair.as_double() { vport.view_center.x = v; } }
+                22 => { if let Some(v) = pair.as_double() { vport.view_center.y = v; } }
+                13 => { if let Some(v) = pair.as_double() { vport.snap_base.x = v; } }
+                23 => { if let Some(v) = pair.as_double() { vport.snap_base.y = v; } }
+                14 => { if let Some(v) = pair.as_double() { vport.snap_spacing.x = v; } }
+                24 => { if let Some(v) = pair.as_double() { vport.snap_spacing.y = v; } }
+                15 => { if let Some(v) = pair.as_double() { vport.grid_spacing.x = v; } }
+                25 => { if let Some(v) = pair.as_double() { vport.grid_spacing.y = v; } }
+                16 => { if let Some(v) = pair.as_double() { vport.view_direction.x = v; } }
+                26 => { if let Some(v) = pair.as_double() { vport.view_direction.y = v; } }
+                36 => { if let Some(v) = pair.as_double() { vport.view_direction.z = v; } }
+                17 => { if let Some(v) = pair.as_double() { vport.view_target.x = v; } }
+                27 => { if let Some(v) = pair.as_double() { vport.view_target.y = v; } }
+                37 => { if let Some(v) = pair.as_double() { vport.view_target.z = v; } }
+                40 => { if let Some(v) = pair.as_double() { vport.view_height = v; } }
+                41 => { if let Some(v) = pair.as_double() { vport.aspect_ratio = v; } }
+                42 => { if let Some(v) = pair.as_double() { vport.lens_length = v; } }
+                43 => { if let Some(v) = pair.as_double() { vport.front_clip = v; } }
+                44 => { if let Some(v) = pair.as_double() { vport.back_clip = v; } }
+                50 => { if let Some(v) = pair.as_double() { vport.snap_rotation = v; } }
+                51 => { if let Some(v) = pair.as_double() { vport.view_twist = v; } }
+                71 => { if let Some(v) = pair.as_i16() { vport.ucsfollow = (v & 4) != 0; } }
+                72 => { if let Some(v) = pair.as_i16() { vport.circle_zoom = v; } }
+                73 => { if let Some(v) = pair.as_i16() { vport.fast_zoom = v != 0; } }
+                75 => { if let Some(v) = pair.as_i16() { vport.snap_on = v != 0; } }
+                76 => { if let Some(v) = pair.as_i16() { vport.grid_on = v != 0; } }
+                77 => { if let Some(v) = pair.as_i16() { vport.snap_style = v != 0; } }
+                78 => { if let Some(v) = pair.as_i16() { vport.snap_isopair = v; } }
                 _ => {}
             }
         }
@@ -4974,10 +5110,42 @@ impl<'a> SectionReader<'a> {
                 }
                 102 => {} // Skip extension dictionaries / reactors groups
                 _ => {
-                    // All other codes are data entries
+                    // All other codes are data entries — parse with proper type
+                    let value = match XRecordValueType::from_code(pair.code) {
+                        XRecordValueType::Double => {
+                            pair.as_double().map(XRecordValue::Double)
+                                .unwrap_or(XRecordValue::String(pair.value_string.clone()))
+                        }
+                        XRecordValueType::Int16 => {
+                            pair.as_i16().map(XRecordValue::Int16)
+                                .unwrap_or(XRecordValue::String(pair.value_string.clone()))
+                        }
+                        XRecordValueType::Int32 => {
+                            pair.as_i32().map(XRecordValue::Int32)
+                                .unwrap_or(XRecordValue::String(pair.value_string.clone()))
+                        }
+                        XRecordValueType::Int64 => {
+                            pair.as_int().map(XRecordValue::Int64)
+                                .unwrap_or(XRecordValue::String(pair.value_string.clone()))
+                        }
+                        XRecordValueType::Byte => {
+                            pair.as_i16().map(|v| XRecordValue::Byte(v as u8))
+                                .unwrap_or(XRecordValue::String(pair.value_string.clone()))
+                        }
+                        XRecordValueType::Bool => {
+                            pair.as_i16().map(|v| XRecordValue::Bool(v != 0))
+                                .unwrap_or(XRecordValue::String(pair.value_string.clone()))
+                        }
+                        XRecordValueType::Handle | XRecordValueType::ObjectId => {
+                            u64::from_str_radix(pair.value_string.trim(), 16)
+                                .map(|h| XRecordValue::Handle(Handle::new(h)))
+                                .unwrap_or(XRecordValue::String(pair.value_string.clone()))
+                        }
+                        _ => XRecordValue::String(pair.value_string.clone()),
+                    };
                     xr.entries.push(XRecordEntry {
                         code: pair.code,
-                        value: XRecordValue::String(pair.value_string.clone()),
+                        value,
                     });
                 }
             }

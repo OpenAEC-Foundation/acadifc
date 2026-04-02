@@ -16,6 +16,7 @@ use crate::tables::*;
 use crate::types::{Color, DxfVersion, Handle, Vector3};
 use crate::xdata::{ExtendedData, XDataValue};
 
+use std::collections::HashSet;
 use super::stream_writer::{DxfStreamWriter, DxfStreamWriterExt};
 
 /// Writes all DXF sections
@@ -29,6 +30,13 @@ pub struct SectionWriter<'a, W: DxfStreamWriter> {
     sab_entries: Vec<(Handle, Vec<u8>)>,
     /// Whether currently writing paper space entities (for group code 67)
     writing_paper_space: bool,
+    /// Set of all handles that will exist in the output DXF.
+    /// Used to filter reactor/xdictionary references to non-existent objects.
+    valid_handles: HashSet<Handle>,
+    /// Handle of the ByLayer linetype (for defaults in MLeader etc.)
+    bylayer_linetype_handle: Handle,
+    /// Handle of the ByBlock linetype (treated as "unset" for MLeader etc.)
+    byblock_linetype_handle: Handle,
 }
 
 impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
@@ -41,6 +49,47 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             dxf_version: DxfVersion::AC1024,
             sab_entries: Vec::new(),
             writing_paper_space: false,
+            valid_handles: HashSet::new(),
+            bylayer_linetype_handle: Handle::NULL,
+            byblock_linetype_handle: Handle::NULL,
+        }
+    }
+
+    /// Build the set of all handles that will appear in the output DXF.
+    /// Call this before writing BLOCKS / ENTITIES / OBJECTS.
+    pub fn build_valid_handles(&mut self, document: &CadDocument) {
+        let mut set = HashSet::new();
+        // Object handles
+        for h in document.objects.keys() {
+            set.insert(*h);
+        }
+        // Entity handles (from all block records)
+        for br in document.block_records.iter() {
+            set.insert(br.handle());
+            for eh in &br.entity_handles {
+                set.insert(*eh);
+            }
+        }
+        // Entity index (covers all entities including orphans)
+        for h in document.entity_index.keys() {
+            set.insert(*h);
+        }
+        // Table record handles
+        for r in document.layers.iter() { set.insert(r.handle()); }
+        for r in document.line_types.iter() { set.insert(r.handle()); }
+        for r in document.text_styles.iter() { set.insert(r.handle()); }
+        for r in document.dim_styles.iter() { set.insert(r.handle()); }
+        for r in document.app_ids.iter() { set.insert(r.handle()); }
+        for r in document.views.iter() { set.insert(r.handle()); }
+        for r in document.vports.iter() { set.insert(r.handle()); }
+        for r in document.ucss.iter() { set.insert(r.handle()); }
+        self.valid_handles = set;
+        // Store ByLayer/ByBlock linetype handles for use as default in MLeader etc.
+        if let Some(lt) = document.line_types.get("ByLayer") {
+            self.bylayer_linetype_handle = lt.handle();
+        }
+        if let Some(lt) = document.line_types.get("ByBlock") {
+            self.byblock_linetype_handle = lt.handle();
         }
     }
 
@@ -297,57 +346,84 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_string(2, vport.name())?;
         self.writer.write_i16(70, 0)?;
 
-        // Viewport center
-        self.writer.write_double(10, vport.view_center.x)?;
-        self.writer.write_double(20, vport.view_center.y)?;
+        // Lower-left corner
+        self.writer.write_double(10, vport.lower_left.x)?;
+        self.writer.write_double(20, vport.lower_left.y)?;
 
-        // Viewport size
-        self.writer.write_double(40, vport.view_height)?;
-        self.writer.write_double(41, vport.aspect_ratio)?;
+        // Upper-right corner
+        self.writer.write_double(11, vport.upper_right.x)?;
+        self.writer.write_double(21, vport.upper_right.y)?;
 
-        // View target point
-        self.writer.write_double(12, vport.view_target.x)?;
-        self.writer.write_double(22, vport.view_target.y)?;
-        self.writer.write_double(32, vport.view_target.z)?;
+        // View center
+        self.writer.write_double(12, vport.view_center.x)?;
+        self.writer.write_double(22, vport.view_center.y)?;
+
+        // Snap base point
+        self.writer.write_double(13, vport.snap_base.x)?;
+        self.writer.write_double(23, vport.snap_base.y)?;
+
+        // Snap spacing
+        self.writer.write_double(14, vport.snap_spacing.x)?;
+        self.writer.write_double(24, vport.snap_spacing.y)?;
+
+        // Grid spacing
+        self.writer.write_double(15, vport.grid_spacing.x)?;
+        self.writer.write_double(25, vport.grid_spacing.y)?;
 
         // View direction
-        self.writer.write_double(13, vport.view_direction.x)?;
-        self.writer.write_double(23, vport.view_direction.y)?;
-        self.writer.write_double(33, vport.view_direction.z)?;
+        self.writer.write_double(16, vport.view_direction.x)?;
+        self.writer.write_double(26, vport.view_direction.y)?;
+        self.writer.write_double(36, vport.view_direction.z)?;
 
-        // View twist angle
-        self.writer.write_double(51, 0.0)?;
+        // View target
+        self.writer.write_double(17, vport.view_target.x)?;
+        self.writer.write_double(27, vport.view_target.y)?;
+        self.writer.write_double(37, vport.view_target.z)?;
+
+        // View height
+        self.writer.write_double(40, vport.view_height)?;
+
+        // Aspect ratio
+        self.writer.write_double(41, vport.aspect_ratio)?;
 
         // Lens length
         self.writer.write_double(42, vport.lens_length)?;
 
-        // Front/back clipping
-        self.writer.write_double(43, 0.0)?;
-        self.writer.write_double(44, 0.0)?;
+        // Front clipping plane
+        self.writer.write_double(43, vport.front_clip)?;
 
-        // View mode
-        self.writer.write_i16(71, 0)?;
+        // Back clipping plane
+        self.writer.write_double(44, vport.back_clip)?;
+
+        // Snap rotation
+        self.writer.write_double(50, vport.snap_rotation)?;
+
+        // View twist angle
+        self.writer.write_double(51, vport.view_twist)?;
+
+        // View mode (bit flags: bit 2 = UCS follow)
+        self.writer.write_i16(71, if vport.ucsfollow { 4 } else { 0 })?;
 
         // Circle zoom
-        self.writer.write_i16(72, 1000)?;
+        self.writer.write_i16(72, vport.circle_zoom)?;
 
         // Fast zoom
-        self.writer.write_i16(73, 1)?;
+        self.writer.write_i16(73, if vport.fast_zoom { 1 } else { 0 })?;
 
         // UCSICON
         self.writer.write_i16(74, 3)?;
 
         // Snap on
-        self.writer.write_i16(75, 0)?;
+        self.writer.write_i16(75, if vport.snap_on { 1 } else { 0 })?;
 
         // Grid on
-        self.writer.write_i16(76, 0)?;
+        self.writer.write_i16(76, if vport.grid_on { 1 } else { 0 })?;
 
         // Snap style
-        self.writer.write_i16(77, 0)?;
+        self.writer.write_i16(77, if vport.snap_style { 1 } else { 0 })?;
 
         // Snap isopair
-        self.writer.write_i16(78, 0)?;
+        self.writer.write_i16(78, vport.snap_isopair)?;
 
         Ok(())
     }
@@ -371,7 +447,11 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_subclass("AcDbSymbolTableRecord")?;
         self.writer.write_subclass("AcDbLinetypeTableRecord")?;
         self.writer.write_string(2, ltype.name())?;
-        self.writer.write_i16(70, 0)?;
+        let mut flags: i16 = 0;
+        if ltype.xref_dependent {
+            flags |= 0x10;
+        }
+        self.writer.write_i16(70, flags)?;
         self.writer.write_string(3, &ltype.description)?;
         self.writer.write_i16(72, 65)?; // Alignment code (always 65)
         self.writer.write_i16(73, ltype.elements.len() as i16)?;
@@ -463,7 +543,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_subclass("AcDbSymbolTableRecord")?;
         self.writer.write_subclass("AcDbTextStyleTableRecord")?;
         self.writer.write_string(2, style.name())?;
-        self.writer.write_i16(70, 0)?;
+        let mut flags: i16 = 0;
+        if style.xref_dependent { flags |= 0x10; }
+        self.writer.write_i16(70, flags)?;
         self.writer.write_double(40, style.height)?;
         self.writer.write_double(41, style.width_factor)?;
         self.writer.write_double(50, style.oblique_angle)?;
@@ -754,21 +836,41 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     /// Write a complete block definition (BLOCK...entities...ENDBLK)
     fn write_block_definition(&mut self, block_record: &BlockRecord, document: &CadDocument) -> Result<()> {
         let owner = block_record.handle();
+        let is_paper_space = block_record.name().starts_with("*Paper_Space");
         
-        // Determine block flags
-        let flags: i16 = if block_record.is_model_space() { 
-            2 // Model space flag
-        } else { 
-            0 
-        };
+        // Determine block flags from stored BlockFlags
+        let mut flags: i16 = 0;
+        // Anonymous flag: use stored flag, or infer for truly anonymous blocks
+        // (e.g. *D1, *U2, *T3, *X4, *E5, *A6) but NOT system blocks
+        // (*Model_Space, *Paper_Space*)
+        let name = block_record.name();
+        let is_anonymous_block = block_record.flags.anonymous
+            || (name.starts_with('*')
+                && !name.starts_with("*Model_Space")
+                && !name.starts_with("*Paper_Space"));
+        if is_anonymous_block {
+            flags |= 1; // anonymous
+        }
+        if block_record.flags.has_attributes {
+            flags |= 2; // has attribute definitions
+        }
+        if block_record.flags.is_xref {
+            flags |= 4; // xref
+        }
+        if block_record.flags.is_xref_overlay {
+            flags |= 8; // xref overlay
+        }
+        if block_record.flags.is_external {
+            flags |= 16; // externally dependent
+        }
         
         // Write BLOCK entity
         self.writer.write_string(0, "BLOCK")?;
         self.writer.write_handle(5, block_record.block_entity_handle)?;
         self.writer.write_handle(330, owner)?;
         self.writer.write_subclass("AcDbEntity")?;
-        // Paper space flag (group code 67) - only for active paper space (*Paper_Space)
-        if block_record.name() == "*Paper_Space" {
+        // Paper space flag (group code 67) for all paper space blocks
+        if is_paper_space {
             self.writer.write_i16(67, 1)?;
         }
         self.writer.write_string(8, "0")?;
@@ -780,7 +882,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_double(30, 0.0)?;
         self.writer.write_string(3, block_record.name())?;
         // Group code 1 is XRef path (empty for normal blocks)
-        self.writer.write_string(1, "")?;
+        self.writer.write_string(1, &block_record.xref_path)?;
 
         // Write entities inside block definition:
         // - Model space entities go to ENTITIES section (not here)
@@ -788,11 +890,18 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // - Non-active paper spaces (*Paper_Space0, *Paper_Space1, ...) write entities here
         // - Other blocks (inserts etc.) also write entities here
         if !block_record.is_model_space() && block_record.name() != "*Paper_Space" {
+            // Set paper space flag so entities inside non-active paper
+            // space blocks get code 67=1 (same as active paper space).
+            let prev_ps = self.writing_paper_space;
+            if is_paper_space {
+                self.writing_paper_space = true;
+            }
             for eh in &block_record.entity_handles {
                 if let Some(&idx) = document.entity_index.get(eh) {
                     self.write_entity_with_owner(&document.entities[idx], owner)?;
                 }
             }
+            self.writing_paper_space = prev_ps;
         }
 
         // Write ENDBLK entity
@@ -800,8 +909,8 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_handle(5, block_record.block_end_handle)?;
         self.writer.write_handle(330, owner)?;
         self.writer.write_subclass("AcDbEntity")?;
-        // Paper space flag for ENDBLK too - only active paper space
-        if block_record.name() == "*Paper_Space" {
+        // Paper space flag for ENDBLK too
+        if is_paper_space {
             self.writer.write_i16(67, 1)?;
         }
         self.writer.write_string(8, "0")?;
@@ -898,20 +1007,29 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
         // Write xdictionary group
         if let Some(xdict) = common.xdictionary_handle {
-            if xdict != Handle::NULL {
+            if xdict != Handle::NULL && (self.valid_handles.is_empty() || self.valid_handles.contains(&xdict)) {
                 self.writer.write_string(102, "{ACAD_XDICTIONARY")?;
                 self.writer.write_handle(360, xdict)?;
                 self.writer.write_string(102, "}")?;
             }
         }
 
-        // Write reactor group
+        // Write reactor group (filter out reactors pointing to non-existent objects)
         if !common.reactors.is_empty() {
-            self.writer.write_string(102, "{ACAD_REACTORS")?;
-            for reactor in &common.reactors {
-                self.writer.write_handle(330, *reactor)?;
+            let valid_reactors: Vec<Handle> = if self.valid_handles.is_empty() {
+                common.reactors.clone()
+            } else {
+                common.reactors.iter().copied()
+                    .filter(|r| self.valid_handles.contains(r))
+                    .collect()
+            };
+            if !valid_reactors.is_empty() {
+                self.writer.write_string(102, "{ACAD_REACTORS")?;
+                for reactor in &valid_reactors {
+                    self.writer.write_handle(330, *reactor)?;
+                }
+                self.writer.write_string(102, "}")?;
             }
-            self.writer.write_string(102, "}")?;
         }
 
         self.writer.write_subclass("AcDbEntity")?;
@@ -1367,20 +1485,29 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
         // Write xdictionary group
         if let Some(xdict) = base.common.xdictionary_handle {
-            if xdict != Handle::NULL {
+            if xdict != Handle::NULL && (self.valid_handles.is_empty() || self.valid_handles.contains(&xdict)) {
                 self.writer.write_string(102, "{ACAD_XDICTIONARY")?;
                 self.writer.write_handle(360, xdict)?;
                 self.writer.write_string(102, "}")?;
             }
         }
 
-        // Write reactor group
+        // Write reactor group (filter out reactors pointing to non-existent objects)
         if !base.common.reactors.is_empty() {
-            self.writer.write_string(102, "{ACAD_REACTORS")?;
-            for reactor in &base.common.reactors {
-                self.writer.write_handle(330, *reactor)?;
+            let valid_reactors: Vec<Handle> = if self.valid_handles.is_empty() {
+                base.common.reactors.clone()
+            } else {
+                base.common.reactors.iter().copied()
+                    .filter(|r| self.valid_handles.contains(r))
+                    .collect()
+            };
+            if !valid_reactors.is_empty() {
+                self.writer.write_string(102, "{ACAD_REACTORS")?;
+                for reactor in &valid_reactors {
+                    self.writer.write_handle(330, *reactor)?;
+                }
+                self.writer.write_string(102, "}")?;
             }
-            self.writer.write_string(102, "}")?;
         }
 
         self.writer.write_subclass("AcDbEntity")?;
@@ -1505,9 +1632,16 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // Solid fill flag
         self.writer.write_i16(70, if hatch.is_solid { 1 } else { 0 })?;
 
-        // Associative flag
+        // Associative flag — clear if boundary handles are all missing / invalid
+        let effective_associative = hatch.is_associative && hatch.paths.iter().any(|p| {
+            if self.valid_handles.is_empty() {
+                !p.boundary_handles.is_empty()
+            } else {
+                p.boundary_handles.iter().any(|h| *h != Handle::NULL && self.valid_handles.contains(h))
+            }
+        });
         self.writer
-            .write_i16(71, if hatch.is_associative { 1 } else { 0 })?;
+            .write_i16(71, if effective_associative { 1 } else { 0 })?;
 
         // Number of boundary paths
         self.writer.write_i32(91, hatch.paths.len() as i32)?;
@@ -1565,7 +1699,18 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         }
 
         // Associated entities (boundary handles)
-        self.writer.write_i32(97, 0)?;
+        // Filter to only valid handles if valid_handles is populated
+        let valid_boundary_handles: Vec<Handle> = if self.valid_handles.is_empty() {
+            path.boundary_handles.clone()
+        } else {
+            path.boundary_handles.iter().copied()
+                .filter(|h| *h != Handle::NULL && self.valid_handles.contains(h))
+                .collect()
+        };
+        self.writer.write_i32(97, valid_boundary_handles.len() as i32)?;
+        for h in &valid_boundary_handles {
+            self.writer.write_handle(330, *h)?;
+        }
 
         Ok(())
     }
@@ -1618,6 +1763,23 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 for point in &spline.control_points {
                     self.writer.write_double(10, point.x)?;
                     self.writer.write_double(20, point.y)?;
+                    if spline.rational {
+                        self.writer.write_double(42, point.z)?; // z stores weight
+                    }
+                }
+                // Fit data (R2010+)
+                if self.dxf_version >= DxfVersion::AC1024 {
+                    self.writer.write_i32(97, spline.fit_points.len() as i32)?;
+                    for fp in &spline.fit_points {
+                        self.writer.write_double(11, fp.x)?;
+                        self.writer.write_double(21, fp.y)?;
+                    }
+                    if !spline.fit_points.is_empty() {
+                        self.writer.write_double(12, spline.start_tangent.x)?;
+                        self.writer.write_double(22, spline.start_tangent.y)?;
+                        self.writer.write_double(13, spline.end_tangent.x)?;
+                        self.writer.write_double(23, spline.end_tangent.y)?;
+                    }
                 }
             }
             BoundaryEdge::Polyline(poly) => {
@@ -1878,8 +2040,47 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // Circle sides
         self.writer.write_i16(72, viewport.circle_sides)?;
         
+        // Frozen layers (code 331)
+        for frozen_layer in &viewport.frozen_layers {
+            if !frozen_layer.is_null() {
+                self.writer.write_handle(331, *frozen_layer)?;
+            }
+        }
+        
         // Render mode
         self.writer.write_byte(281, viewport.render_mode.to_value() as u8)?;
+        
+        // UCS per viewport
+        if viewport.ucs_per_viewport {
+            self.writer.write_i16(71, 1)?;
+        }
+        
+        // UCS origin, axes
+        if viewport.ucs_origin != Vector3::ZERO {
+            self.writer.write_double(110, viewport.ucs_origin.x)?;
+            self.writer.write_double(120, viewport.ucs_origin.y)?;
+            self.writer.write_double(130, viewport.ucs_origin.z)?;
+        }
+        if viewport.ucs_x_axis != Vector3::ZERO {
+            self.writer.write_double(111, viewport.ucs_x_axis.x)?;
+            self.writer.write_double(121, viewport.ucs_x_axis.y)?;
+            self.writer.write_double(131, viewport.ucs_x_axis.z)?;
+        }
+        if viewport.ucs_y_axis != Vector3::ZERO {
+            self.writer.write_double(112, viewport.ucs_y_axis.x)?;
+            self.writer.write_double(122, viewport.ucs_y_axis.y)?;
+            self.writer.write_double(132, viewport.ucs_y_axis.z)?;
+        }
+        
+        // Elevation
+        if viewport.elevation != 0.0 {
+            self.writer.write_double(146, viewport.elevation)?;
+        }
+        
+        // Grid major
+        if viewport.grid_major != 0 {
+            self.writer.write_i16(61, viewport.grid_major)?;
+        }
         
         Ok(())
     }
@@ -2056,26 +2257,19 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     pub fn write_objects(&mut self, document: &CadDocument) -> Result<()> {
         self.writer.write_section_start("OBJECTS")?;
 
-        // Collect handles of Unknown objects — these won't be written, so
-        // dictionary entries referencing them must be filtered out to avoid
-        // dangling pointers that cause "not that kind of class" errors.
-        let unknown_handles: std::collections::HashSet<Handle> = document
-            .objects
-            .iter()
-            .filter_map(|(h, obj)| {
-                if matches!(obj, ObjectType::Unknown { .. }) {
-                    Some(*h)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
         // DXF spec requires the root named object dictionary to be the
         // very first object in the OBJECTS section.
-        let root_handle = document.header.named_objects_dict_handle;
+        // The header handle may be NULL/invalid (e.g. after DWG reading where
+        // handle references aren't fully resolved), so fall back to scanning
+        // objects for the root dictionary (owner == NULL).
+        let mut root_handle = document.header.named_objects_dict_handle;
+        if root_handle.is_null()
+            || !matches!(document.objects.get(&root_handle), Some(ObjectType::Dictionary(_)))
+        {
+            root_handle = Self::find_root_dict_handle(&document.objects);
+        }
         if let Some(ObjectType::Dictionary(root_dict)) = document.objects.get(&root_handle) {
-            self.write_dictionary(root_dict, &unknown_handles)?;
+            self.write_dictionary(root_dict, &document.objects)?;
         }
 
         // Write remaining objects (skip the root dictionary already written)
@@ -2085,7 +2279,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             }
             let object = object;
             match object {
-                ObjectType::Dictionary(dict) => self.write_dictionary(dict, &unknown_handles)?,
+                ObjectType::Dictionary(dict) => self.write_dictionary(dict, &document.objects)?,
                 ObjectType::Layout(layout) => self.write_layout(layout)?,
                 ObjectType::XRecord(xrecord) => self.write_xrecord(xrecord)?,
                 ObjectType::Group(group) => self.write_group(group)?,
@@ -2105,9 +2299,11 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 ObjectType::RasterVariables(obj) => self.write_raster_variables(obj)?,
                 ObjectType::BookColor(obj) => self.write_bookcolor(obj)?,
                 ObjectType::PlaceHolder(obj) => self.write_stub_handle_only("ACDBPLACEHOLDER", obj.handle, obj.owner)?,
-                ObjectType::DictionaryWithDefault(obj) => self.write_dict_with_default(obj, &unknown_handles)?,
+                ObjectType::DictionaryWithDefault(obj) => self.write_dict_with_default(obj, &document.objects)?,
                 ObjectType::WipeoutVariables(obj) => self.write_wipeout_variables(obj)?,
-                ObjectType::Unknown { .. } => {}
+                ObjectType::Unknown { type_name, handle, owner, raw_dxf_codes } => {
+                    self.write_unknown_object(type_name, *handle, *owner, raw_dxf_codes.as_deref())?;
+                }
             }
         }
 
@@ -2115,7 +2311,27 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         Ok(())
     }
 
-    fn write_dictionary(&mut self, dict: &Dictionary, unknown_handles: &std::collections::HashSet<Handle>) -> Result<()> {
+    /// Find the root named-objects dictionary by scanning for a Dictionary
+    /// with owner == NULL.  Prefers the one with the most entries.
+    fn find_root_dict_handle(objects: &std::collections::HashMap<Handle, ObjectType>) -> Handle {
+        let mut best = Handle::NULL;
+        let mut best_count = 0usize;
+        for (handle, obj) in objects {
+            if let ObjectType::Dictionary(dict) = obj {
+                if dict.owner.is_null() {
+                    if dict.entries.len() > best_count
+                        || (dict.entries.len() == best_count && handle.value() > best.value())
+                    {
+                        best = *handle;
+                        best_count = dict.entries.len();
+                    }
+                }
+            }
+        }
+        best
+    }
+
+    fn write_dictionary(&mut self, dict: &Dictionary, objects: &std::collections::HashMap<Handle, ObjectType>) -> Result<()> {
         self.writer.write_string(0, "DICTIONARY")?;
         self.writer.write_handle(5, dict.handle)?;
         self.writer.write_handle(330, dict.owner)?;
@@ -2125,9 +2341,11 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_byte(281, dict.duplicate_cloning as u8)?;
 
         for (key, handle) in &dict.entries {
-            // Skip entries that reference Unknown objects (which aren't written)
-            // to avoid dangling handle references.
-            if unknown_handles.contains(handle) {
+            // Skip entries pointing to objects that don't exist in the
+            // document (e.g. unsupported DWG object types that were not
+            // read).  Writing dangling references causes CAD programs
+            // to report audit errors.
+            if !objects.contains_key(handle) {
                 continue;
             }
             self.writer.write_string(3, key)?;
@@ -2140,32 +2358,69 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     fn write_layout(&mut self, layout: &Layout) -> Result<()> {
         self.writer.write_string(0, "LAYOUT")?;
         self.writer.write_handle(5, layout.handle)?;
+
+        // Extension dictionary
+        if let Some(xdict) = layout.xdictionary_handle {
+            if xdict != Handle::NULL && (self.valid_handles.is_empty() || self.valid_handles.contains(&xdict)) {
+                self.writer.write_string(102, "{ACAD_XDICTIONARY")?;
+                self.writer.write_handle(360, xdict)?;
+                self.writer.write_string(102, "}")?;
+            }
+        }
+
+        // Reactors (filter out references to non-existent objects)
+        if !layout.reactors.is_empty() {
+            let valid_reactors: Vec<Handle> = if self.valid_handles.is_empty() {
+                layout.reactors.clone()
+            } else {
+                layout.reactors.iter().copied()
+                    .filter(|r| self.valid_handles.contains(r))
+                    .collect()
+            };
+            if !valid_reactors.is_empty() {
+                self.writer.write_string(102, "{ACAD_REACTORS")?;
+                for r in &valid_reactors {
+                    self.writer.write_handle(330, *r)?;
+                }
+                self.writer.write_string(102, "}")?;
+            }
+        }
+
         self.writer.write_handle(330, layout.owner)?;
         self.writer.write_subclass("AcDbPlotSettings")?;
 
-        // Minimal plot settings
-        self.writer.write_string(1, "")?; // Page setup name
-        self.writer.write_string(2, "")?; // Printer/plotter name
-        self.writer.write_string(4, "")?; // Paper size
-        self.writer.write_string(6, "")?; // Plot view name
-        self.writer.write_double(40, 0.0)?; // Left margin
-        self.writer.write_double(41, 0.0)?; // Bottom margin
-        self.writer.write_double(42, 0.0)?; // Right margin
-        self.writer.write_double(43, 0.0)?; // Top margin
-        self.writer.write_double(44, 0.0)?; // Paper width
-        self.writer.write_double(45, 0.0)?; // Paper height
-        self.writer.write_double(46, 0.0)?; // Plot origin X
-        self.writer.write_double(47, 0.0)?; // Plot origin Y
-        self.writer.write_double(48, 0.0)?; // Plot window X1
-        self.writer.write_double(49, 0.0)?; // Plot window Y1
-        self.writer.write_double(140, 0.0)?; // Plot window X2
-        self.writer.write_double(141, 0.0)?; // Plot window Y2
-        self.writer.write_double(142, 1.0)?; // Numerator of custom print scale
-        self.writer.write_double(143, 1.0)?; // Denominator of custom print scale
-        self.writer.write_i16(70, 0)?;
-        self.writer.write_i16(72, 0)?; // Plot paper units
-        self.writer.write_i16(73, 0)?; // Plot rotation
-        self.writer.write_i16(74, 0)?; // Plot type
+        // Write plot settings: use preserved raw codes if available,
+        // otherwise write minimal defaults.
+        if let Some(ref codes) = layout.raw_plot_settings_codes {
+            for (code, value) in codes {
+                self.writer.write_string(*code, value)?;
+            }
+        } else {
+            self.writer.write_string(1, "")?; // Page setup name
+            self.writer.write_string(2, "")?; // Printer/plotter name
+            self.writer.write_string(4, "")?; // Paper size
+            self.writer.write_string(6, "")?; // Plot view name
+            self.writer.write_double(40, 0.0)?; // Left margin
+            self.writer.write_double(41, 0.0)?; // Bottom margin
+            self.writer.write_double(42, 0.0)?; // Right margin
+            self.writer.write_double(43, 0.0)?; // Top margin
+            self.writer.write_double(44, 0.0)?; // Paper width
+            self.writer.write_double(45, 0.0)?; // Paper height
+            self.writer.write_double(46, 0.0)?; // Plot origin X
+            self.writer.write_double(47, 0.0)?; // Plot origin Y
+            self.writer.write_double(48, 0.0)?; // Plot window X1
+            self.writer.write_double(49, 0.0)?; // Plot window Y1
+            self.writer.write_double(140, 0.0)?; // Plot window X2
+            self.writer.write_double(141, 0.0)?; // Plot window Y2
+            self.writer.write_double(142, 1.0)?; // Numerator of custom print scale
+            self.writer.write_double(143, 1.0)?; // Denominator of custom print scale
+            // Bit 1024 (0x400) = Model type flag — required for Model layouts
+            let plot_flags: i16 = if layout.name == "Model" { 1024 } else { 0 };
+            self.writer.write_i16(70, plot_flags)?;
+            self.writer.write_i16(72, 0)?; // Plot paper units
+            self.writer.write_i16(73, 0)?; // Plot rotation
+            self.writer.write_i16(74, 0)?; // Plot type
+        }
 
         self.writer.write_subclass("AcDbLayout")?;
         self.writer.write_string(1, &layout.name)?;
@@ -2184,8 +2439,21 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_double(15, layout.max_extents.0)?;
         self.writer.write_double(25, layout.max_extents.1)?;
         self.writer.write_double(35, layout.max_extents.2)?;
+        self.writer.write_double(146, layout.elevation)?;
+        self.writer.write_double(13, layout.ucs_origin.0)?;
+        self.writer.write_double(23, layout.ucs_origin.1)?;
+        self.writer.write_double(33, layout.ucs_origin.2)?;
+        self.writer.write_double(16, layout.ucs_x_axis.0)?;
+        self.writer.write_double(26, layout.ucs_x_axis.1)?;
+        self.writer.write_double(36, layout.ucs_x_axis.2)?;
+        self.writer.write_double(17, layout.ucs_y_axis.0)?;
+        self.writer.write_double(27, layout.ucs_y_axis.1)?;
+        self.writer.write_double(37, layout.ucs_y_axis.2)?;
+        self.writer.write_i16(76, layout.ucs_ortho_type)?;
         self.writer.write_handle(330, layout.block_record)?;
-        self.writer.write_handle(331, layout.viewport)?;
+        if layout.viewport != Handle::NULL {
+            self.writer.write_handle(331, layout.viewport)?;
+        }
 
         Ok(())
     }
@@ -2462,9 +2730,14 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // Leader line color
         self.write_color_i32(91, style.line_color)?;
 
-        // Leader line type handle
-        if let Some(h) = style.line_type_handle {
-            self.writer.write_handle(340, h)?;
+        // Leader line type handle (use ByLayer as fallback)
+        {
+            let h = style.line_type_handle
+                .filter(|h| *h != Handle::NULL)
+                .unwrap_or(self.bylayer_linetype_handle);
+            if h != Handle::NULL {
+                self.writer.write_handle(340, h)?;
+            }
         }
 
         // Leader line weight
@@ -2666,10 +2939,22 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // Block owner handle
         self.writer.write_handle(330, table.block_owner_handle)?;
 
-        // Write all entries
-        for entry in table.entries() {
+        // Allocate new unique sort handles to avoid conflicts with entity handles.
+        // Sort entries by original sort_handle to preserve relative draw order,
+        // then assign sequential new handles so ascending order is maintained.
+        let entries: Vec<_> = table.entries().collect();
+        let mut sorted_indices: Vec<usize> = (0..entries.len()).collect();
+        sorted_indices.sort_by_key(|&i| entries[i].sort_handle.value());
+
+        let mut new_handles = vec![Handle::NULL; entries.len()];
+        for &idx in &sorted_indices {
+            new_handles[idx] = self.allocate_handle();
+        }
+
+        // Write entries in original order with new unique handles
+        for (i, entry) in entries.iter().enumerate() {
             self.writer.write_handle(331, entry.entity_handle)?;
-            self.writer.write_handle(5, entry.sort_handle)?;
+            self.writer.write_handle(5, new_handles[i])?;
         }
 
         Ok(())
@@ -2679,6 +2964,14 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     fn write_dictionary_variable(&mut self, var: &DictionaryVariable) -> Result<()> {
         self.writer.write_string(0, "DICTIONARYVAR")?;
         self.writer.write_handle(5, var.handle)?;
+
+        // Reactor group: owner dictionary is a reactor
+        if var.owner_handle != Handle::NULL {
+            self.writer.write_string(102, "{ACAD_REACTORS")?;
+            self.writer.write_handle(330, var.owner_handle)?;
+            self.writer.write_string(102, "}")?;
+        }
+
         self.writer.write_handle(330, var.owner_handle)?;
         self.writer.write_subclass("DictionaryVariables")?;
 
@@ -2764,15 +3057,14 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     }
 
     /// Write an ACDBDICTIONARYWDFLT object
-    fn write_dict_with_default(&mut self, obj: &DictionaryWithDefault, unknown_handles: &std::collections::HashSet<Handle>) -> Result<()> {
+    fn write_dict_with_default(&mut self, obj: &DictionaryWithDefault, objects: &std::collections::HashMap<Handle, ObjectType>) -> Result<()> {
         self.writer.write_string(0, "ACDBDICTIONARYWDFLT")?;
         self.writer.write_handle(5, obj.handle)?;
         self.writer.write_handle(330, obj.owner)?;
         self.writer.write_subclass("AcDbDictionary")?;
         self.writer.write_i16(281, obj.duplicate_cloning)?;
         for (key, handle) in &obj.entries {
-            // Skip entries that reference Unknown objects
-            if unknown_handles.contains(handle) {
+            if !objects.contains_key(handle) {
                 continue;
             }
             self.writer.write_string(3, key)?;
@@ -2798,6 +3090,26 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_string(0, type_name)?;
         self.writer.write_handle(5, handle)?;
         self.writer.write_handle(330, owner)?;
+        Ok(())
+    }
+
+    /// Write an unknown object, preserving raw group codes if available.
+    fn write_unknown_object(
+        &mut self,
+        type_name: &str,
+        handle: Handle,
+        owner: Handle,
+        raw_dxf_codes: Option<&[(i32, String)]>,
+    ) -> Result<()> {
+        if let Some(codes) = raw_dxf_codes {
+            self.writer.write_string(0, type_name)?;
+            self.writer.write_handle(5, handle)?;
+            self.writer.write_handle(330, owner)?;
+            for (code, value) in codes {
+                self.writer.write_string(*code, value)?;
+            }
+        }
+        // No raw data — skip this object (nothing to write)
         Ok(())
     }
 
@@ -2905,89 +3217,153 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_i16(270, 2)?;
 
         // Context data - write the annotation context
-        self.writer.write_subclass("CONTEXT_DATA{")?;
+        let ctx = &mleader.context;
+        self.writer.write_string(300, "CONTEXT_DATA{")?;
 
-        // Content scale
-        self.writer.write_double(40, mleader.context.scale_factor)?;
+        // Scale and position
+        self.writer.write_double(40, ctx.scale_factor)?;
+        self.writer.write_point3d(10, ctx.content_base_point)?;
+        self.writer.write_double(41, ctx.text_height)?;
+        self.writer.write_double(140, ctx.arrowhead_size)?;
+        self.writer.write_double(145, ctx.landing_gap)?;
 
-        // Content base point
-        self.writer.write_point3d(10, mleader.context.content_base_point)?;
+        // Text/block attachment types
+        self.writer.write_i16(174, ctx.text_left_attachment as i16)?;
+        self.writer.write_i16(175, ctx.text_right_attachment as i16)?;
+        self.writer.write_i16(176, ctx.block_connection_type as i16)?;
+        self.writer.write_i16(177, 0)?;
 
-        // Text height
-        self.writer.write_double(41, mleader.context.text_height)?;
+        // Has text contents
+        self.writer.write_bool(290, ctx.has_text_contents)?;
 
-        // Arrow head size
-        self.writer.write_double(140, mleader.context.arrowhead_size)?;
+        // Text content fields (conditional)
+        if ctx.has_text_contents {
+            self.writer.write_string(304, &ctx.text_string)?;
+            self.writer.write_point3d(11, ctx.text_normal)?;
+            if let Some(h) = ctx.text_style_handle {
+                self.writer.write_handle(340, h)?;
+            }
+            self.writer.write_point3d(12, ctx.text_location)?;
+            self.writer.write_point3d(13, ctx.text_direction)?;
+            self.writer.write_double(42, ctx.text_rotation)?;
+            self.writer.write_double(43, ctx.text_width)?;
+            self.writer.write_double(44, ctx.text_boundary_height)?;
+            self.writer.write_double(45, ctx.line_spacing_factor)?;
+            self.writer.write_i16(170, ctx.line_spacing_style as i16)?;
+            self.write_color_i32(90, ctx.text_color)?;
+            self.writer.write_i16(171, ctx.text_alignment as i16)?;
+            self.writer.write_i16(172, ctx.text_flow_direction as i16)?;
+            self.write_color_i32(91, ctx.background_fill_color)?;
+            self.writer.write_double(141, ctx.column_width)?;
+            self.write_color_i32(92, ctx.background_fill_color)?;
+            self.writer.write_bool(291, ctx.background_fill_enabled)?;
+            self.writer.write_bool(292, ctx.word_break)?;
+            self.writer.write_i16(173, ctx.column_type)?;
+            self.writer.write_bool(293, ctx.column_flow_reversed)?;
+            self.writer.write_double(142, ctx.column_width)?;
+            self.writer.write_double(143, ctx.column_gutter)?;
+            self.writer.write_bool(294, ctx.text_height_automatic)?;
+        }
 
-        // Landing gap
-        self.writer.write_double(145, mleader.context.landing_gap)?;
-
-        // Has text contents (code 290-299 is Bool type - single byte in binary)
-        self.writer.write_bool(290, mleader.context.has_text_contents)?;
+        // Background mask
+        self.writer.write_bool(295, ctx.background_mask_fill_on)?;
 
         // Has block contents
-        self.writer.write_bool(296, mleader.context.has_block_contents)?;
+        self.writer.write_bool(296, ctx.has_block_contents)?;
 
-        // Text direction
-        self.writer.write_point3d(110, mleader.context.text_direction)?;
+        if ctx.has_block_contents {
+            if let Some(h) = ctx.block_content_handle {
+                self.writer.write_handle(341, h)?;
+            }
+            self.writer.write_point3d(14, ctx.block_content_normal)?;
+            self.writer.write_point3d(15, ctx.block_content_location)?;
+            self.writer.write_point3d(16, ctx.block_content_scale)?;
+            self.writer.write_double(46, ctx.block_rotation)?;
+            self.write_color_i32(93, ctx.block_content_color)?;
+        }
 
-        // Text location
-        self.writer.write_point3d(111, mleader.context.text_location)?;
-
-        // Text normal
-        self.writer.write_point3d(112, mleader.context.text_normal)?;
+        // Transformation base
+        self.writer.write_point3d(110, ctx.base_point)?;
+        self.writer.write_point3d(111, ctx.base_direction)?;
+        self.writer.write_point3d(112, ctx.base_vertical)?;
+        self.writer.write_bool(297, ctx.normal_reversed)?;
 
         // Leader roots
-        for root in &mleader.context.leader_roots {
-            // Leader root connection point
+        for root in &ctx.leader_roots {
+            self.writer.write_string(302, "LEADER{")?;
+            self.writer.write_bool(290, root.content_valid)?;
+            self.writer.write_bool(291, root.unknown)?;
             self.writer.write_point3d(10, root.connection_point)?;
-
-            // Leader root direction
             self.writer.write_point3d(11, root.direction)?;
+            self.writer.write_i32(90, root.break_points.len() as i32)?;
+            for bp in &root.break_points {
+                self.writer.write_point3d(12, bp.start_point)?;
+                self.writer.write_point3d(13, bp.end_point)?;
+            }
+            self.writer.write_double(40, root.landing_distance)?;
 
-            // Number of leader lines
-            self.writer.write_string(302, &root.lines.len().to_string())?;
-
+            // Leader lines
             for line in &root.lines {
-                // Leader line index
-                self.writer.write_string(304, &line.index.to_string())?;
+                self.writer.write_string(304, "LEADER_LINE{")?;
 
-                // Number of points
-                self.writer.write_string(305, &line.points.len().to_string())?;
-
-                // Points
+                // Vertex points
                 for pt in &line.points {
                     self.writer.write_point3d(10, *pt)?;
                 }
+
+                // Per-line properties
+                self.writer.write_i32(91, line.index)?;
+                self.writer.write_i16(170, line.path_type as i16)?;
+                self.write_color_i32(92, line.line_color)?;
+                self.writer.write_handle(340, line.line_type_handle.unwrap_or(Handle::NULL))?;
+                self.writer.write_i16(171, line.line_weight.value())?;
+                self.writer.write_double(40, line.arrowhead_size)?;
+                self.writer.write_handle(341, line.arrowhead_handle.unwrap_or(Handle::NULL))?;
+                self.writer.write_i32(93, line.override_flags.bits() as i32)?;
+                self.writer.write_i16(271, line.break_info_count as i16)?;
+
+                self.writer.write_string(305, "}")?;
             }
+
+            self.writer.write_string(303, "}")?;
         }
+
+        // Post-leader attachments
+        self.writer.write_i16(273, ctx.text_top_attachment as i16)?;
+        self.writer.write_i16(272, ctx.text_bottom_attachment as i16)?;
 
         self.writer.write_string(301, "}")?; // End CONTEXT_DATA
 
-        // Main properties
-        // Content type
-        self.writer.write_i16(170, mleader.content_type as i16)?;
+        // Main properties (order must match reference: 340,90,170,91,341,171,290,291,41,342,42,172,343,173,95,174,175,92,292,93,10,43,176,293,271,273,272,295)
 
         // Style handle
         if let Some(h) = mleader.style_handle {
             self.writer.write_handle(340, h)?;
         }
 
-        // Leader line type handle
-        if let Some(h) = mleader.line_type_handle {
-            self.writer.write_handle(341, h)?;
-        }
+        // Property override flags
+        self.writer.write_i32(90, mleader.property_override_flags.bits() as i32)?;
 
-        // Path type
-        self.writer.write_i16(171, mleader.path_type as i16)?;
+        // Content type
+        self.writer.write_i16(170, mleader.content_type as i16)?;
 
         // Leader line color
         self.write_color_i32(91, mleader.line_color)?;
 
+        // Leader line type handle (code 341; use ByLayer if null or ByBlock)
+        {
+            let h = mleader.line_type_handle
+                .filter(|h| *h != Handle::NULL && *h != self.byblock_linetype_handle)
+                .unwrap_or(self.bylayer_linetype_handle);
+            if h != Handle::NULL {
+                self.writer.write_handle(341, h)?;
+            }
+        }
+
         // Leader line weight
         self.writer.write_i16(171, mleader.line_weight.value())?;
 
-        // Enable landing (code 290-299 is Bool type)
+        // Enable landing
         self.writer.write_bool(290, mleader.enable_landing)?;
 
         // Enable dogleg
@@ -2996,18 +3372,26 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // Dogleg length
         self.writer.write_double(41, mleader.dogleg_length)?;
 
-        // Arrowhead size
-        self.writer.write_double(42, mleader.arrowhead_size)?;
-
         // Text style handle
         if let Some(h) = mleader.text_style_handle {
             self.writer.write_handle(342, h)?;
         }
 
+        // Arrowhead size
+        self.writer.write_double(42, mleader.arrowhead_size)?;
+
         // Text left attachment type
-        self.writer.write_i16(173, mleader.text_left_attachment as i16)?;
+        self.writer.write_i16(172, mleader.text_left_attachment as i16)?;
+
+        // Block content handle
+        if let Some(h) = mleader.block_content_handle {
+            self.writer.write_handle(343, h)?;
+        }
 
         // Text right attachment type
+        self.writer.write_i16(173, mleader.text_right_attachment as i16)?;
+
+        // Text right attachment (i32 duplicate for compatibility)
         self.writer.write_i32(95, mleader.text_right_attachment as i32)?;
 
         // Text angle type
@@ -3019,13 +3403,8 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // Text color
         self.write_color_i32(92, mleader.text_color)?;
 
-        // Text frame (code 292 is Bool type)
+        // Text frame
         self.writer.write_bool(292, mleader.text_frame)?;
-
-        // Block content handle
-        if let Some(h) = mleader.block_content_handle {
-            self.writer.write_handle(343, h)?;
-        }
 
         // Block content color
         self.write_color_i32(93, mleader.block_content_color)?;
@@ -3039,20 +3418,20 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // Block content connection type
         self.writer.write_i16(176, mleader.block_connection_type as i16)?;
 
-        // Enable annotation scale (code 293 is Bool type)
+        // Enable annotation scale
         self.writer.write_bool(293, mleader.enable_annotation_scale)?;
 
-        // Text direction negative (code 294 is Bool type)
-        self.writer.write_bool(294, mleader.text_direction_negative)?;
-
         // Text align in IPE
-        self.writer.write_i16(178, mleader.text_align_in_ipe)?;
+        self.writer.write_i16(271, mleader.text_align_in_ipe)?;
 
-        // Text attachment point
-        self.writer.write_i16(179, mleader.text_attachment_point as i16)?;
+        // Text bottom attachment type
+        self.writer.write_i16(273, mleader.text_bottom_attachment as i16)?;
 
-        // Scale factor
-        self.writer.write_double(45, mleader.scale_factor)?;
+        // Text top attachment type
+        self.writer.write_i16(272, mleader.text_top_attachment as i16)?;
+
+        // Extend leader to text
+        self.writer.write_bool(295, mleader.extend_leader_to_text)?;
 
         Ok(())
     }
