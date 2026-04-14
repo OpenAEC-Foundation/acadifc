@@ -249,6 +249,12 @@ pub enum ObjectType {
         /// pairs, reproducing the original object content.
         #[cfg_attr(feature = "serde", serde(skip))]
         raw_dxf_codes: Option<Vec<(i32, String)>>,
+        /// Raw DWG merged-stream bytes for verbatim round-trip reconstruction.
+        /// Populated by the DWG reader for unrecognised non-entity objects.
+        #[cfg_attr(feature = "serde", serde(skip))]
+        raw_dwg_data: Option<Vec<u8>>,
+        /// DWG handle-stream bit count (needed to reconstruct the correct split).
+        raw_dwg_handle_bits: i64,
     },
 }
 

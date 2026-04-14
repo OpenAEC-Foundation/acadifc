@@ -607,6 +607,36 @@ pub fn dwg_ac21_mirrored_crc64(seed: u64, data_length: u32, data: &[u8]) -> u64 
     crc64_with_seed(iv, &reordered)
 }
 
+/// Compute a Normal (MSB-first) CRC-64 for **check data** at offset 0x3D8.
+///
+/// Per ODA spec §5.2.1.1.5, the check data Normal CRC uses `~random2`
+/// **directly** as the CRC initial value — it does NOT go through
+/// `UpdateSeed2`.
+///
+/// 1. Reorder bytes per ODA spec section 5.12.
+/// 2. Use `!random2` directly as the IV.
+/// 3. CRC-64 Normal (MSB-first) over reordered data.
+/// 4. Bitwise NOT the result.
+pub fn dwg_ac21_check_data_normal_crc64(random2: u64, data: &[u8]) -> u64 {
+    let reordered = reorder_for_crc(data);
+    !crc64_normal(!random2, &reordered)
+}
+
+/// Compute a Mirrored (LSB-first) CRC-64 for **check data** at offset 0x3D8.
+///
+/// Per ODA spec §5.2.1.1.5, the check data Mirrored CRC uses `~random1`
+/// **directly** as the CRC initial value — it does NOT go through
+/// `UpdateSeed1`.
+///
+/// 1. Reorder bytes per ODA spec section 5.12.
+/// 2. Use `!random1` directly as the IV.
+/// 3. CRC-64 Mirrored (LSB-first) over reordered data.
+/// 4. No final inversion.
+pub fn dwg_ac21_check_data_mirrored_crc64(random1: u64, data: &[u8]) -> u64 {
+    let reordered = reorder_for_crc(data);
+    crc64_with_seed(!random1, &reordered)
+}
+
 /// Reorder bytes for DWG AC1021 CRC-64 computation per ODA spec section 5.12.
 ///
 /// The CRC-64 does **not** process bytes left-to-right. Within each 8-byte

@@ -281,6 +281,9 @@ pub struct BlockHeaderData {
     pub xref_path: String,
     pub description: Option<String>,
     pub preview_data_size: Option<i32>,
+    pub insert_count_bytes: Vec<u8>,
+    pub preview_data: Vec<u8>,
+    pub insert_handles: Vec<u64>,
     pub units: Option<i16>,
     pub explodable: Option<bool>,
     pub scale_uniformly: Option<u8>,
@@ -904,21 +907,25 @@ pub fn read_block_header(
 
     let mut description = None;
     let mut preview_data_size = None;
+    let mut insert_count_bytes = Vec::new();
+    let mut preview_data = Vec::new();
     if version.r2000_plus() {
         // Insert count bytes — read until 0
         loop {
             let b = reader.read_byte();
             if b == 0 { break; }
+            insert_count_bytes.push(b);
         }
 
         description = Some(reader.read_variable_text());
         preview_data_size = Some(safe_count(reader.read_bit_long()));
 
-        // Skip preview data if present
+        // Read preview data if present
         let pds = preview_data_size.unwrap_or(0);
         if pds > 0 {
+            preview_data.reserve(pds as usize);
             for _ in 0..pds {
-                reader.read_byte();
+                preview_data.push(reader.read_byte());
             }
         }
     }
@@ -959,12 +966,20 @@ pub fn read_block_header(
         None
     };
 
+    // R2000+: insert handles (one per insert_count_byte)
+    let mut insert_handles = Vec::new();
+    if version.r2000_plus() {
+        for _ in 0..insert_count_bytes.len() {
+            insert_handles.push(reader.read_handle());
+        }
+    }
+
     BlockHeaderData {
         name, anonymous, has_attributes, is_xref, is_xref_overlay,
         is_loaded, owned_object_count, base_point, xref_path,
-        description, preview_data_size, units, explodable,
-        scale_uniformly, null_handle, block_entity_handle,
-        entity_handles, endblk_handle, layout_handle,
+        description, preview_data_size, insert_count_bytes, preview_data,
+        insert_handles, units, explodable, scale_uniformly, null_handle,
+        block_entity_handle, entity_handles, endblk_handle, layout_handle,
     }
 }
 

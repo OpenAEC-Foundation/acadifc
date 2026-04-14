@@ -637,8 +637,11 @@ impl DwgBitWriter {
     /// - R2004+ (AC18): BS(0) + BL(color bytes) + RC(0)
     pub fn write_cm_color(&mut self, color: &Color) {
         if self.version.r2004_plus() {
-            // R2004+ CMC format
-            self.write_bit_short(0); // index placeholder
+            // R2004+ CMC format: BS(color_index) + BL(color_bytes) + RC(book_color)
+            // The BS color_index is legacy — the BL carries the full color data.
+            // AutoCAD/BricsCAD write 0 here; using the actual index wastes bits
+            // (BS(0) = 2 bits vs BS(n) = 10 bits) and produces byte-level diffs.
+            self.write_bit_short(0);
 
             let color_long = match color {
                 Color::Rgb { r, g, b } => {

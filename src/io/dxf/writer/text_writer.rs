@@ -85,6 +85,19 @@ impl<W: Write> DxfTextWriter<W> {
             return 5;
         }
         let abs = value.abs();
+        if abs > 0.0 && abs < 1e-15 {
+            // Very small magnitude: {:.16} would lose all significance.
+            // Use scientific notation with full precision instead.
+            let s = format!("{:.16e}", value);
+            let bytes = s.as_bytes();
+            let total = bytes.len() + 2; // +CRLF
+            if total <= self.fmt_buf.len() {
+                self.fmt_buf[..bytes.len()].copy_from_slice(bytes);
+                self.fmt_buf[bytes.len()] = b'\r';
+                self.fmt_buf[bytes.len() + 1] = b'\n';
+                return total;
+            }
+        }
         if abs >= 1e15 && abs != 0.0 {
             // Large magnitude: use heap-allocated formatting to avoid overflow
             let s = format!("{:.6}", value);

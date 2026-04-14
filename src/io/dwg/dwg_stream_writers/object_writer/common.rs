@@ -278,12 +278,32 @@ impl<'a> DwgObjectWriter<'a> {
         xdata: &crate::xdata::ExtendedData,
         reactors: &[Handle],
         xdictionary_handle: &Option<Handle>,
+        graphic_data: Option<&[u8]>,
+        // DWG round-trip fields (None = use defaults/computed)
+        entity_mode_override: Option<u8>,
+        material_flags: u8,
+        material_handle: &Option<Handle>,
+        shadow_flags: u8,
+        plotstyle_flags: u8,
+        plotstyle_handle: &Option<Handle>,
     ) {
         // ── MAIN + HANDLE: shared preamble (type + handle + xdata) ──
         self.write_common_data(type_code, handle, xdata);
 
-        // ── MAIN: graphic presence flag ──
-        self.writer.write_bit(false);
+        // ── MAIN: graphic presence flag + optional graphic bytes ──
+        self.writer.write_bit(graphic_data.is_some());
+        if let Some(gdata) = graphic_data {
+            // R2010+: BLL (Bit Long Long); pre-R2010: RL (Raw Long)
+            let gsize = gdata.len() as i64;
+            if self.version.r2010_plus() {
+                self.writer.write_bit_long_long(gsize);
+            } else {
+                self.writer.write_raw_long(gsize as i32);
+            }
+            for &b in gdata {
+                self.writer.write_byte(b);
+            }
+        }
 
         // ── MAIN: R13-R14 save position for size ──
         if self.version.r13_14_only() {
@@ -291,7 +311,7 @@ impl<'a> DwgObjectWriter<'a> {
         }
 
         // ── MAIN: entity mode (2 bits) ──
-        let entmode = self.get_entity_mode(&owner_handle);
+        let entmode = entity_mode_override.unwrap_or_else(|| self.get_entity_mode(&owner_handle));
         self.writer.write_2bits(entmode);
 
         // ── HANDLE: owner (if entmode == 0) ──
@@ -433,14 +453,28 @@ impl<'a> DwgObjectWriter<'a> {
 
         // ── R2007+: material flags + shadow flags ──
         if self.version.r2007_plus() {
-            // Material flags BB (00 = by layer)
-            self.writer.write_2bits(0b00);
+            // Material flags BB
+            self.writer.write_2bits(material_flags);
+            if material_flags == 0b11 {
+                if let Some(mh) = material_handle {
+                    self.writer.write_handle(DwgReferenceType::HardPointer, mh.value());
+                } else {
+                    self.writer.write_handle(DwgReferenceType::HardPointer, 0);
+                }
+            }
             // Shadow flags RC
-            self.writer.write_byte(0);
+            self.writer.write_byte(shadow_flags);
         }
 
         // ── R2000+: Plotstyle flags ──
-        self.writer.write_2bits(0b00); // simplified: always by-layer
+        self.writer.write_2bits(plotstyle_flags);
+        if plotstyle_flags == 0b11 {
+            if let Some(ph) = plotstyle_handle {
+                self.writer.write_handle(DwgReferenceType::HardPointer, ph.value());
+            } else {
+                self.writer.write_handle(DwgReferenceType::HardPointer, 0);
+            }
+        }
 
         // ── R2007+ (>AC1021): visual style bits ──
         if self.version.r2010_plus() {
@@ -482,9 +516,12 @@ impl<'a> DwgObjectWriter<'a> {
         // Handle (absolute)
         self.writer.main_mut().write_handle_undefined(handle.value());
 
-        // Extended data — empty for non-entities
-        let empty = crate::xdata::ExtendedData::default();
-        self.write_extended_data(&empty);
+        // Extended data — look up raw EED by handle for round-trip fidelity
+        let mut eed = crate::xdata::ExtendedData::default();
+        if let Some(raw) = self.document.eed_by_handle.get(&handle) {
+            eed.raw_dwg_eed = raw.clone();
+        }
+        self.write_extended_data(&eed);
 
         // ── R13-R14 Only: size placeholder (after xdata, before owner) ──
         if self.version.r13_14_only() {
@@ -503,29 +540,49 @@ impl<'a> DwgObjectWriter<'a> {
 
         // ── writeReactorsAndDictionaryHandle portion ──
 
+        // Use side-channel reactors if struct reactors are empty (roundtrip preservation)
+        let effective_reactors: Vec<Handle>;
+        let reactors_to_write: &[Handle] = if reactors.is_empty() {
+            if let Some(saved) = self.document.reactors_by_handle.get(&handle) {
+                effective_reactors = saved.clone();
+                &effective_reactors
+            } else {
+                reactors
+            }
+        } else {
+            reactors
+        };
+
         // MAIN: Reactor count
-        self.writer.write_bit_long(reactors.len() as i32);
+        self.writer.write_bit_long(reactors_to_write.len() as i32);
 
         // HANDLE: Reactor handles
-        for r in reactors {
+        for r in reactors_to_write {
             self.writer
                 .write_handle(DwgReferenceType::SoftPointer, r.value());
         }
 
+        // Use side-channel xdictionary if struct value is None (roundtrip preservation)
+        let effective_xdic = if xdictionary_handle.is_none() {
+            self.document.xdic_by_handle.get(&handle).copied()
+        } else {
+            *xdictionary_handle
+        };
+
         // R2004+: MAIN no-xdic flag + conditional HANDLE xdic
         // Pre-R2004: HANDLE xdic always written (0 if null)
-        let no_xdic = xdictionary_handle.is_none();
+        let no_xdic = effective_xdic.is_none();
         if self.version.r2004_plus() {
             self.writer.write_bit(no_xdic);
             if !no_xdic {
                 self.writer.write_handle(
                     DwgReferenceType::HardOwnership,
-                    xdictionary_handle.unwrap().value(),
+                    effective_xdic.unwrap().value(),
                 );
             }
         } else {
             // Pre-R2004: always emit xdic handle (0 if None)
-            let xdic_val = xdictionary_handle
+            let xdic_val = effective_xdic
                 .map(|h| h.value())
                 .unwrap_or(0);
             self.writer
@@ -533,9 +590,9 @@ impl<'a> DwgObjectWriter<'a> {
         }
 
         // Enqueue extension dictionary so its object is written later
-        if let Some(xdic) = xdictionary_handle {
+        if let Some(xdic) = effective_xdic {
             if !xdic.is_null() {
-                self.object_queue.push_back(*xdic);
+                self.object_queue.push_back(xdic);
             }
         }
 
@@ -567,9 +624,30 @@ impl<'a> DwgObjectWriter<'a> {
 
     // ── write_extended_data ─────────────────────────────────────────
     /// Write registered-application extended data (XDATA) blocks.
-    /// For now, writes a zero-count, meaning "no xdata".
-    pub fn write_extended_data(&mut self, _xdata: &crate::xdata::ExtendedData) {
-        // EED size terminator: BS 0 = no more xdata applications
+    ///
+    /// If `xdata.raw_dwg_eed` is populated (from a DWG read), the raw
+    /// bytes are written back verbatim to preserve round-trip fidelity.
+    /// Otherwise a BS 0 terminator is written (no EED).
+    pub fn write_extended_data(&mut self, xdata: &crate::xdata::ExtendedData) {
+        if xdata.raw_dwg_eed.is_empty() {
+            // No EED: write BS 0 terminator
+            self.writer.write_bit_short(0);
+            return;
+        }
+        for (app_handle, raw_bytes) in &xdata.raw_dwg_eed {
+            // BS size of this application's data block
+            self.writer.write_bit_short(raw_bytes.len() as i16);
+            // Application handle — always in main stream (HardPointer reference type)
+            self.writer.main_mut().write_handle(
+                crate::io::dwg::dwg_reference_type::DwgReferenceType::HardPointer,
+                *app_handle,
+            );
+            // Raw xdata bytes — to main stream byte-for-byte
+            for &b in raw_bytes {
+                self.writer.write_byte(b);
+            }
+        }
+        // Final BS 0 terminator
         self.writer.write_bit_short(0);
     }
 

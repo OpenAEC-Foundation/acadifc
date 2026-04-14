@@ -916,6 +916,21 @@ pub struct CadDocument {
     /// All objects in the document (indexed by handle)
     pub objects: HashMap<Handle, ObjectType>,
 
+    /// Raw EED blobs per handle — populated during DWG read, consumed during DWG write.
+    /// Keyed by the object/table-entry handle. Not serialized.
+    pub(crate) eed_by_handle: HashMap<Handle, Vec<(u64, Vec<u8>)>>,
+
+    /// Non-entity object xdictionary handles — populated during DWG read, consumed during DWG write.
+    pub(crate) xdic_by_handle: HashMap<Handle, Handle>,
+
+    /// Non-entity object reactors — populated during DWG read, consumed during DWG write.
+    pub(crate) reactors_by_handle: HashMap<Handle, Vec<Handle>>,
+
+    /// Original BLOCK_HEADER entity handles from the DWG binary — includes sub-entity handles
+    /// (vertices, faces, SEQENDs). Keyed by BlockRecord handle. Used by the writer to produce
+    /// correct owned_object_count without re-expanding from the document model.
+    pub(crate) block_entity_handles: HashMap<Handle, Vec<Handle>>,
+
     /// Next handle to assign
     next_handle: u64,
 }
@@ -941,6 +956,10 @@ impl CadDocument {
             entities: Vec::new(),
             entity_index: HashMap::new(),
             objects: HashMap::new(),
+            eed_by_handle: HashMap::new(),
+            xdic_by_handle: HashMap::new(),
+            reactors_by_handle: HashMap::new(),
+            block_entity_handles: HashMap::new(),
             // Start handle allocation above reserved table handles (0x1-0xA)
             // Table handles are well-known fixed values used by AutoCAD
             next_handle: 0x10,
@@ -1312,12 +1331,13 @@ impl CadDocument {
 
         // AttributeEntity is a sub-entity owned by INSERT, not a direct
         // block-record child.  Never add it to entity_handles.
-        let is_attrib = matches!(&entity, EntityType::AttributeEntity(_));
+        // Block/BlockEnd are structural markers with separate handle fields.
+        let is_excluded = matches!(&entity, EntityType::AttributeEntity(_) | EntityType::Block(_) | EntityType::BlockEnd(_));
 
         // Route entity handle to the correct block record based on owner handle.
         let owner = entity.common().owner_handle;
         let mut added_to_block = false;
-        if !is_attrib && !owner.is_null() {
+        if !is_excluded && !owner.is_null() {
             for br in self.block_records.iter_mut() {
                 if br.handle == owner {
                     br.entity_handles.push(handle);
@@ -1327,7 +1347,7 @@ impl CadDocument {
             }
         }
         // Fallback: add to *Model_Space if owner didn't match any block record
-        if !is_attrib && !added_to_block {
+        if !is_excluded && !added_to_block {
             if let Some(ms) = self.block_records.get_mut("*Model_Space") {
                 ms.entity_handles.push(handle);
                 // Fix the entity's owner so the writer can determine

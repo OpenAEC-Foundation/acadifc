@@ -31,14 +31,16 @@ use crate::io::dwg::dwg_stream_readers::object_reader::tables;
 /// Pending vertex data collected during Pass 2, keyed by owner (parent polyline) handle.
 enum PendingVertex {
     V2D(entities::Vertex2DData),
-    V3D(entities::Vertex3DData),
-    PfaceFace(entities::PfaceFaceData),
+    V3D(entities::Vertex3DData, EntityCommon),
+    PfaceFace(entities::PfaceFaceData, EntityCommon),
 }
 
 /// Pending polyline entities awaiting vertex assembly.
 struct PendingPolylines {
     /// Vertex data keyed by owner (parent polyline) handle.
     vertices: HashMap<u64, Vec<PendingVertex>>,
+    /// SEQEND handle keyed by owner (parent polyline) handle.
+    seqends: HashMap<u64, crate::types::Handle>,
     /// Polyline entities awaiting vertex assembly, keyed by their handle.
     polylines: Vec<(u64, EntityType)>,
 }
@@ -190,9 +192,12 @@ impl DwgDocumentBuilder {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let non_entity = self.obj_reader.read_common_non_entity_data(&mut reader, type_code);
                     let obj_handle = non_entity.common.handle;
-                    (obj_handle, type_code)
+                    let eed_raw = non_entity.common.eed_raw;
+                    let xdic = non_entity.xdictionary_handle;
+                    let reactors = non_entity.reactors.clone();
+                    (obj_handle, type_code, eed_raw, xdic, reactors)
                 }));
-                let (obj_handle, type_code) = match result {
+                let (obj_handle, type_code, eed_raw_pass1, xdic_pass1, reactors_pass1) = match result {
                     Ok(v) => v,
                     Err(_) => {
                         skipped_pass1 += 1;
@@ -206,6 +211,21 @@ impl DwgDocumentBuilder {
                         continue;
                     }
                 };
+                // Save EED for DWG round-trip write-back
+                if !eed_raw_pass1.is_empty() {
+                    document.eed_by_handle.insert(Handle::from(obj_handle), eed_raw_pass1);
+                }
+                // Save xdictionary handle for DWG round-trip write-back
+                if let Some(xdic) = xdic_pass1 {
+                    document.xdic_by_handle.insert(Handle::from(obj_handle), Handle::from(xdic));
+                }
+                // Save reactors for DWG round-trip write-back
+                if !reactors_pass1.is_empty() {
+                    document.reactors_by_handle.insert(
+                        Handle::from(obj_handle),
+                        reactors_pass1.iter().map(|&h| Handle::from(h)).collect(),
+                    );
+                }
 
                 let table_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     match type_code {
@@ -415,6 +435,10 @@ impl DwgDocumentBuilder {
                     if let Some(mh) = data.material_handle {
                         layer.material = Handle::from(mh);
                     }
+                    // Plotstyle handle (R2000+)
+                    if let Some(ph) = data.plotstyle_handle {
+                        layer.plotstyle_handle = Handle::from(ph);
+                    }
                     // External reference block record handle
                     if data.xref_handle != 0 {
                         layer.xref_block_record_handle = Handle::from(data.xref_handle);
@@ -436,6 +460,10 @@ impl DwgDocumentBuilder {
                     br.explodable = data.explodable.unwrap_or(true);
                     br.scale_uniformly = data.scale_uniformly.map(|v| v != 0).unwrap_or(false);
                     br.xref_path = data.xref_path.clone();
+                    br.description = data.description.clone().unwrap_or_default();
+                    br.insert_count_bytes = data.insert_count_bytes.clone();
+                    br.preview_data = data.preview_data.clone();
+                    br.insert_handles = data.insert_handles.iter().map(|&h| Handle::from(h)).collect();
                     if let Some(layout_h) = data.layout_handle {
                         br.layout = Handle::from(layout_h);
                     }
@@ -656,6 +684,9 @@ impl DwgDocumentBuilder {
         for entry in &parsed_entries {
             if let ParsedEntry::Block(h, data) = entry {
                 let br_handle = Handle::from(*h);
+                // Save original entity_handles from the DWG binary for the writer
+                let orig_handles: Vec<Handle> = data.entity_handles.iter().map(|&eh| Handle::from(eh)).collect();
+                document.block_entity_handles.insert(br_handle, orig_handles);
                 for &eh in &data.entity_handles {
                     binary_entity_owner.insert(Handle::from(eh), br_handle);
                 }
@@ -674,6 +705,7 @@ impl DwgDocumentBuilder {
         // ── Pass 2: Read entities and non-table objects ────────────────
         let mut pending = PendingPolylines {
             vertices: HashMap::new(),
+            seqends: HashMap::new(),
             polylines: Vec::new(),
         };
         // Pending attribute entities keyed by owner (INSERT) handle.
@@ -681,11 +713,15 @@ impl DwgDocumentBuilder {
         for &handle in &handles {
             let offset = match self.obj_reader.offset_for(handle) {
                 Some(o) if o >= 0 => o,
-                _ => continue,
+                _ => {
+                    continue;
+                }
             };
             let (raw_type_code, reader) = match self.obj_reader.read_record_at(offset as usize) {
                 Ok(r) => r,
-                Err(_) => continue,
+                Err(_e) => {
+                    continue;
+                }
             };
             let type_code = Self::resolve_type_code(raw_type_code, &class_map);
 
@@ -728,9 +764,9 @@ impl DwgDocumentBuilder {
                     }
                     EntityType::Polyline3D(ref mut e) => {
                         e.vertices = verts.into_iter().filter_map(|v| {
-                            if let PendingVertex::V3D(d) = v {
+                            if let PendingVertex::V3D(d, _ec) = v {
                                 Some(crate::entities::polyline3d::Vertex3DPolyline {
-                                    handle: Handle::NULL,
+                                    handle: d.handle,
                                     layer: String::new(),
                                     position: d.position,
                                     flags: d.flags as i32,
@@ -741,11 +777,11 @@ impl DwgDocumentBuilder {
                     EntityType::PolyfaceMesh(ref mut e) => {
                         for v in verts {
                             match v {
-                                PendingVertex::V3D(d) => {
+                                PendingVertex::V3D(d, ec) => {
                                     e.vertices.push(crate::entities::polyface_mesh::PolyfaceVertex {
-                                        common: EntityCommon::default(),
+                                        common: ec,
                                         location: d.position,
-                                        flags: crate::entities::polyface_mesh::PolyfaceVertexFlags::POLYFACE_MESH,
+                                        flags: crate::entities::polyface_mesh::PolyfaceVertexFlags::from_bits_truncate(d.flags as i16),
                                         bulge: 0.0,
                                         start_width: 0.0,
                                         end_width: 0.0,
@@ -753,9 +789,9 @@ impl DwgDocumentBuilder {
                                         id: 0,
                                     });
                                 }
-                                PendingVertex::PfaceFace(f) => {
+                                PendingVertex::PfaceFace(f, ec) => {
                                     e.faces.push(crate::entities::polyface_mesh::PolyfaceFace {
-                                        common: EntityCommon::default(),
+                                        common: ec,
                                         flags: crate::entities::polyface_mesh::PolyfaceVertexFlags::NONE,
                                         index1: f.index1,
                                         index2: f.index2,
@@ -767,12 +803,18 @@ impl DwgDocumentBuilder {
                                 _ => {}
                             }
                         }
+                        // Restore the seqend handle for this polyface mesh
+                        if let Some(sh) = pending.seqends.get(&poly_handle).copied() {
+                            e.seqend_handle = Some(sh);
+                        }
                     }
                     EntityType::PolygonMesh(ref mut e) => {
                         e.vertices = verts.into_iter().filter_map(|v| {
-                            if let PendingVertex::V3D(d) = v {
+                            if let PendingVertex::V3D(d, _ec) = v {
+                                let mut c = crate::entities::EntityCommon::new();
+                                c.handle = d.handle;
                                 Some(crate::entities::polygon_mesh::PolygonMeshVertex {
-                                    common: crate::entities::EntityCommon::new(),
+                                    common: c,
                                     location: d.position,
                                     flags: 0,
                                 })
@@ -811,13 +853,6 @@ impl DwgDocumentBuilder {
                 let eh = entity.common().handle;
                 if let Some(&correct_owner) = binary_entity_owner.get(&eh) {
                     if entity.common().owner_handle != correct_owner {
-                        #[cfg(debug_assertions)]
-                        eprintln!(
-                            "[OWNER-CORRECTION] entity {:#X} stream_owner={:#X} → corrected_owner={:#X}",
-                            eh.value(),
-                            entity.common().owner_handle.value(),
-                            correct_owner.value(),
-                        );
                         entity.common_mut().owner_handle = correct_owner;
                     }
                 }
@@ -835,13 +870,14 @@ impl DwgDocumentBuilder {
                 .map(|e| (
                     e.common().handle,
                     e.common().owner_handle,
-                    matches!(e, EntityType::AttributeEntity(_)),
+                    matches!(e, EntityType::AttributeEntity(_) | EntityType::Block(_) | EntityType::BlockEnd(_)),
                 ))
                 .collect();
-            for (eh, owner, is_attrib) in entity_owners {
-                // AttributeEntity is a sub-entity of INSERT and must NOT
-                // appear in any block record's entity_handles list.
-                if is_attrib {
+            for (eh, owner, is_excluded) in entity_owners {
+                // AttributeEntity is a sub-entity of INSERT.
+                // Block/BlockEnd are structural markers with separate handle fields.
+                // None of these should appear in block_record.entity_handles.
+                if is_excluded {
                     continue;
                 }
                 let mut added = false;
@@ -908,6 +944,13 @@ impl DwgDocumentBuilder {
                     skipped_pass2,
                 ),
             );
+        }
+
+        // Ensure handle_seed reflects the true maximum handle present in the
+        // source file's Handles section.
+        let max_from_reader = handles.iter().max().copied().unwrap_or(0);
+        if max_from_reader + 1 > document.header.handle_seed {
+            document.header.handle_seed = max_from_reader + 1;
         }
 
         self.notifications
@@ -1659,18 +1702,24 @@ impl DwgDocumentBuilder {
                 // silently consumed — their information is already
                 // represented by BlockRecord table entries.
                 OBJ_BLOCK => {
-                    // BLOCK entity has no entity-specific data beyond common.
-                    // The block name comes from the BlockRecord (Pass 1).
-                    // We intentionally do NOT add it as an entity.
+                    // BLOCK entity: read block name after common entity data
+                    let name = reader.read_variable_text();
+                    let mut b = crate::entities::Block::new(name, crate::types::Vector3::ZERO);
+                    b.common = entity_common;
+                    let _ = document.add_entity(EntityType::Block(b));
                 },
                 OBJ_ENDBLK => {
                     // ENDBLK marks the end of a block definition.
-                    // Silently skip.
+                    let mut be = crate::entities::BlockEnd::new();
+                    be.common = entity_common;
+                    let _ = document.add_entity(EntityType::BlockEnd(be));
                 },
                 OBJ_SEQEND => {
                     // SEQEND terminates a polyline vertex or INSERT
-                    // attribute sequence. Silently skip.
+                    // attribute sequence. Store the seqend handle so
+                    // it can be preserved on the parent polyline.
                     entities::read_seqend(&mut reader);
+                    pending.seqends.insert(entity_data.owner_handle, entity_common.handle);
                 },
 
                 // ── Vertex child entities ──────────────────────────
@@ -1679,30 +1728,34 @@ impl DwgDocumentBuilder {
                 // Collect vertex data and attach to parent polylines
                 // in the post-processing step after Pass 2.
                 OBJ_VERTEX_2D => {
-                    let data = entities::read_vertex2d(
+                    let mut data = entities::read_vertex2d(
                         &mut reader, self.obj_reader.version(),
                     );
+                    data.handle = entity_common.handle;
                     pending.vertices.entry(entity_data.owner_handle)
                         .or_default()
                         .push(PendingVertex::V2D(data));
                 },
                 OBJ_VERTEX_3D | OBJ_VERTEX_MESH => {
-                    let data = entities::read_vertex3d(&mut reader);
+                    let mut data = entities::read_vertex3d(&mut reader);
+                    data.handle = entity_common.handle;
                     pending.vertices.entry(entity_data.owner_handle)
                         .or_default()
-                        .push(PendingVertex::V3D(data));
+                        .push(PendingVertex::V3D(data, entity_common));
                 },
                 OBJ_VERTEX_PFACE => {
-                    let data = entities::read_vertex3d(&mut reader);
+                    let mut data = entities::read_vertex3d(&mut reader);
+                    data.handle = entity_common.handle;
                     pending.vertices.entry(entity_data.owner_handle)
                         .or_default()
-                        .push(PendingVertex::V3D(data));
+                        .push(PendingVertex::V3D(data, entity_common));
                 },
                 OBJ_VERTEX_PFACE_FACE => {
-                    let data = entities::read_pface_face(&mut reader);
+                    let mut data = entities::read_pface_face(&mut reader);
+                    data.handle = entity_common.handle;
                     pending.vertices.entry(entity_data.owner_handle)
                         .or_default()
-                        .push(PendingVertex::PfaceFace(data));
+                        .push(PendingVertex::PfaceFace(data, entity_common));
                 },
 
                 // ── Raster image / Wipeout ─────────────────────────
@@ -1867,6 +1920,27 @@ impl DwgDocumentBuilder {
             // ── Non-graphical objects ──────────────────────────────
             let non_entity_data = self.obj_reader.read_common_non_entity_data(&mut reader, type_code);
             let owner_handle = Handle::from(non_entity_data.owner_handle);
+            // Save raw EED blobs for DWG round-trip write-back
+            if !non_entity_data.common.eed_raw.is_empty() {
+                document.eed_by_handle.insert(
+                    Handle::from(non_entity_data.common.handle),
+                    non_entity_data.common.eed_raw.clone(),
+                );
+            }
+            // Save xdictionary handle for DWG round-trip write-back
+            if let Some(xdic) = non_entity_data.xdictionary_handle {
+                document.xdic_by_handle.insert(
+                    Handle::from(non_entity_data.common.handle),
+                    Handle::from(xdic),
+                );
+            }
+            // Save reactors for DWG round-trip write-back
+            if !non_entity_data.reactors.is_empty() {
+                document.reactors_by_handle.insert(
+                    Handle::from(non_entity_data.common.handle),
+                    non_entity_data.reactors.iter().map(|&h| Handle::from(h)).collect(),
+                );
+            }
 
             match type_code {
                 OBJ_DICTIONARY => {
@@ -2223,7 +2297,22 @@ impl DwgDocumentBuilder {
                     );
                 },
                 _ => {
-                    // Skip unsupported object types
+                    // Preserve unrecognised non-entity objects verbatim so
+                    // they survive roundtrip without losing their handles.
+                    let type_name = format!("DWG_OBJ_{}", type_code);
+                    let raw_handle_bits = reader.get_handle_bits();
+                    let raw_data = reader.raw_merged_data();
+                    document.objects.insert(
+                        Handle::from(handle),
+                        crate::objects::ObjectType::Unknown {
+                            type_name,
+                            handle: Handle::from(handle),
+                            owner: owner_handle,
+                            raw_dxf_codes: None,
+                            raw_dwg_data: Some(raw_data),
+                            raw_dwg_handle_bits: raw_handle_bits,
+                        },
+                    );
                 }
             }
         }
@@ -2312,10 +2401,8 @@ fn map_entity_common(
     common.invisible = data.invisible;
     common.linetype_scale = data.linetype_scale;
     common.layer = maps.layer_name(data.layer_handle);
-    // Line weight (raw DWG byte → LineWeight)
-    // The reader stores as_i16() as u8, so negative values (ByLayer=-1, ByBlock=-2, 
-    // Default=-3) wrap to 255/254/253. Casting through i8 recovers the sign.
-    common.line_weight = crate::types::LineWeight::from_value(data.line_weight as i8 as i16);
+    // Line weight (raw DWG index byte → LineWeight)
+    common.line_weight = crate::types::LineWeight::from_dwg_index(data.line_weight);
     // Reactors
     common.reactors = data.reactors.iter().map(|&h| Handle::from(h)).collect();
     // XDictionary handle
@@ -2331,5 +2418,16 @@ fn map_entity_common(
             .unwrap_or_default(),
         _ => String::new(),
     };
+    // EED raw bytes for DWG round-trip
+    common.extended_data.raw_dwg_eed = data.common.eed_raw.clone();
+    // Graphic data for DWG round-trip
+    common.graphic_data = data.graphic_data.clone();
+    // DWG round-trip: preserve entity_mode, material/plotstyle/shadow flags
+    common.entity_mode = Some(data.entity_mode);
+    common.material_flags = data.material_flags;
+    common.material_handle = data.material_handle.map(Handle::from);
+    common.shadow_flags = data.shadow_flags;
+    common.plotstyle_flags = data.plotstyle_flags;
+    common.plotstyle_handle = data.plotstyle_handle.map(Handle::from);
     common
 }

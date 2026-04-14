@@ -1538,6 +1538,16 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         if !base.text.is_empty() {
             self.writer.write_string(1, &base.text)?;
         }
+        if (base.line_spacing_factor - 1.0).abs() > 1e-10 {
+            self.writer.write_double(44, base.line_spacing_factor)?;
+        }
+        // Normal vector (extrusion direction) — only write if not default (0,0,1)
+        let n = base.normal;
+        if (n.x).abs() > 1e-12 || (n.y).abs() > 1e-12 || (n.z - 1.0).abs() > 1e-12 {
+            self.writer.write_double(210, n.x)?;
+            self.writer.write_double(220, n.y)?;
+            self.writer.write_double(230, n.z)?;
+        }
         Ok(())
     }
 
@@ -2301,7 +2311,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 ObjectType::PlaceHolder(obj) => self.write_stub_handle_only("ACDBPLACEHOLDER", obj.handle, obj.owner)?,
                 ObjectType::DictionaryWithDefault(obj) => self.write_dict_with_default(obj, &document.objects)?,
                 ObjectType::WipeoutVariables(obj) => self.write_wipeout_variables(obj)?,
-                ObjectType::Unknown { type_name, handle, owner, raw_dxf_codes } => {
+                ObjectType::Unknown { type_name, handle, owner, raw_dxf_codes, .. } => {
                     self.write_unknown_object(type_name, *handle, *owner, raw_dxf_codes.as_deref())?;
                 }
             }
@@ -3641,8 +3651,11 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             // Convert SAT to SAB and queue for ACDSDATA section
             self.queue_sab_data(&solid.acis_data, solid.common.handle);
         } else {
-            // Pre-AC1027: SAT cipher text inline
-            self.writer.write_i16(70, solid.acis_data.version as i16)?;
+            // Pre-AC1027: SAT cipher text inline.
+            // Always write version=1 here: the DXF SAT path always outputs
+            // SAT text (code-1 groups), even when the source was SAB binary.
+            // Writing version=2 would be inconsistent with the SAT output.
+            self.writer.write_i16(70, 1)?;
             self.write_acis_data(&solid.acis_data)?;
         }
 
@@ -3667,8 +3680,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 .write_string(2, "{00000000-0000-0000-0000-000000000000}")?;
             self.queue_sab_data(&region.acis_data, region.common.handle);
         } else {
-            self.writer
-                .write_i16(70, region.acis_data.version as i16)?;
+            self.writer.write_i16(70, 1)?;
             self.write_acis_data(&region.acis_data)?;
         }
 
@@ -3687,7 +3699,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 .write_string(2, "{00000000-0000-0000-0000-000000000000}")?;
             self.queue_sab_data(&body.acis_data, body.common.handle);
         } else {
-            self.writer.write_i16(70, body.acis_data.version as i16)?;
+            self.writer.write_i16(70, 1)?;
             self.write_acis_data(&body.acis_data)?;
         }
 
@@ -3701,8 +3713,24 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     /// characters are subdivided into 255-char sub-chunks: the first
     /// sub-chunk uses group code 1 and continuation sub-chunks use
     /// group code 3.
+    ///
+    /// When only SAB binary data is present (no SAT text), attempts to
+    /// convert via `SabReader` before falling back to an empty entry.
     fn write_acis_data(&mut self, acis: &AcisData) -> Result<()> {
-        let data = &acis.sat_data;
+        // When SAT is empty but SAB binary is present, try to convert SAB→SAT.
+        let converted;
+        let data: &str = if acis.sat_data.is_empty() && !acis.sab_data.is_empty() {
+            match crate::entities::acis::SabReader::read(&acis.sab_data) {
+                Ok(doc) => {
+                    converted = doc.to_sat_string();
+                    &converted
+                }
+                Err(_) => "",
+            }
+        } else {
+            &acis.sat_data
+        };
+
         if data.is_empty() {
             self.writer.write_string(1, "")?;
             return Ok(());
@@ -3713,9 +3741,13 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         full.push_str("End-of-ACIS-data\n");
 
         // Version 1: apply the DXF character cipher to SAT text.
-        let encoded = match acis.version {
-            AcisVersion::Version1 => AcisData::encode_sat(&full),
-            _ => full,
+        // SAB-converted data is always treated as Version1 for DXF output.
+        let use_version1_cipher = acis.version == AcisVersion::Version1
+            || (acis.sat_data.is_empty() && !acis.sab_data.is_empty());
+        let encoded = if use_version1_cipher {
+            AcisData::encode_sat(&full)
+        } else {
+            full
         };
 
         let mut any_written = false;

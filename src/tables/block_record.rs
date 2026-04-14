@@ -64,6 +64,14 @@ pub struct BlockRecord {
     pub entity_handles: Vec<Handle>,
     /// XRef file path (empty for normal blocks)
     pub xref_path: String,
+    /// Block description (R2000+)
+    pub description: String,
+    /// Insert count bytes (raw non-zero RL bytes before the zero terminator, R2000+)
+    pub insert_count_bytes: Vec<u8>,
+    /// Preview data (BMP thumbnail, R2000+)
+    pub preview_data: Vec<u8>,
+    /// INSERT entity handles that reference this block (R2000+)
+    pub insert_handles: Vec<Handle>,
 }
 
 impl BlockRecord {
@@ -81,6 +89,10 @@ impl BlockRecord {
             scale_uniformly: false,
             entity_handles: Vec::new(),
             xref_path: String::new(),
+            description: String::new(),
+            insert_count_bytes: Vec::new(),
+            preview_data: Vec::new(),
+            insert_handles: Vec::new(),
         }
     }
 
@@ -98,6 +110,10 @@ impl BlockRecord {
             scale_uniformly: false,
             entity_handles: Vec::new(),
             xref_path: String::new(),
+            description: String::new(),
+            insert_count_bytes: Vec::new(),
+            preview_data: Vec::new(),
+            insert_handles: Vec::new(),
         }
     }
 
@@ -115,6 +131,10 @@ impl BlockRecord {
             scale_uniformly: false,
             entity_handles: Vec::new(),
             xref_path: String::new(),
+            description: String::new(),
+            insert_count_bytes: Vec::new(),
+            preview_data: Vec::new(),
+            insert_handles: Vec::new(),
         }
     }
 

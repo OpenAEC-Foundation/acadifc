@@ -126,6 +126,14 @@ impl<'a> DwgObjectWriter<'a> {
         for br in document.block_records.iter() {
             let h = br.handle().value() + 1;
             if h > max_h { max_h = h; }
+            // Also scan block entity and endblk entity handles:
+            // these are written verbatim by write_block_begin/write_block_end
+            // but are NOT part of document.entities(), so they would otherwise
+            // be missed and cause alloc_handle() to re-issue their handle values.
+            let h2 = br.block_entity_handle.value() + 1;
+            if h2 > max_h { max_h = h2; }
+            let h3 = br.block_end_handle.value() + 1;
+            if h3 > max_h { max_h = h3; }
         }
         for ly in document.layers.iter() {
             let h = ly.handle().value() + 1;
@@ -137,6 +145,28 @@ impl<'a> DwgObjectWriter<'a> {
         }
         for ts in document.text_styles.iter() {
             let h = ts.handle().value() + 1;
+            if h > max_h { max_h = h; }
+        }
+        // Also scan the remaining table entries that were previously missed:
+        // app_ids, dim_styles, views, vports, ucss
+        for a in document.app_ids.iter() {
+            let h = a.handle().value() + 1;
+            if h > max_h { max_h = h; }
+        }
+        for ds in document.dim_styles.iter() {
+            let h = ds.handle().value() + 1;
+            if h > max_h { max_h = h; }
+        }
+        for v in document.views.iter() {
+            let h = v.handle().value() + 1;
+            if h > max_h { max_h = h; }
+        }
+        for vp in document.vports.iter() {
+            let h = vp.handle().value() + 1;
+            if h > max_h { max_h = h; }
+        }
+        for u in document.ucss.iter() {
+            let h = u.handle().value() + 1;
             if h > max_h { max_h = h; }
         }
 
@@ -531,13 +561,13 @@ impl<'a> DwgObjectWriter<'a> {
         if self.version.r2000_plus() {
             // Plotstyle handle
             self.writer
-                .write_handle(DwgReferenceType::HardPointer, 0);
+                .write_handle(DwgReferenceType::HardPointer, layer.plotstyle_handle.value());
         }
 
         if self.version.r2007_plus() {
             // Material handle
             self.writer
-                .write_handle(DwgReferenceType::HardPointer, 0);
+                .write_handle(DwgReferenceType::HardPointer, layer.material.value());
         }
 
         // Linetype handle — look up by name
@@ -1405,7 +1435,14 @@ impl<'a> DwgObjectWriter<'a> {
             .collect();
 
         for br in &block_records {
-            self.write_block_header(br);
+            // Use original entity_handles from the DWG binary when available
+            // (preserves sub-entity handles exactly). Fall back to expanding
+            // from the document model for programmatically created blocks.
+            let entity_handles_for_header = self.document.block_entity_handles
+                .get(&br.handle)
+                .cloned()
+                .unwrap_or_else(|| self.expand_entity_handles(&br.entity_handles));
+            self.write_block_header_with_handles(br, &entity_handles_for_header);
             self.write_block_begin(br);
 
             // Look up entities by handle from the document
@@ -1437,9 +1474,50 @@ impl<'a> DwgObjectWriter<'a> {
         }
     }
 
-    /// Write a BLOCK_HEADER (block record) object.
-    fn write_block_header(&mut self, record: &BlockRecord) {
-        let entity_handles = &record.entity_handles;
+    /// Expand entity_handles to include sub-entity handles (vertices, faces,
+    /// SEQENDs, ATTRIBs) that are children of compound entities.
+    fn expand_entity_handles(&self, handles: &[Handle]) -> Vec<Handle> {
+        let mut expanded = Vec::new();
+        for &eh in handles {
+            expanded.push(eh);
+            if let Some(&idx) = self.document.entity_index.get(&eh) {
+                let entity = &self.document.entities[idx];
+                match entity {
+                    EntityType::PolyfaceMesh(e) => {
+                        for v in &e.vertices {
+                            if !v.common.handle.is_null() { expanded.push(v.common.handle); }
+                        }
+                        for f in &e.faces {
+                            if !f.common.handle.is_null() { expanded.push(f.common.handle); }
+                        }
+                        if let Some(sh) = e.seqend_handle {
+                            if !sh.is_null() { expanded.push(sh); }
+                        }
+                    }
+                    EntityType::Polyline3D(e) => {
+                        for v in &e.vertices {
+                            if !v.handle.is_null() { expanded.push(v.handle); }
+                        }
+                    }
+                    EntityType::PolygonMesh(e) => {
+                        for v in &e.vertices {
+                            if !v.common.handle.is_null() { expanded.push(v.common.handle); }
+                        }
+                    }
+                    EntityType::Insert(e) if e.has_attributes() => {
+                        for att in &e.attributes {
+                            if !att.common.handle.is_null() { expanded.push(att.common.handle); }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        expanded
+    }
+
+    /// Write a BLOCK_HEADER (block record) object with explicit entity handles.
+    fn write_block_header_with_handles(&mut self, record: &BlockRecord, entity_handles: &[Handle]) {
 
         self.write_common_non_entity_data(
             common::OBJ_BLOCK_HEADER,
@@ -1489,18 +1567,24 @@ impl<'a> DwgObjectWriter<'a> {
         self.writer.write_3bit_double(base_pt);
 
         // Xref path
-        self.writer.write_variable_text("");
+        self.writer.write_variable_text(&record.xref_path);
 
-        // R2000+: insert count bytes + block description
+        // R2000+: insert count bytes + block description + preview data
         if self.version.r2000_plus() {
-            // Insert count (simplified: 0 inserts)
+            // Insert count bytes (non-zero bytes followed by zero terminator)
+            for &b in &record.insert_count_bytes {
+                self.writer.write_byte(b);
+            }
             self.writer.write_byte(0);
 
             // Block description
-            self.writer.write_variable_text("");
+            self.writer.write_variable_text(&record.description);
 
-            // Preview data size
-            self.writer.write_bit_long(0);
+            // Preview data
+            self.writer.write_bit_long(record.preview_data.len() as i32);
+            for &b in &record.preview_data {
+                self.writer.write_byte(b);
+            }
         }
 
         // R2007+: units, explodable, scaling
@@ -1551,26 +1635,41 @@ impl<'a> DwgObjectWriter<'a> {
                 .write_handle(DwgReferenceType::HardPointer, record.layout.value());
         }
 
+        // R2000+: insert handles (one per insert_count_byte)
+        if self.version.r2000_plus() {
+            for &ih in &record.insert_handles {
+                self.writer
+                    .write_handle(DwgReferenceType::SoftPointer, ih.value());
+            }
+        }
+
         self.register_object(record.handle);
     }
 
     /// Write BLOCK entity (block begin).
     fn write_block_begin(&mut self, record: &BlockRecord) {
-        let block = record
-            .entity_handles
-            .iter()
-            .find_map(|eh| {
-                if let Some(EntityType::Block(b)) = self.document.entity_index.get(eh).map(|&idx| &self.document.entities[idx]) {
-                    Some(b.clone())
-                } else {
-                    None
-                }
-            });
-
-        let (handle, name) = if let Some(ref b) = block {
-            (b.common.handle, b.name.as_str())
+        let block = if !record.block_entity_handle.is_null() {
+            let result = self.document.entity_index.get(&record.block_entity_handle)
+                .and_then(|&idx| {
+                    if let EntityType::Block(b) = &self.document.entities[idx] {
+                        Some(b.clone())
+                    } else {
+                        eprintln!("  BLOCK entity at idx {} is NOT Block type", idx);
+                        None
+                    }
+                });
+            if result.is_none() && self.document.entity_index.get(&record.block_entity_handle).is_none() {
+                eprintln!("  BLOCK handle {:?} NOT in entity_index for block '{}'", record.block_entity_handle, record.name);
+            }
+            result
         } else {
-            (record.block_entity_handle, record.name.as_str())
+            None
+        };
+
+        let (handle, name, use_raw_name) = if let Some(ref b) = block {
+            (b.common.handle, b.name.as_str(), true)
+        } else {
+            (record.block_entity_handle, record.name.as_str(), false)
         };
 
         let common = block
@@ -1597,25 +1696,35 @@ impl<'a> DwgObjectWriter<'a> {
             &common.extended_data,
             &common.reactors,
             &common.xdictionary_handle,
+            common.graphic_data.as_deref(),
+            common.entity_mode, common.material_flags, &common.material_handle, common.shadow_flags, common.plotstyle_flags, &common.plotstyle_handle,
         );
 
-        self.writer.write_variable_text(dwg_block_name(name));
+        // Use the original name as-is when we have the Block entity from binary;
+        // only apply dwg_block_name() for programmatically-created blocks.
+        if use_raw_name {
+            self.writer.write_variable_text(name);
+        } else {
+            self.writer.write_variable_text(dwg_block_name(name));
+        }
 
         self.register_object(common.handle);
     }
 
     /// Write ENDBLK entity (block end).
     fn write_block_end(&mut self, record: &BlockRecord) {
-        let block_end = record
-            .entity_handles
-            .iter()
-            .find_map(|eh| {
-                if let Some(EntityType::BlockEnd(be)) = self.document.entity_index.get(eh).map(|&idx| &self.document.entities[idx]) {
-                    Some(be.clone())
-                } else {
-                    None
-                }
-            });
+        let block_end = if !record.block_end_handle.is_null() {
+            self.document.entity_index.get(&record.block_end_handle)
+                .and_then(|&idx| {
+                    if let EntityType::BlockEnd(be) = &self.document.entities[idx] {
+                        Some(be.clone())
+                    } else {
+                        None
+                    }
+                })
+        } else {
+            None
+        };
 
         let common = block_end
             .map(|be| be.common)
@@ -1639,6 +1748,8 @@ impl<'a> DwgObjectWriter<'a> {
             &common.extended_data,
             &common.reactors,
             &common.xdictionary_handle,
+            common.graphic_data.as_deref(),
+            common.entity_mode, common.material_flags, &common.material_handle, common.shadow_flags, common.plotstyle_flags, &common.plotstyle_handle,
         );
 
         self.register_object(common.handle);

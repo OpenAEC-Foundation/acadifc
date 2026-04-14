@@ -91,6 +91,13 @@ impl<'a> DwgObjectWriter<'a> {
             &c.extended_data,
             &c.reactors,
             &c.xdictionary_handle,
+            c.graphic_data.as_deref(),
+            c.entity_mode,
+            c.material_flags,
+            &c.material_handle,
+            c.shadow_flags,
+            c.plotstyle_flags,
+            &c.plotstyle_handle,
         );
     }
 
@@ -614,6 +621,8 @@ impl<'a> DwgObjectWriter<'a> {
                 &crate::xdata::ExtendedData::default(),
                 &[],
                 &None,
+                None,
+                None, 0, &None, 0, 0, &None,
             );
             self.register_object(seqend_handle);
 
@@ -643,9 +652,14 @@ impl<'a> DwgObjectWriter<'a> {
             &att.common.extended_data,
             &att.common.reactors,
             &att.common.xdictionary_handle,
+            att.common.graphic_data.as_deref(),
+            att.common.entity_mode,
+            att.common.material_flags,
+            &att.common.material_handle,
+            att.common.shadow_flags,
+            att.common.plotstyle_flags,
+            &att.common.plotstyle_handle,
         );
-
-        // writeTextEntity portion
         self.write_text_entity_data(
             att.insertion_point,
             att.alignment_point,
@@ -1648,6 +1662,8 @@ impl<'a> DwgObjectWriter<'a> {
             &crate::xdata::ExtendedData::default(),
             &[],
             &None,
+            None,
+            None, 0, &None, 0, 0, &None,
         );
         self.register_object(seqend_handle);
 
@@ -1678,6 +1694,8 @@ impl<'a> DwgObjectWriter<'a> {
             &crate::xdata::ExtendedData::default(),
             &[],
             &None,
+            None,
+            None, 0, &None, 0, 0, &None,
         );
 
         // Flags EC 70 NOT bit-pair-coded
@@ -1784,6 +1802,8 @@ impl<'a> DwgObjectWriter<'a> {
             &crate::xdata::ExtendedData::default(),
             &[],
             &None,
+            None,
+            None, 0, &None, 0, 0, &None,
         );
         self.register_object(seqend_handle);
 
@@ -1814,6 +1834,8 @@ impl<'a> DwgObjectWriter<'a> {
             &crate::xdata::ExtendedData::default(),
             &[],
             &None,
+            None,
+            None, 0, &None, 0, 0, &None,
         );
 
         self.writer
@@ -1839,7 +1861,9 @@ impl<'a> DwgObjectWriter<'a> {
         let face_handles: Vec<Handle> = e.faces.iter().map(|f| {
             if f.common.handle.is_null() { self.alloc_handle() } else { f.common.handle }
         }).collect();
-        let seqend_handle = self.alloc_handle();
+        let seqend_handle = e.seqend_handle
+            .filter(|h| !h.is_null())
+            .unwrap_or_else(|| self.alloc_handle());
 
         let total_owned = e.vertices.len() + e.faces.len();
 
@@ -1889,21 +1913,11 @@ impl<'a> DwgObjectWriter<'a> {
         for (v, &vh) in e.vertices.iter().zip(vertex_handles.iter()) {
             self.prev_handle = if sub_idx > 0 { Some(all_sub_handles[sub_idx - 1]) } else { None };
             self.next_handle = if sub_idx + 1 < all_sub_handles.len() { Some(all_sub_handles[sub_idx + 1]) } else { None };
-            self.write_common_entity_data(
-                common::OBJ_VERTEX_PFACE,
-                vh,
-                e.common.handle,
-                &e.common.layer,
-                &e.common.color,
-                &crate::types::LineWeight::ByLayer,
-                &crate::types::Transparency::default(),
-                false,
-                1.0,
-                "ByLayer",
-                &crate::xdata::ExtendedData::default(),
-                &[],
-                &None,
-            );
+            // Use vertex's own entity common (owner forced to polyface mesh)
+            let mut vc = v.common.clone();
+            vc.handle = vh;
+            vc.owner_handle = e.common.handle;
+            self.entity_preamble(common::OBJ_VERTEX_PFACE, &vc);
             self.writer.write_byte(v.flags.bits() as u8);
             self.writer.write_3bit_double(v.location);
             self.register_object(vh);
@@ -1914,21 +1928,11 @@ impl<'a> DwgObjectWriter<'a> {
         for (f, &fh) in e.faces.iter().zip(face_handles.iter()) {
             self.prev_handle = if sub_idx > 0 { Some(all_sub_handles[sub_idx - 1]) } else { None };
             self.next_handle = if sub_idx + 1 < all_sub_handles.len() { Some(all_sub_handles[sub_idx + 1]) } else { None };
-            self.write_common_entity_data(
-                common::OBJ_VERTEX_PFACE_FACE,
-                fh,
-                e.common.handle,
-                &e.common.layer,
-                &e.common.color,
-                &crate::types::LineWeight::ByLayer,
-                &crate::types::Transparency::default(),
-                false,
-                1.0,
-                "ByLayer",
-                &crate::xdata::ExtendedData::default(),
-                &[],
-                &None,
-            );
+            // Use face's own entity common (owner forced to polyface mesh)
+            let mut fc = f.common.clone();
+            fc.handle = fh;
+            fc.owner_handle = e.common.handle;
+            self.entity_preamble(common::OBJ_VERTEX_PFACE_FACE, &fc);
             self.writer.write_bit_short(f.index1);
             self.writer.write_bit_short(f.index2);
             self.writer.write_bit_short(f.index3);
@@ -1954,6 +1958,8 @@ impl<'a> DwgObjectWriter<'a> {
             &crate::xdata::ExtendedData::default(),
             &[],
             &None,
+            None,
+            None, 0, &None, 0, 0, &None,
         );
         self.register_object(seqend_handle);
 
@@ -2029,6 +2035,8 @@ impl<'a> DwgObjectWriter<'a> {
                 &crate::xdata::ExtendedData::default(),
                 &[],
                 &None,
+                None,
+                None, 0, &None, 0, 0, &None,
             );
             self.writer.write_byte(v.flags as u8);
             self.writer.write_3bit_double(v.location);
@@ -2052,6 +2060,8 @@ impl<'a> DwgObjectWriter<'a> {
             &crate::xdata::ExtendedData::default(),
             &[],
             &None,
+            None,
+            None, 0, &None, 0, 0, &None,
         );
         self.register_object(seqend_handle);
 
@@ -2941,6 +2951,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.entity_preamble(common::OBJ_3DSOLID, &e.common);
 
         let acds = self.needs_acds_section();
+        let is_sab = !acds && e.acis_data.is_binary && !e.acis_data.sab_data.is_empty();
         if acds {
             // AC1027+: ACIS data is stored in the AcDsPrototype_1b section.
             // Entity stream writes acis_empty=true with no inline data.
@@ -2950,9 +2961,10 @@ impl<'a> DwgObjectWriter<'a> {
             self.write_acis_data(&e.acis_data, &e.wires, &e.silhouettes);
         }
 
-        // acis_empty_bit â€” second copy of the "empty" flag.
-        // Must match the acis_empty bit written above.
-        self.writer.write_bit(acds);
+        // acis_empty_bit: for SAB (binary) entities this bit is NOT written here.
+        if !is_sab {
+            self.writer.write_bit(acds);
+        }
 
         // R2007+: unknown BL field (COMMON_3DSOLID)
         if self.version.r2007_plus() {
@@ -2972,6 +2984,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.entity_preamble(common::OBJ_REGION, &e.common);
 
         let acds = self.needs_acds_section();
+        let is_sab = !acds && e.acis_data.is_binary && !e.acis_data.sab_data.is_empty();
         if acds {
             self.write_acis_empty();
             self.queue_sab_entry(&e.acis_data, e.common.handle);
@@ -2979,8 +2992,10 @@ impl<'a> DwgObjectWriter<'a> {
             self.write_acis_data(&e.acis_data, &e.wires, &e.silhouettes);
         }
 
-        // acis_empty_bit â€” must match acis_empty
-        self.writer.write_bit(acds);
+        // acis_empty_bit: not written for SAB entities
+        if !is_sab {
+            self.writer.write_bit(acds);
+        }
 
         // R2007+: unknown BL field (COMMON_3DSOLID)
         if self.version.r2007_plus() {
@@ -2994,6 +3009,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.entity_preamble(common::OBJ_BODY, &e.common);
 
         let acds = self.needs_acds_section();
+        let is_sab = !acds && e.acis_data.is_binary && !e.acis_data.sab_data.is_empty();
         if acds {
             self.write_acis_empty();
             self.queue_sab_entry(&e.acis_data, e.common.handle);
@@ -3001,8 +3017,10 @@ impl<'a> DwgObjectWriter<'a> {
             self.write_acis_data(&e.acis_data, &e.wires, &e.silhouettes);
         }
 
-        // acis_empty_bit â€” must match acis_empty
-        self.writer.write_bit(acds);
+        // acis_empty_bit: not written for SAB entities
+        if !is_sab {
+            self.writer.write_bit(acds);
+        }
 
         // R2007+: unknown BL field (COMMON_3DSOLID)
         if self.version.r2007_plus() {
@@ -3063,12 +3081,33 @@ impl<'a> DwgObjectWriter<'a> {
         self.writer.write_bit(!has_data); // acis_empty (inverted: true = empty)
 
         if has_data {
-            // Unknown bit â€” per ODA spec / LibreDWG / ACadSharp this B
-            // is always present between acis_empty and the version BS.
-            self.writer.write_bit(false);
+            // R2010+: an extra unknown bit is present between acis_empty and the version BS.
+            // R2007 and earlier do NOT have this bit (for SAT path).
+            //
+            // For SAB (is_binary=true) entities the unknown bit IS present regardless
+            // of version — we write it explicitly in the SAB path below.
+            if !acis.is_binary && self.version.r2010_plus() {
+                self.writer.write_bit(false);
+            }
 
+            // ── SAB binary path (R2007+ entities) ────────────────────
+            // Write version=2 + raw SAB body bytes + wireframe_present=false.
+            // The caller must NOT write the acis_empty_bit (second copy) for SAB
+            // entities; it SHOULD still write the unknown_2007 BL field.
+            // Together these produce exactly 3 entity-data trailing bits:
+            //   wireframe_present(1=0) + BL:0-MSB(1=1) + BL:0-LSB(1=0)
+            // The fourth bit (BL:0-LSB coincides with the flag_position 0-bit)
+            // is written by the merged-stream merge() as the no-text flag.
+            if acis.is_binary && !acis.sab_data.is_empty() {
+                self.writer.write_bit(false); // _unknown bit (present in R2007 SAB)
+                self.writer.write_bit_short(2_i16); // version=2
+                self.writer.write_bytes(&acis.sab_data); // raw SAB body bytes
+                self.writer.write_bit(false); // wireframe_present = false (no separate wireframe)
+                return; // caller writes unknown_2007 BL:0 (2 bits) but NOT acis_empty_bit
+            }
+
+            // ── SAT text path (version=1) ─────────────────────────────
             // DWG entity streams always use SAT text (version 1).
-            // SAB binary (version 2) is only used in DXF ACDSDATA sections.
             self.writer.write_bit_short(1_i16);
 
             // Obtain SAT text â€” convert from SAB if needed.

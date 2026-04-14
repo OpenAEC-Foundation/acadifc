@@ -263,12 +263,35 @@ pub struct EntityCommon {
     pub invisible: bool,
     /// Extended data (XDATA)
     pub extended_data: crate::xdata::ExtendedData,
+    /// Raw entity graphic data bytes (stored for DWG round-trip; None otherwise).
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub graphic_data: Option<Vec<u8>>,
     /// Reactor handles — objects attached as reactors ({ACAD_REACTORS})
     pub reactors: Vec<Handle>,
     /// Extended dictionary handle ({ACAD_XDICTIONARY}) — hard-owner handle to a Dictionary
     pub xdictionary_handle: Option<Handle>,
     /// Owner handle (soft pointer, code 330)
     pub owner_handle: Handle,
+
+    // ── DWG round-trip fields (not exposed via DXF) ──
+    /// Material flags (BB: 00=bylayer, 01=byblock, 10=reserved, 11=handle) — R2007+
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub material_flags: u8,
+    /// Material handle (only valid when material_flags == 0b11) — R2007+
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub material_handle: Option<Handle>,
+    /// Shadow flags (RC) — R2007+
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub shadow_flags: u8,
+    /// Plotstyle flags (BB: 00=bylayer, 01=byblock, 10=reserved, 11=handle) — R2000+
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub plotstyle_flags: u8,
+    /// Plotstyle handle (only valid when plotstyle_flags == 0b11) — R2000+
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub plotstyle_handle: Option<Handle>,
+    /// Entity mode (0=owned, 1=paper, 2=model) — raw DWG value for round-trip
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub entity_mode: Option<u8>,
 }
 
 impl EntityCommon {
@@ -284,9 +307,16 @@ impl EntityCommon {
             transparency: Transparency::OPAQUE,
             invisible: false,
             extended_data: crate::xdata::ExtendedData::new(),
+            graphic_data: None,
             reactors: Vec::new(),
             xdictionary_handle: None,
             owner_handle: Handle::NULL,
+            material_flags: 0,
+            material_handle: None,
+            shadow_flags: 0,
+            plotstyle_flags: 0,
+            plotstyle_handle: None,
+            entity_mode: None,
         }
     }
 

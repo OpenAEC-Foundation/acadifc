@@ -34,6 +34,8 @@ use crate::io::dwg::crc::{
     dwg_ac21_normal_crc64,
     dwg_ac21_normal_crc64_seed1,
     dwg_ac21_mirrored_crc64,
+    dwg_ac21_check_data_normal_crc64,
+    dwg_ac21_check_data_mirrored_crc64,
     dwg_ac21_header_crc64,
     dwg_ac21_page_checksum,
 };
@@ -85,114 +87,143 @@ const FILE_HEADER_RS_FACTOR: usize = 3;
 /// - CRC seed encoding
 /// - Check data generation
 /// - Random padding
+///
+/// Implements the ODA spec §5.11 CRC random encoding algorithm:
+/// - LCG initialization for table entries 0-1
+/// - MT-style initialization for entries 2-623
+/// - InitPadding phase consuming first 128 entries
+/// - No MT tempering on reads (direct table access)
+/// - 10-bit spread encoding into specific bit positions
 struct CrcRandomEncoder {
     table: Vec<u32>,
     index: usize,
+    padding: Vec<u32>,
 }
 
 impl CrcRandomEncoder {
-    /// Create a new encoder from a 64-bit seed.
+    /// Create a new encoder from a 64-bit seed (spec §5.11 Init).
     ///
-    /// Populates the 0x270 (624) entry table using the Mersenne Twister
-    /// initialization algorithm.
+    /// The seed is the RandomSeed value from the file header metadata.
     fn new(seed: u64) -> Self {
         let mut table = vec![0u32; 0x270];
 
-        // Initialize first two entries from seed halves
-        table[0] = seed as u32;
-        table[1] = (seed >> 32) as u32;
+        // LCG init for entries 0 and 1 (MSLCG: val * 0x343FD + 0x269EC3)
+        table[0] = (seed as u32).wrapping_mul(0x343fd).wrapping_add(0x269ec3);
+        table[1] = ((seed >> 32) as u32).wrapping_mul(0x343fd).wrapping_add(0x269ec3);
 
-        // Mersenne Twister-style initialization
-        for i in 2..0x270 {
-            table[i] = (table[i - 1] >> 30 ^ table[i - 1])
-                .wrapping_mul(0x6C078965)
+        // MT-style init for entries 2..624
+        let mut value = table[1];
+        for i in 2..0x270usize {
+            value = ((value >> 30) ^ value)
+                .wrapping_mul(0x6c078965)
                 .wrapping_add(i as u32);
+            table[i] = value;
         }
 
-        let mut encoder = Self { table, index: 0x270 };
-        // Generate initial state
-        encoder.regenerate();
+        let mut encoder = Self {
+            table,
+            index: 0,
+            padding: vec![0u32; 0x80],
+        };
+        encoder.init_padding();
         encoder
     }
 
-    /// Regenerate the table (Mersenne Twister twist step).
-    fn regenerate(&mut self) {
-        for i in 0..0x270 {
-            let y = (self.table[i] & 0x80000000)
-                | (self.table[(i + 1) % 0x270] & 0x7FFFFFFF);
-            self.table[i] = self.table[(i + 0x18D) % 0x270] ^ (y >> 1);
-            if y & 1 != 0 {
-                self.table[i] ^= 0x9908B0DF;
-            }
+    /// Pre-compute padding table by consuming first 128 table entries (spec §5.11 InitPadding).
+    fn init_padding(&mut self) {
+        for i in 0..0x80 {
+            self.update_index();
+            self.padding[i] = self.table[self.index];
+            self.index += 1;
         }
-        self.index = 0;
     }
 
-    /// Get the next raw u32 value from the generator.
-    fn next_u32(&mut self) -> u32 {
+    /// Check and handle table wrap-around (spec §5.11 UpdateIndex).
+    /// When index reaches 0x270, regenerate using MT twist and reset.
+    fn update_index(&mut self) {
         if self.index >= 0x270 {
-            self.regenerate();
+            // Mersenne Twister twist step
+            for i in 0..0x270 {
+                let y = (self.table[i] & 0x80000000)
+                    | (self.table[(i + 1) % 0x270] & 0x7FFFFFFF);
+                self.table[i] = self.table[(i + 0x18D) % 0x270] ^ (y >> 1);
+                if y & 1 != 0 {
+                    self.table[i] ^= 0x9908B0DF;
+                }
+            }
+            self.index = 0;
         }
-        let mut y = self.table[self.index];
-        self.index += 1;
-
-        // Tempering
-        y ^= y >> 11;
-        y ^= (y << 7) & 0x9D2C5680;
-        y ^= (y << 15) & 0xEFC60000;
-        y ^= y >> 18;
-        y
     }
 
-    /// Get the next u64 value (two consecutive u32s).
+    /// Get the next u64 value from two consecutive table entries (spec §5.11 GetNextUInt64).
+    /// No MT tempering — reads raw table values.
     fn next_u64(&mut self) -> u64 {
-        let lo = self.next_u32() as u64;
-        let hi = self.next_u32() as u64;
+        self.index += 2;
+        self.update_index();
+        let lo = self.table[self.index] as u64;
+        let hi = self.table[self.index + 1] as u64;
         lo | (hi << 32)
     }
 
-    /// Encode a CRC seed value using 10-bit XOR obfuscation (spec §5.11).
+    /// Encode a value using 10-bit spread encoding (spec §5.11 Encode).
     ///
-    /// Splits the 64-bit seed into 6 groups of 10 bits plus a final 4-bit group.
-    /// Each group is XORed with the low bits of a random u32 from the RNG,
-    /// then placed at non-overlapping bit positions in the result.
-    ///
-    /// The spec says "adding bits from a pseudo random encoding table" —
-    /// in this context "adding" means XOR, which is its own inverse,
-    /// allowing decode by re-running with the same RNG state.
-    fn encode_crc_seed(&mut self, seed: u64) -> u64 {
-        let mut result: u64 = 0;
-        let mut remaining = seed;
+    /// Places 10 bits of the value at specific positions in a random u64,
+    /// preserving the remaining random bits for obfuscation.
+    fn encode(&mut self, value: u32) -> u64 {
+        let random = self.next_u64();
+        let mut lo = (random as u32) & 0xdf7df7dfu32;
+        let mut hi = ((random >> 32) as u32) & 0xf7df7df7u32;
 
-        for shift in (0..60).step_by(10) {
-            let random = self.next_u32();
-            let seed_bits = remaining & 0x3FF;
-            let random_bits = (random as u64) & 0x3FF;
-            remaining >>= 10;
-            result |= (seed_bits ^ random_bits) << shift;
-        }
-        // Remaining 4 bits at position 60
-        let random = self.next_u32();
-        let seed_bits = remaining & 0xF;
-        let random_bits = (random as u64) & 0xF;
-        result |= (seed_bits ^ random_bits) << 60;
+        // Place value bits at specific positions
+        if value & 0x200 != 0 { lo |= 0x20; }          // bit 9 → lo bit 5
+        if value & 0x100 != 0 { lo |= 0x800; }         // bit 8 → lo bit 11
+        if value & 0x80 != 0 { lo |= 0x20000; }        // bit 7 → lo bit 17
+        if value & 0x40 != 0 { lo |= 0x800000; }       // bit 6 → lo bit 23
+        if value & 0x20 != 0 { lo |= 0x20000000; }     // bit 5 → lo bit 29
+        if value & 0x10 != 0 { hi |= 0x08; }           // bit 4 → hi bit 3
+        if value & 0x8 != 0 { hi |= 0x200; }           // bit 3 → hi bit 9
+        if value & 0x4 != 0 { hi |= 0x8000; }          // bit 2 → hi bit 15
+        if value & 0x2 != 0 { hi |= 0x200000; }        // bit 1 → hi bit 21
+        if value & 0x1 != 0 { hi |= 0x8000000; }       // bit 0 → hi bit 27
 
-        result
+        (lo as u64) | ((hi as u64) << 32)
     }
 
-    /// Fill a buffer with random bytes.
+    /// Encode CRC seed (spec §5.2.1.1.3/4/6, §5.11).
+    /// CrcSeed is u64 but only the low 10 bits are encoded per spec.
+    fn encode_crc_seed(&mut self, seed: u64) -> u64 {
+        self.encode(seed as u32)
+    }
+
+    /// Fill a buffer with random padding bytes from the padding table (spec §5.11).
     fn fill_random(&mut self, buffer: &mut [u8]) {
-        let mut i = 0;
-        while i + 4 <= buffer.len() {
-            let val = self.next_u32();
-            buffer[i..i + 4].copy_from_slice(&val.to_le_bytes());
-            i += 4;
+        let mut buf_idx = 0;
+        let mut pad_idx = 0;
+        while buf_idx + 4 <= buffer.len() {
+            let val = if pad_idx < self.padding.len() {
+                let v = self.padding[pad_idx];
+                pad_idx += 1;
+                v
+            } else {
+                // Fallback: get from main table
+                self.index += 1;
+                self.update_index();
+                self.table[self.index]
+            };
+            buffer[buf_idx..buf_idx + 4].copy_from_slice(&val.to_le_bytes());
+            buf_idx += 4;
         }
-        if i < buffer.len() {
-            let val = self.next_u32();
+        if buf_idx < buffer.len() {
+            let val = if pad_idx < self.padding.len() {
+                self.padding[pad_idx]
+            } else {
+                self.index += 1;
+                self.update_index();
+                self.table[self.index]
+            };
             let bytes = val.to_le_bytes();
-            for j in 0..(buffer.len() - i) {
-                buffer[i + j] = bytes[j];
+            for j in 0..(buffer.len() - buf_idx) {
+                buffer[buf_idx + j] = bytes[j];
             }
         }
     }
@@ -485,7 +516,6 @@ impl DwgFileHeaderWriterAC21 {
     ) -> Result<(), DxfError> {
         // Initialize CRC seed (0 matches AutoCAD reference files)
         self.crc_seed = 0;
-        let mut rng = CrcRandomEncoder::new(self.crc_seed);
 
         // ── Step 1: Write section map + copy (appended after data pages) ──
         let section_map_data = self.build_section_map()?;
@@ -534,7 +564,7 @@ impl DwgFileHeaderWriterAC21 {
         // Pages map fields — offsets relative to data start (RESERVED_HEADER_SIZE)
         metadata.pages_map_crc_compressed = page_map_result.crc_compressed;
         metadata.pages_map_correction_factor = page_map_result.correction_factor;
-        metadata.pages_map_crc_seed = self.crc_seed;
+        // pages_map_crc_seed is set later by the CRC random encoder (§5.2.1.1.4)
         metadata.pages_map_offset = pm_abs_offset - RESERVED_HEADER_SIZE as u64;
         metadata.pages_map_id = page_map_page_id as u64;
         metadata.map2_offset = pm_abs_offset2 - RESERVED_HEADER_SIZE as u64;
@@ -556,20 +586,75 @@ impl DwgFileHeaderWriterAC21 {
         metadata.sections_map_size_uncompressed = section_map_result.uncompressed_size;
         metadata.sections_map_crc_compressed = section_map_result.crc_compressed;
         metadata.sections_map_correction_factor = section_map_result.correction_factor;
-        metadata.sections_map_crc_seed = self.crc_seed;
 
-        // CRC/random fields
-        metadata.crc_seed = self.crc_seed;
+        // CRC/random fields (spec §5.2.1.1 — order is critical for RNG state)
+        // §5.2.1.1.1: RandomSeed IS the CRC encoder's seed (input, not output)
+        // Using a fixed value (we can use any value; AutoCAD verifies consistency)
+        let random_seed: u64 = 0;
+        metadata.random_seed = random_seed;
+        metadata.crc_seed = self.crc_seed; // always 0 per §5.2.1.1.2
+        let mut rng = CrcRandomEncoder::new(random_seed);
+
+        // §5.2.1.1.3-4: Encode map CRC seeds
+        metadata.sections_map_crc_seed = rng.encode_crc_seed(self.crc_seed);
+        metadata.pages_map_crc_seed = rng.encode_crc_seed(self.crc_seed);
+
+        // §5.2.1.1.5: Check data (random1, random2, encoded_seed, normal/mirrored CRC)
+        let check_random1 = rng.next_u64();
+        let check_random2 = rng.next_u64();
+        let check_encoded_seed = rng.encode_crc_seed(self.crc_seed);
+
+        let check_normal_crc = {
+            let mut buf = [0u64; 8];
+            buf[0] = encode_value(check_random1, check_random2);
+            buf[1] = encode_value(buf[0], buf[0]);
+            buf[2] = encode_value(check_random2, buf[1]);
+            buf[3] = encode_value(buf[2], buf[2]);
+            buf[4] = encode_value(check_random1, buf[3]);
+            buf[5] = encode_value(buf[4], buf[4]);
+            buf[6] = encode_value(buf[5], buf[5]);
+            buf[7] = encode_value(buf[6], buf[6]);
+            let mut bytes = [0u8; 64];
+            for (i, &val) in buf.iter().enumerate() {
+                bytes[i * 8..(i + 1) * 8].copy_from_slice(&val.to_le_bytes());
+            }
+            dwg_ac21_check_data_normal_crc64(check_random2, &bytes)
+        };
+
+        let check_mirrored_crc = {
+            let mut buf = [0u64; 8];
+            buf[0] = encode_value(check_random1, check_random2);
+            buf[1] = encode_value(check_normal_crc, buf[0]);
+            buf[2] = encode_value(check_random2, buf[1]);
+            buf[3] = encode_value(check_normal_crc, buf[2]);
+            buf[4] = encode_value(check_random1, buf[3]);
+            buf[5] = encode_value(check_normal_crc, buf[4]);
+            buf[6] = encode_value(check_random2, buf[5]);
+            buf[7] = encode_value(buf[6], buf[6]);
+            let mut bytes = [0u8; 64];
+            for (i, &val) in buf.iter().enumerate() {
+                bytes[i * 8..(i + 1) * 8].copy_from_slice(&val.to_le_bytes());
+            }
+            dwg_ac21_check_data_mirrored_crc64(check_random1, &bytes)
+        };
+
+        let mut check_data = [0u8; CHECK_DATA_SIZE];
+        check_data[0..8].copy_from_slice(&check_normal_crc.to_le_bytes());
+        check_data[8..16].copy_from_slice(&check_mirrored_crc.to_le_bytes());
+        check_data[16..24].copy_from_slice(&check_random1.to_le_bytes());
+        check_data[24..32].copy_from_slice(&check_random2.to_le_bytes());
+        check_data[32..40].copy_from_slice(&check_encoded_seed.to_le_bytes());
+
+        // §5.2.1.1.6: CrcSeedEncoded (AFTER check data in RNG sequence)
         metadata.crc_seed_encoded = rng.encode_crc_seed(self.crc_seed);
-        metadata.random_seed = rng.next_u64();
 
         // Compute header CRC-64 (spec §5.2.1.2)
         let meta_bytes = metadata.to_bytes();
         let header_crc = dwg_ac21_header_crc64(&meta_bytes);
         metadata.header_crc64 = header_crc;
 
-        // ── Step 5: Build file header page ──
-        let file_header_page = self.build_file_header_page(&metadata, &mut rng)?;
+        // §§ Step 5: Build file header page —
+        let file_header_page = self.build_file_header_page(&metadata, &mut rng, &check_data)?;
         debug_assert_eq!(file_header_page.len(), FILE_HEADER_PAGE_SIZE);
 
         // Write file header at offset 0x80
@@ -586,15 +671,57 @@ impl DwgFileHeaderWriterAC21 {
         metadata.file_size = file_size;
         metadata.header2_offset = header2_offset - RESERVED_HEADER_SIZE as u64;
 
-        // Recompute with updated metadata
-        let mut rng2 = CrcRandomEncoder::new(self.crc_seed);
-        metadata.crc_seed_encoded = rng2.encode_crc_seed(self.crc_seed);
-        metadata.random_seed = rng2.next_u64();
+        // Recompute with updated metadata (same RNG order as pass 1)
+        let mut rng2 = CrcRandomEncoder::new(random_seed);
+        metadata.sections_map_crc_seed = rng2.encode_crc_seed(self.crc_seed); // §5.2.1.1.3
+        metadata.pages_map_crc_seed = rng2.encode_crc_seed(self.crc_seed);    // §5.2.1.1.4
+        let check_random1_2 = rng2.next_u64();
+        let check_random2_2 = rng2.next_u64();
+        let check_encoded_seed_2 = rng2.encode_crc_seed(self.crc_seed);
+        let check_normal_crc_2 = {
+            let mut buf = [0u64; 8];
+            buf[0] = encode_value(check_random1_2, check_random2_2);
+            buf[1] = encode_value(buf[0], buf[0]);
+            buf[2] = encode_value(check_random2_2, buf[1]);
+            buf[3] = encode_value(buf[2], buf[2]);
+            buf[4] = encode_value(check_random1_2, buf[3]);
+            buf[5] = encode_value(buf[4], buf[4]);
+            buf[6] = encode_value(buf[5], buf[5]);
+            buf[7] = encode_value(buf[6], buf[6]);
+            let mut bytes = [0u8; 64];
+            for (i, &val) in buf.iter().enumerate() {
+                bytes[i * 8..(i + 1) * 8].copy_from_slice(&val.to_le_bytes());
+            }
+            dwg_ac21_check_data_normal_crc64(check_random2_2, &bytes)
+        };
+        let check_mirrored_crc_2 = {
+            let mut buf = [0u64; 8];
+            buf[0] = encode_value(check_random1_2, check_random2_2);
+            buf[1] = encode_value(check_normal_crc_2, buf[0]);
+            buf[2] = encode_value(check_random2_2, buf[1]);
+            buf[3] = encode_value(check_normal_crc_2, buf[2]);
+            buf[4] = encode_value(check_random1_2, buf[3]);
+            buf[5] = encode_value(check_normal_crc_2, buf[4]);
+            buf[6] = encode_value(check_random2_2, buf[5]);
+            buf[7] = encode_value(buf[6], buf[6]);
+            let mut bytes = [0u8; 64];
+            for (i, &val) in buf.iter().enumerate() {
+                bytes[i * 8..(i + 1) * 8].copy_from_slice(&val.to_le_bytes());
+            }
+            dwg_ac21_check_data_mirrored_crc64(check_random1_2, &bytes)
+        };
+        let mut check_data_2 = [0u8; CHECK_DATA_SIZE];
+        check_data_2[0..8].copy_from_slice(&check_normal_crc_2.to_le_bytes());
+        check_data_2[8..16].copy_from_slice(&check_mirrored_crc_2.to_le_bytes());
+        check_data_2[16..24].copy_from_slice(&check_random1_2.to_le_bytes());
+        check_data_2[24..32].copy_from_slice(&check_random2_2.to_le_bytes());
+        check_data_2[32..40].copy_from_slice(&check_encoded_seed_2.to_le_bytes());
+        metadata.crc_seed_encoded = rng2.encode_crc_seed(self.crc_seed); // §5.2.1.1.6
         let meta_bytes = metadata.to_bytes();
         let header_crc = dwg_ac21_header_crc64(&meta_bytes);
         metadata.header_crc64 = header_crc;
 
-        let file_header_page = self.build_file_header_page(&metadata, &mut rng2)?;
+        let file_header_page = self.build_file_header_page(&metadata, &mut rng2, &check_data_2)?;
 
         // Overwrite file header at 0x80
         output.seek(SeekFrom::Start(METADATA_BLOCK_SIZE as u64))?;
@@ -625,7 +752,7 @@ impl DwgFileHeaderWriterAC21 {
         data: &[u8],
         encoding: u64,
         data_offset: u64,
-        max_page_size: u64,
+        _max_page_size: u64,
     ) -> Result<AC21SectionPageRecord, DxfError> {
         let page_id = self.next_page_id;
         self.next_page_id += 1;
@@ -657,7 +784,7 @@ impl DwgFileHeaderWriterAC21 {
 
             Ok(AC21SectionPageRecord {
                 data_offset,
-                page_size: max_page_size,
+                page_size: aligned_size as u64,
                 page_id,
                 uncompressed_size: data.len() as u64,
                 compressed_size: data.len() as u64,
@@ -696,7 +823,7 @@ impl DwgFileHeaderWriterAC21 {
 
             Ok(AC21SectionPageRecord {
                 data_offset,
-                page_size: max_page_size,
+                page_size: aligned_size as u64,
                 page_id,
                 uncompressed_size: data.len() as u64,
                 compressed_size: comp_size,
@@ -969,69 +1096,14 @@ impl DwgFileHeaderWriterAC21 {
 
     // ── File header page building (spec §5.2.1) ──
 
-    /// Build the 0x400-byte file header page (spec §5.2.1 steps 1-7).
+    /// Build the 0x400-byte file header page (spec §5.2.1 steps 2-7).
+    /// Check data is pre-computed by caller (spec §5.2.1.1.5) for correct RNG ordering.
     fn build_file_header_page(
         &self,
         metadata: &Dwg21CompressedMetadata,
         rng: &mut CrcRandomEncoder,
+        check_data: &[u8; CHECK_DATA_SIZE],
     ) -> Result<Vec<u8>, DxfError> {
-        // Step 1: Generate check data (spec §5.2.1.1)
-        let random1 = rng.next_u64();
-        let random2 = rng.next_u64();
-        let encoded_crc_seed = rng.encode_crc_seed(self.crc_seed);
-
-        // Normal CRC (spec §5.2.1.1)
-        let normal_crc = {
-            let mut buf = [0u64; 8];
-            buf[0] = encode_value(random1, random2);
-            buf[1] = encode_value(buf[0], buf[0]);
-            buf[2] = encode_value(random2, buf[1]);
-            buf[3] = encode_value(buf[2], buf[2]);
-            buf[4] = encode_value(random1, buf[3]);
-            buf[5] = encode_value(buf[4], buf[4]);
-            buf[6] = encode_value(buf[5], buf[5]);
-            buf[7] = encode_value(buf[6], buf[6]);
-
-            let mut bytes = [0u8; 64];
-            for (i, &val) in buf.iter().enumerate() {
-                bytes[i * 8..(i + 1) * 8].copy_from_slice(&val.to_le_bytes());
-            }
-            dwg_ac21_normal_crc64(random2, 64, &bytes)
-        };
-
-        // Mirrored CRC (spec §5.2.1.1)
-        let mirrored_crc = {
-            let mut buf = [0u64; 8];
-            buf[0] = encode_value(random1, random2);
-            buf[1] = encode_value(normal_crc, buf[0]);
-            buf[2] = encode_value(random2, buf[1]);
-            buf[3] = encode_value(normal_crc, buf[2]);
-            buf[4] = encode_value(random1, buf[3]);
-            buf[5] = encode_value(normal_crc, buf[4]);
-            buf[6] = encode_value(random2, buf[5]);
-            buf[7] = encode_value(buf[6], buf[6]);
-
-            let mut bytes = [0u8; 64];
-            for (i, &val) in buf.iter().enumerate() {
-                bytes[i * 8..(i + 1) * 8].copy_from_slice(&val.to_le_bytes());
-            }
-            dwg_ac21_mirrored_crc64(random1, 64, &bytes)
-        };
-
-        // Check data stream layout (spec §5.2.1.1 stream position annotations):
-        // 1st in stream: Normal CRC
-        // 2nd in stream: Mirrored CRC
-        // 3rd in stream: Random value 1
-        // 4th in stream: Random value 2
-        // 5th in stream: Encoded CRC Seed
-        // Written at position 0x3D8 (§5.2.1.7)
-        let mut check_data = [0u8; CHECK_DATA_SIZE];
-        check_data[0..8].copy_from_slice(&normal_crc.to_le_bytes());
-        check_data[8..16].copy_from_slice(&mirrored_crc.to_le_bytes());
-        check_data[16..24].copy_from_slice(&random1.to_le_bytes());
-        check_data[24..32].copy_from_slice(&random2.to_le_bytes());
-        check_data[32..40].copy_from_slice(&encoded_crc_seed.to_le_bytes());
-
         // Step 2: Serialize metadata and compute header CRC-64 (already done in caller)
         let meta_bytes = metadata.to_bytes();
         debug_assert_eq!(meta_bytes.len(), METADATA_SIZE);
@@ -1077,17 +1149,25 @@ impl DwgFileHeaderWriterAC21 {
         // 0x20: Compressed (or raw) data
         block.extend_from_slice(compr_data);
 
-        // Pad block to multiple of 8
+        // Pad block to multiple of 8 using random padding (spec §5.11)
         let padded_block_size = (block.len() + 7) & !7;
-        while block.len() < padded_block_size {
-            let b = rng.next_u32() as u8;
-            block.push(b);
+        if block.len() < padded_block_size {
+            let pad_needed = padded_block_size - block.len();
+            let mut pad_buf = vec![0u8; pad_needed];
+            rng.fill_random(&mut pad_buf);
+            block.extend_from_slice(&pad_buf);
         }
 
-        // Write block once at offset 0, fill remaining with random padding (spec §5.2.1.5)
-        pre_rs[..block.len()].copy_from_slice(&block);
-        if block.len() < total_rs_data {
-            rng.fill_random(&mut pre_rs[block.len()..total_rs_data]);
+        // Repeat block as many times as possible within the buffer (spec §5.2.1.5)
+        let max_copies = total_rs_data / block.len();
+        let mut offset = 0usize;
+        for _ in 0..max_copies {
+            pre_rs[offset..offset + block.len()].copy_from_slice(&block);
+            offset += block.len();
+        }
+        // Fill remaining bytes with random padding (spec §5.2.1.5)
+        if offset < total_rs_data {
+            rng.fill_random(&mut pre_rs[offset..total_rs_data]);
         }
 
         // Step 6: RS-encode with RS(255, 239) factor=3 (spec §5.2.1.6)
@@ -1114,7 +1194,7 @@ impl DwgFileHeaderWriterAC21 {
 
         // Step 7: Overwrite last 0x28 bytes with check data (spec §5.2.1.7)
         page[RS_DATA_IN_HEADER..FILE_HEADER_PAGE_SIZE]
-            .copy_from_slice(&check_data);
+            .copy_from_slice(check_data);
 
         Ok(page)
     }
@@ -1245,8 +1325,8 @@ mod tests {
         let mut rng1 = CrcRandomEncoder::new(42);
         let mut rng2 = CrcRandomEncoder::new(42);
 
-        for _ in 0..100 {
-            assert_eq!(rng1.next_u32(), rng2.next_u32());
+        for _ in 0..50 {
+            assert_eq!(rng1.next_u64(), rng2.next_u64());
         }
     }
 
@@ -1256,8 +1336,8 @@ mod tests {
         let mut rng2 = CrcRandomEncoder::new(0xFEDCBA98_76543210);
 
         // Different seeds should produce different sequences
-        let seq1: Vec<u32> = (0..10).map(|_| rng1.next_u32()).collect();
-        let seq2: Vec<u32> = (0..10).map(|_| rng2.next_u32()).collect();
+        let seq1: Vec<u64> = (0..10).map(|_| rng1.next_u64()).collect();
+        let seq2: Vec<u64> = (0..10).map(|_| rng2.next_u64()).collect();
         assert_ne!(seq1, seq2);
     }
 
@@ -1277,10 +1357,6 @@ mod tests {
         let seed = 0x12345678_9ABCDEF0u64;
         let encoded = rng.encode_crc_seed(seed);
 
-        // With XOR obfuscation, the encoded value should DIFFER from the seed
-        // (the random bits XOR with seed bits, producing a different value)
-        assert_ne!(encoded, seed, "Encoded value should differ from seed due to XOR");
-
         // The encoding should be deterministic (same seed + RNG state = same result)
         let mut rng2 = CrcRandomEncoder::new(42);
         let encoded2 = rng2.encode_crc_seed(seed);
@@ -1288,18 +1364,16 @@ mod tests {
     }
 
     #[test]
-    fn test_crc_random_encoder_encode_seed_advances_state() {
+    fn test_crc_random_encoder_encode_advances_state() {
         let mut rng1 = CrcRandomEncoder::new(42);
         let mut rng2 = CrcRandomEncoder::new(42);
 
-        // encode_crc_seed consumes 7 u32 values
-        rng1.encode_crc_seed(0x12345678_9ABCDEF0);
-        for _ in 0..7 {
-            rng2.next_u32();
-        }
-        // After 7 consumptions, both RNGs should be in the same state
-        assert_eq!(rng1.next_u32(), rng2.next_u32());
-        assert_eq!(rng1.next_u32(), rng2.next_u32());
+        // encode_crc_seed calls next_u64 once (consuming 2 table entries)
+        rng1.encode_crc_seed(0);
+        rng2.next_u64(); // Same state advancement
+
+        // After one encode, both should be at the same table position
+        assert_eq!(rng1.next_u64(), rng2.next_u64());
     }
 
     // ─── System page size calculation tests ─────────────────────────
@@ -1394,6 +1468,28 @@ mod tests {
         assert_eq!(writer.sections.len(), 1);
         assert_eq!(writer.sections[0].pages.len(), 3);
         assert_eq!(writer.page_records.len(), 3);
+    }
+
+    #[test]
+    fn test_section_page_sizes_match_page_records() {
+        let mut output = Cursor::new(Vec::new());
+        let mut writer = DwgFileHeaderWriterAC21::new(DxfVersion::AC1021, &mut output).unwrap();
+
+        // Force multiple AcDbObjects pages so we exercise real data-page bookkeeping.
+        let data = vec![0x5A; 0xF800 * 2 + 321];
+        writer.add_section(&mut output, names::ACDB_OBJECTS, &data).unwrap();
+
+        let section = &writer.sections[0];
+        assert_eq!(section.pages.len(), writer.page_records.len());
+
+        for page in &section.pages {
+            let record = writer
+                .page_records
+                .iter()
+                .find(|r| r.id == page.page_id)
+                .expect("missing page record for section page");
+            assert_eq!(page.page_size, record.size as u64);
+        }
     }
 
     #[test]

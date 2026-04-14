@@ -621,8 +621,8 @@ impl<'a> SectionReader<'a> {
                         }
                     }
                     "POLYLINE" => {
-                        if let Some(entity) = self.read_polyline()? {
-                            block_entities.push(EntityType::Polyline(entity));
+                        if let Some(entity) = self.read_polyline_entity()? {
+                            block_entities.push(entity);
                         }
                     }
                     "LWPOLYLINE" => {
@@ -855,8 +855,8 @@ impl<'a> SectionReader<'a> {
                         }
                     }
                     "POLYLINE" => {
-                        if let Some(entity) = self.read_polyline()? {
-                            let _ = document.add_entity(EntityType::Polyline(entity));
+                        if let Some(entity) = self.read_polyline_entity()? {
+                            let _ = document.add_entity(entity);
                         }
                     }
                     "LWPOLYLINE" => {
@@ -1155,6 +1155,8 @@ impl<'a> SectionReader<'a> {
                             handle,
                             owner,
                             raw_dxf_codes: if raw_codes.is_empty() { None } else { Some(raw_codes) },
+                            raw_dwg_data: None,
+                            raw_dwg_handle_bits: 0,
                         });
                     }
                 }
@@ -2660,35 +2662,90 @@ impl<'a> SectionReader<'a> {
         Ok(Some(ellipse))
     }
 
-    /// Read a POLYLINE entity
-    fn read_polyline(&mut self) -> Result<Option<Polyline>> {
+    /// Read a POLYLINE or POLYFACE MESH entity, returning the appropriate EntityType.
+    fn read_polyline_entity(&mut self) -> Result<Option<EntityType>> {
         use crate::entities::polyline::Vertex3D;
+        use crate::entities::polyface_mesh::{
+            PolyfaceMesh, PolyfaceVertex, PolyfaceFace,
+            PolyfaceMeshFlags, PolyfaceVertexFlags,
+        };
 
-        let mut polyline = Polyline::new();
+        let mut common = EntityCommon::new();
+        let mut flags: i16 = 0;
+        let mut elevation = 0.0f64;
+        let mut _vertex_count: i16 = 0;
+        let mut _face_count: i16 = 0;
+        // Polyline plain fields
+        let mut polyline_vertices: Vec<Vertex3D> = Vec::new();
+        // Polyface fields
+        let mut pface_vertices: Vec<PolyfaceVertex> = Vec::new();
+        let mut pface_faces: Vec<PolyfaceFace> = Vec::new();
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 {
-                // Check if it's a VERTEX or SEQEND
                 if pair.value_string == "VERTEX" {
-                    // Read vertex
-                    let mut vertex_reader = PointReader::new();
-
+                    // --- Read one VERTEX subentity ---
+                    let mut vx = 0.0f64;
+                    let mut vy = 0.0f64;
+                    let mut vz = 0.0f64;
+                    let mut vflags: i16 = 0;
+                    let mut vi1: i16 = 0;
+                    let mut vi2: i16 = 0;
+                    let mut vi3: i16 = 0;
+                    let mut vi4: i16 = 0;
                     while let Some(vpair) = self.reader.read_pair()? {
                         if vpair.code == 0 {
                             self.reader.push_back(vpair);
                             break;
                         }
                         match vpair.code {
-                            10 | 20 | 30 => { vertex_reader.add_coordinate(&vpair); }
+                            10 => { if let Some(v) = vpair.as_double() { vx = v; } }
+                            20 => { if let Some(v) = vpair.as_double() { vy = v; } }
+                            30 => { if let Some(v) = vpair.as_double() { vz = v; } }
+                            70 => { if let Some(v) = vpair.as_i16() { vflags = v; } }
+                            71 => { if let Some(v) = vpair.as_i16() { vi1 = v; } }
+                            72 => { if let Some(v) = vpair.as_i16() { vi2 = v; } }
+                            73 => { if let Some(v) = vpair.as_i16() { vi3 = v; } }
+                            74 => { if let Some(v) = vpair.as_i16() { vi4 = v; } }
                             _ => {}
                         }
                     }
-
-                    if let Some(pt) = vertex_reader.get_point() {
-                        polyline.vertices.push(Vertex3D::new(pt));
+                    // Geometry vertex detection: bit 6 (64 = POLYGON_MESH) trumps bit 7
+                    // (128 = POLYFACE_MESH).  Internally vertices are stored with
+                    // flags=128, then ORed with 64 by the writer => written flag = 192.
+                    // Face records are written with flag=128 only.
+                    // Therefore: check bit 64 FIRST.
+                    if (vflags & 64) != 0 {
+                        // Geometry vertex
+                        pface_vertices.push(PolyfaceVertex {
+                            common: EntityCommon::default(),
+                            location: crate::types::Vector3::new(vx, vy, vz),
+                            flags: PolyfaceVertexFlags::from_bits_truncate(vflags),
+                            bulge: 0.0,
+                            start_width: 0.0,
+                            end_width: 0.0,
+                            curve_tangent: 0.0,
+                            id: 0,
+                        });
+                    } else if (vflags & 128) != 0 {
+                        // Face record (only bit 128 set, no bit 64)
+                        let mut face = PolyfaceFace {
+                            common: EntityCommon::default(),
+                            flags: PolyfaceVertexFlags::NONE,
+                            index1: vi1,
+                            index2: vi2,
+                            index3: vi3,
+                            index4: vi4,
+                            color: None,
+                        };
+                        face.flags = PolyfaceVertexFlags::from_bits_truncate(vflags);
+                        pface_faces.push(face);
+                    } else {
+                        polyline_vertices.push(Vertex3D::new(
+                            crate::types::Vector3::new(vx, vy, vz),
+                        ));
                     }
                 } else if pair.value_string == "SEQEND" {
-                    // End of polyline - skip SEQEND properties
                     while let Some(seqend_pair) = self.reader.read_pair()? {
                         if seqend_pair.code == 0 {
                             self.reader.push_back(seqend_pair);
@@ -2697,36 +2754,67 @@ impl<'a> SectionReader<'a> {
                     }
                     break;
                 } else {
-                    // End of polyline, different entity - push back
                     self.reader.push_back(pair);
                     break;
                 }
             } else {
                 match pair.code {
-                    8 => polyline.common.layer = pair.value_string.clone(),
+                    8 => common.layer = pair.value_string.clone(),
                     62 => {
-                        if let Some(color_index) = pair.as_i16() {
-                            polyline.common.color = Color::from_index(color_index);
+                        if let Some(ci) = pair.as_i16() {
+                            common.color = Color::from_index(ci);
                         }
                     }
                     370 => {
                         if let Some(lw) = pair.as_i16() {
-                            polyline.common.line_weight = LineWeight::from_value(lw);
+                            common.line_weight = LineWeight::from_value(lw);
                         }
                     }
                     70 => {
-                        if let Some(flags) = pair.as_i16() {
-                            if (flags & 1) != 0 {
-                                polyline.close();
-                            }
+                        if let Some(f) = pair.as_i16() {
+                            flags = f;
                         }
                     }
-                    _ => { self.try_read_common_entity_code(&pair, &mut polyline.common)?; }
+                    30 => {
+                        if let Some(z) = pair.as_double() {
+                            elevation = z;
+                        }
+                    }
+                    71 => {
+                        if let Some(vc) = pair.as_i16() {
+                            _vertex_count = vc;
+                        }
+                    }
+                    72 => {
+                        if let Some(fc) = pair.as_i16() {
+                            _face_count = fc;
+                        }
+                    }
+                    _ => { self.try_read_common_entity_code(&pair, &mut common)?; }
                 }
             }
         }
 
-        Ok(Some(polyline))
+        // PolyfaceMeshFlags::POLYFACE_MESH = 64 (bit 6)
+        let is_polyface = (flags & 64) != 0;
+
+        if is_polyface || !pface_vertices.is_empty() || !pface_faces.is_empty() {
+            let mut mesh = PolyfaceMesh::new();
+            mesh.common = common;
+            mesh.flags = PolyfaceMeshFlags::from_bits_truncate(flags);
+            mesh.elevation = elevation;
+            mesh.vertices = pface_vertices;
+            mesh.faces = pface_faces;
+            Ok(Some(EntityType::PolyfaceMesh(mesh)))
+        } else {
+            let mut polyline = Polyline::new();
+            polyline.common = common;
+            if (flags & 1) != 0 {
+                polyline.close();
+            }
+            polyline.vertices = polyline_vertices;
+            Ok(Some(EntityType::Polyline(polyline)))
+        }
     }
 
     /// Read an LWPOLYLINE entity
@@ -3141,6 +3229,8 @@ impl<'a> SectionReader<'a> {
         let mut rotation = 0.0;
         let mut actual_measurement = 0.0;
         let mut leader_length = 0.0;
+        let mut line_spacing_factor = 1.0f64;
+        let mut normal = PointReader::new();
         let mut common = EntityCommon::new();
 
         while let Some(pair) = self.reader.read_pair()? {
@@ -3189,6 +3279,11 @@ impl<'a> SectionReader<'a> {
                         rotation = rot;
                     }
                 }
+                44 => {
+                    if let Some(lsf) = pair.as_double() {
+                        line_spacing_factor = lsf;
+                    }
+                }
                 42 => {
                     if let Some(measurement) = pair.as_double() {
                         actual_measurement = measurement;
@@ -3199,6 +3294,7 @@ impl<'a> SectionReader<'a> {
                         leader_length = length;
                     }
                 }
+                210 | 220 | 230 => { normal.add_coordinate(&pair); }
                 _ => { self.try_read_common_entity_code(&pair, &mut common)?; }
             }
         }
@@ -3311,6 +3407,18 @@ impl<'a> SectionReader<'a> {
             dc.common.linetype = common.linetype;
             dc.common.linetype_scale = common.linetype_scale;
             dc.common.transparency = common.transparency;
+            if let Some(pt) = text_middle_point.get_point() {
+                dc.text_middle_point = pt;
+            }
+            if let Some(pt) = definition_point.get_point() {
+                dc.definition_point = pt;
+            }
+            if line_spacing_factor != 1.0 {
+                dc.line_spacing_factor = line_spacing_factor;
+            }
+            if let Some(n) = normal.get_point() {
+                dc.normal = n;
+            }
         }
 
         Ok(Some(dimension))

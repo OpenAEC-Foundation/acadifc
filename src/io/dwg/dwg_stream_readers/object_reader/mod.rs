@@ -41,8 +41,9 @@ pub struct ObjectCommonData {
     pub type_code: i16,
     /// Object handle
     pub handle: u64,
-    /// Extended data (currently skipped, placeholder)
-    pub xdata_size: usize,
+    /// Raw EED blobs: (app_handle_value, raw_bytes_for_that_app)
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub eed_raw: Vec<(u64, Vec<u8>)>,
 }
 
 /// Common entity data read from the entity preamble.
@@ -53,6 +54,10 @@ pub struct EntityCommonData {
     pub common: ObjectCommonData,
     /// Has graphic data flag
     pub has_graphic: bool,
+    /// Raw graphic data bytes (stored for DWG round-trip; present only when has_graphic was true).
+    /// Serde-skipped — not serialized.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub graphic_data: Option<Vec<u8>>,
     /// Entity mode (0=owned, 1=paper, 2=model, 3=unused)
     pub entity_mode: u8,
     /// Owner handle (only if entity_mode == 0)
@@ -65,7 +70,7 @@ pub struct EntityCommonData {
     pub color: Color,
     /// Transparency
     pub transparency: Transparency,
-    /// Line weight (raw byte)
+    /// Line weight (raw DWG index)
     pub line_weight: u8,
     /// Linetype scale
     pub linetype_scale: f64,
@@ -81,6 +86,16 @@ pub struct EntityCommonData {
     pub prev_entity_handle: Option<u64>,
     /// Next entity handle (pre-R2004)
     pub next_entity_handle: Option<u64>,
+    /// Material flags (BB: 00=bylayer, 01=byblock, 10=reserved, 11=handle) — R2007+
+    pub material_flags: u8,
+    /// Material handle (if material_flags == 0b11)
+    pub material_handle: Option<u64>,
+    /// Shadow flags (RC) — R2007+
+    pub shadow_flags: u8,
+    /// Plotstyle flags (BB: 00=bylayer, 01=byblock, 10=reserved, 11=handle)
+    pub plotstyle_flags: u8,
+    /// Plotstyle handle (if plotstyle_flags == 0b11)
+    pub plotstyle_handle: Option<u64>,
 }
 
 /// Common non-entity object data.
@@ -197,7 +212,6 @@ impl DwgObjectReader {
 
             if !self.version.r2010_plus() {
                 // R2007: RL is embedded after type_code
-                let _saved_pos = temp.position_in_bits();
                 let total_size_bits = temp.read_raw_long() as i64;
                 data_start_bits = temp.position_in_bits();
 
@@ -241,6 +255,7 @@ impl DwgObjectReader {
                 self.dxf_version,
             );
             reader.set_handle_bits(handle_bits);
+            reader.set_handle_start(handle_start);
             return Ok((type_code, reader));
         }
 
@@ -318,13 +333,13 @@ impl DwgObjectReader {
         // offset-based handle codes (6/8/A/C) in the handle stream.
         reader.set_ref_handle(handle);
 
-        // Extended data (read and skip)
-        let xdata_size = self.skip_extended_data(reader);
+        // Extended data — read raw bytes for round-trip
+        let eed_raw = self.read_extended_data_raw(reader);
 
         ObjectCommonData {
             type_code,
             handle,
-            xdata_size,
+            eed_raw,
         }
     }
 
@@ -340,18 +355,22 @@ impl DwgObjectReader {
 
         // Graphic presence flag
         let has_graphic = reader.read_bit();
-        if has_graphic {
-            // Skip graphic data (preview image)
+        let graphic_data = if has_graphic {
+            // Read graphic data bytes for round-trip preservation.
             // R2010+: BLL (Bit Long Long); pre-R2010: RL (Raw Long)
             let graphic_size = if self.version.r2010_plus() {
                 reader.read_bit_long_long()
             } else {
                 reader.read_raw_long() as i64
             };
+            let mut gdata = Vec::with_capacity(graphic_size.max(0) as usize);
             for _ in 0..graphic_size.max(0) {
-                reader.read_byte();
+                gdata.push(reader.read_byte());
             }
-        }
+            Some(gdata)
+        } else {
+            None
+        };
 
         // R13-R14: size field (RL = main_size_bits) — reposition handle reader
         if self.version.r13_14_only() {
@@ -442,6 +461,7 @@ impl DwgObjectReader {
             return EntityCommonData {
                 common,
                 has_graphic,
+                graphic_data,
                 entity_mode,
                 owner_handle,
                 reactors,
@@ -456,6 +476,11 @@ impl DwgObjectReader {
                 linetype_handle: 0,
                 prev_entity_handle,
                 next_entity_handle,
+                material_flags: 0,
+                material_handle: None,
+                shadow_flags: 0,
+                plotstyle_flags: 0,
+                plotstyle_handle: None,
             };
         }
 
@@ -473,21 +498,26 @@ impl DwgObjectReader {
         }
 
         // R2007+: material flags + shadow flags
+        let mut material_flags = 0u8;
+        let mut material_handle: Option<u64> = None;
+        let mut shadow_flags = 0u8;
         if self.version.r2007_plus() {
-            let material_flags = reader.main_mut().read_2bits();
+            material_flags = reader.main_mut().read_2bits();
             // Material handle (hard pointer) — present when flags == 0b11
             if material_flags == 0b11 {
-                let _material_handle = reader.read_handle();
+                material_handle = Some(reader.read_handle());
             }
-            let _shadow_flags = reader.read_byte();
+            shadow_flags = reader.read_byte();
         }
 
         // R2000+: Plotstyle flags (00=bylayer, 01=byblock, 11=handle present)
+        let mut plotstyle_flags = 0u8;
+        let mut plotstyle_handle: Option<u64> = None;
         if self.version.r2000_plus() {
-            let plotstyle_flags = reader.main_mut().read_2bits();
+            plotstyle_flags = reader.main_mut().read_2bits();
             if plotstyle_flags == 0b11 {
                 // Plotstyle handle (hard pointer)
-                let _plotstyle_handle = reader.read_handle();
+                plotstyle_handle = Some(reader.read_handle());
             }
         }
 
@@ -509,8 +539,7 @@ impl DwgObjectReader {
 
         // R2000+: Lineweight (5-bit DWG index → raw byte value)
         let line_weight = if self.version.r2000_plus() {
-            let idx = reader.read_byte();
-            crate::types::LineWeight::from_dwg_index(idx).as_i16() as u8
+            reader.read_byte()
         } else {
             0
         };
@@ -518,6 +547,7 @@ impl DwgObjectReader {
         EntityCommonData {
             common,
             has_graphic,
+            graphic_data,
             entity_mode,
             owner_handle,
             reactors,
@@ -532,6 +562,11 @@ impl DwgObjectReader {
             linetype_handle,
             prev_entity_handle,
             next_entity_handle,
+            material_flags,
+            material_handle,
+            shadow_flags,
+            plotstyle_flags,
+            plotstyle_handle,
         }
     }
 
@@ -588,39 +623,30 @@ impl DwgObjectReader {
         }
     }
 
-    /// Skip extended data and return the total size skipped.
+    /// Read extended data and return raw bytes per application.
     ///
-    /// EED format: repeating [BS size | H app_handle | RC×size data] until size==0.
-    /// The application handle is ALWAYS in the main stream (even for R2007+),
-    /// unlike entity reference handles which go to the handle stream.
-    fn skip_extended_data(&self, reader: &mut DwgMergedReader) -> usize {
-        // EED: repeating [ BS size (main) | H app_handle (main!) | RC×size data (main) ] until size==0
-        let mut total_size: usize = 0;
+    /// EED format: repeating [BS size | H app_handle (main!) | RC×size data] until size==0.
+    /// The application handle is ALWAYS in the main stream (even for R2007+).
+    fn read_extended_data_raw(&self, reader: &mut DwgMergedReader) -> Vec<(u64, Vec<u8>)> {
+        let mut result: Vec<(u64, Vec<u8>)> = Vec::new();
         loop {
             let size = reader.read_bit_short();
             if size <= 0 {
                 break;
             }
             let size_u = size as usize;
-            total_size += size_u;
-            // Application handle — always from MAIN stream (not handle stream).
-            // Per ACadSharp reference: EED handles are inline in the object data,
-            // not in the handle chain.
-            let _ = reader.main_mut().read_handle();
-            // Raw xdata bytes (from main stream)
-            self.skip_xdata_items(reader, size_u);
+            // Application handle — always from MAIN stream.
+            let app_handle = reader.main_mut().read_handle();
+            // Raw xdata bytes (from main stream, one byte at a time).
+            // These bytes are NOT bit-packed; read them through the bit
+            // reader to respect any outstanding bit shift.
+            let mut data = Vec::with_capacity(size_u);
+            for _ in 0..size_u {
+                data.push(reader.read_byte());
+            }
+            result.push((app_handle, data));
         }
-        total_size
-    }
-
-    /// Skip xdata items for a single application block.
-    fn skip_xdata_items(&self, reader: &mut DwgMergedReader, remaining: usize) {
-        // Each EED application block has `remaining` raw bytes of xdata
-        // items in the main stream.  We must consume them to keep the
-        // bit position aligned for subsequent reads.
-        for _ in 0..remaining {
-            reader.read_byte();
-        }
+        result
     }
 
     /// Get the list of all handles in the handle map.
@@ -803,6 +829,6 @@ mod tests {
         let common_data = reader.read_common_data(&mut merged_reader, type_code);
         assert_eq!(common_data.type_code, common::OBJ_LINE);
         assert_eq!(common_data.handle, 0x42);
-        assert_eq!(common_data.xdata_size, 0);
+        assert!(common_data.eed_raw.is_empty());
     }
 }

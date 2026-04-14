@@ -976,6 +976,7 @@ pub struct Polyline2DData {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Vertex2DData {
+    pub handle: crate::types::Handle,
     pub flags: u8,
     pub x: f64, pub y: f64, pub z: f64,
     pub start_width: f64,
@@ -996,6 +997,7 @@ pub struct Polyline3DData {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Vertex3DData {
+    pub handle: crate::types::Handle,
     pub flags: u8,
     pub position: Vector3,
 }
@@ -1457,7 +1459,7 @@ pub fn read_vertex2d(reader: &mut DwgMergedReader, version: DwgVersion) -> Verte
     let bulge = reader.read_bit_double();
     let vertex_id = if version.r2010_plus() { reader.read_bit_long() } else { 0 };
     let tangent_dir = reader.read_bit_double();
-    Vertex2DData { flags, x, y, z, start_width, end_width, bulge, vertex_id, tangent_dir }
+    Vertex2DData { handle: crate::types::Handle::NULL, flags, x, y, z, start_width, end_width, bulge, vertex_id, tangent_dir }
 }
 
 pub fn read_polyline3d(reader: &mut DwgMergedReader, version: DwgVersion) -> Polyline3DData {
@@ -1470,7 +1472,7 @@ pub fn read_polyline3d(reader: &mut DwgMergedReader, version: DwgVersion) -> Pol
 pub fn read_vertex3d(reader: &mut DwgMergedReader) -> Vertex3DData {
     let flags = reader.read_byte();
     let position = reader.read_3bit_double();
-    Vertex3DData { flags, position }
+    Vertex3DData { handle: crate::types::Handle::NULL, flags, position }
 }
 
 pub fn read_polyface_mesh(reader: &mut DwgMergedReader, version: DwgVersion) -> (i16, i16, i32) {
@@ -1482,6 +1484,7 @@ pub fn read_polyface_mesh(reader: &mut DwgMergedReader, version: DwgVersion) -> 
 
 /// Face record data from OBJ_VERTEX_PFACE_FACE (type 14).
 pub struct PfaceFaceData {
+    pub handle: crate::types::Handle,
     pub index1: i16,
     pub index2: i16,
     pub index3: i16,
@@ -1495,7 +1498,7 @@ pub fn read_pface_face(reader: &mut DwgMergedReader) -> PfaceFaceData {
     let index2 = reader.read_bit_short();
     let index3 = reader.read_bit_short();
     let index4 = reader.read_bit_short();
-    PfaceFaceData { index1, index2, index3, index4 }
+    PfaceFaceData { handle: crate::types::Handle::NULL, index1, index2, index3, index4 }
 }
 
 pub fn read_polygon_mesh(reader: &mut DwgMergedReader, version: DwgVersion) -> (i16, i16, i16, i16, i16, i16, i32) {
@@ -2210,23 +2213,55 @@ pub fn read_acis_entity(
             sat_data = String::from_utf8_lossy(&decoded).to_string();
             sat_data = crate::entities::solid3d::AcisData::strip_sat_terminator(&sat_data);
         } else {
-            // SAB binary — R2007+
+            // SAB binary (version=2, R2007+):
+            //
+            // The SAB data starts IMMEDIATELY here — NO BL size prefix.
+            // The data begins with "ACIS BinaryFile" header followed by
+            // the full ODA ASM binary body. The SAB data runs from the
+            // current main reader position for exactly
+            //   floor((flag_position - current_pos) / 8) bytes
+            // where flag_position = handle_start - 1.
+            //
+            // After the SAB body, the RemainingBits mod 8 = 3 trailing
+            // entity-data bits are left unread:
+            //   bit+0: wireframe_present = 0
+            //   bit+1: MSB of BL:unknown_2007 = 1  ("10" indicator)
+            //   bit+2: LSB of BL:unknown_2007 = 0
+            // The flag bit (text-stream indicator = 0) sits at bit+3 =
+            // flag_position and is written by the merged-stream writer.
+            // We return early; the caller reads handles from the handle
+            // stream (which is independent of main stream position).
             is_binary = true;
-            let total_size = reader.read_bit_long().max(0) as usize;
-            if total_size > 0 && total_size < 50_000_000 {
-                sab_data = reader.read_bytes(total_size);
+            let current_pos = reader.main_mut().position_in_bits();
+            let handle_start = reader.handle_start();
+            let remaining_bits = (handle_start - 1 - current_pos).max(0) as usize;
+            let sab_bytes = remaining_bits / 8;
+            if sab_bytes > 0 {
+                sab_data = reader.read_bytes(sab_bytes);
             }
+            return AcisEntityData {
+                acis_empty,
+                sat_data,
+                sab_data,
+                is_binary,
+                version: acis_version,
+                point: crate::types::Vector3::ZERO,
+                has_history: false,
+                wires: Vec::new(),
+                silhouettes: Vec::new(),
+            };
         }
     }
 
-    // Wireframe data
+    // Wireframe data (version=1 SAT only; version=2 SAB returns early above)
     let wireframe_present = reader.read_bit();
     let mut point = Vector3::ZERO;
     let mut wires = Vec::new();
 
     if wireframe_present {
         point = reader.read_3bit_double();
-        let num_isolines = safe_count(reader.read_bit_long());
+        let raw_isolines = reader.read_bit_long();
+        let num_isolines = safe_count(raw_isolines);
         for _ in 0..num_isolines {
             wires.push(read_wire(reader));
         }
@@ -2273,7 +2308,7 @@ pub fn read_acis_entity(
         is_binary,
         version: acis_version,
         point,
-        has_history: false, // caller sets this for 3DSOLID
+        has_history: false,
         wires,
         silhouettes,
     }

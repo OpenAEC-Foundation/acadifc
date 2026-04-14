@@ -45,8 +45,12 @@ impl<'a> DwgObjectWriter<'a> {
             | ObjectType::SpatialFilter(_)
             | ObjectType::VisualStyle(_)
             | ObjectType::Material(_)
-            | ObjectType::TableStyle(_)
-            | ObjectType::Unknown { .. } => {}
+            | ObjectType::TableStyle(_) => {}
+            ObjectType::Unknown { handle, raw_dwg_data, raw_dwg_handle_bits, .. } => {
+                if let Some(ref raw) = raw_dwg_data {
+                    self.register_raw_object(*handle, raw, *raw_dwg_handle_bits);
+                }
+            }
         }
     }
 
@@ -60,15 +64,15 @@ impl<'a> DwgObjectWriter<'a> {
     fn is_writable_object(&self, handle: &Handle) -> bool {
         match self.document.objects.get(handle) {
             None => false,
-            Some(obj) => !matches!(
-                obj,
+            Some(obj) => match obj {
                 ObjectType::GeoData(_)
-                    | ObjectType::SpatialFilter(_)
-                    | ObjectType::VisualStyle(_)
-                    | ObjectType::Material(_)
-                    | ObjectType::TableStyle(_)
-                    | ObjectType::Unknown { .. }
-            ),
+                | ObjectType::SpatialFilter(_)
+                | ObjectType::VisualStyle(_)
+                | ObjectType::Material(_)
+                | ObjectType::TableStyle(_) => false,
+                ObjectType::Unknown { raw_dwg_data, .. } => raw_dwg_data.is_some(),
+                _ => true,
+            },
         }
     }
 

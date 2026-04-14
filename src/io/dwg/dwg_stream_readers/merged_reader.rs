@@ -56,6 +56,11 @@ pub struct DwgMergedReader {
     /// `set_ref_handle()` right after reading the object's handle from the
     /// main stream.
     ref_handle: u64,
+    /// Bit position where the handle stream starts.
+    /// For R2007: equals the RL field (total_size_bits).
+    /// For R2010+: equals total_data_bits - handle_bits.
+    /// For pre-R2007: equals handle_start_bits from the constructor.
+    handle_start_bit: i64,
 }
 
 impl DwgMergedReader {
@@ -109,6 +114,7 @@ impl DwgMergedReader {
                     raw_data: None,
                     handle_bits: 0,
                     ref_handle: 0,
+                    handle_start_bit: handle_start_bits,
                 }
             }
             MergeMode::ThreeStream => {
@@ -128,6 +134,7 @@ impl DwgMergedReader {
                     raw_data: Some(data),
                     handle_bits: 0,
                     ref_handle: 0,
+                    handle_start_bit: 0,  // set later when RL is known
                 }
             }
         }
@@ -157,6 +164,7 @@ impl DwgMergedReader {
             raw_data: None,
             handle_bits: 0,
             ref_handle: 0,
+            handle_start_bit: 0,
         }
     }
 
@@ -341,6 +349,14 @@ impl DwgMergedReader {
 
     /// Get a reference to the main reader.
     pub fn main(&self) -> &DwgBitReader { &self.main }
+
+    /// Get the bit position where the handle stream starts.
+    /// For R2007: this equals the RL (total_size_bits) field.
+    /// Returns 0 if not set (pre-R2007 three-stream or no handle reader).
+    pub fn handle_start(&self) -> i64 { self.handle_start_bit }
+
+    /// Set the bit position where the handle stream starts.
+    pub fn set_handle_start(&mut self, bit: i64) { self.handle_start_bit = bit; }
 }
 
 // ════════════════════════════════════════════════════════════════════════════

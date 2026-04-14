@@ -80,6 +80,11 @@ impl ExtendedDataRecord {
 pub struct ExtendedData {
     /// Extended data records, keyed by application name
     records: Vec<ExtendedDataRecord>,
+    /// Raw DWG EED blobs captured during DWG read, used for verbatim
+    /// round-trip. Each tuple is (app_handle_value, raw_bytes).
+    /// This field is ignored by the DXF reader/writer.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub raw_dwg_eed: Vec<(u64, Vec<u8>)>,
 }
 
 impl ExtendedData {
@@ -87,6 +92,7 @@ impl ExtendedData {
     pub fn new() -> Self {
         Self {
             records: Vec::new(),
+            raw_dwg_eed: Vec::new(),
         }
     }
 
