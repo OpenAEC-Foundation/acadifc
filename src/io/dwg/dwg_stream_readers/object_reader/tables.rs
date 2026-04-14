@@ -542,7 +542,9 @@ pub fn read_view(
         let _is_ucs_associated = reader.read_bit();
     }
 
-    let view_control_handle = reader.read_handle();
+    // Xref block handle (parent/control handle is already in common data as owner)
+    let view_control_handle = 0;
+    let _xref_block = reader.read_handle();
 
     if version.r2007_plus() {
         let _camera_plottable = reader.read_bit();
@@ -584,6 +586,7 @@ pub fn read_ucs(
         (None, None, None)
     };
 
+    // External reference block handle (owner/control already in common data)
     let ucs_control_handle = reader.read_handle();
 
     if version.r2000_plus() {

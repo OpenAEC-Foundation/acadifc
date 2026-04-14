@@ -563,8 +563,11 @@ impl<'a> DwgObjectWriter<'a> {
         }
 
         // Use side-channel xdictionary if struct value is None (roundtrip preservation)
+        // Only use it if the xdictionary object actually exists in document.objects,
+        // otherwise BricsCAD reports "Object was erased" for the dangling reference.
         let effective_xdic = if xdictionary_handle.is_none() {
             self.document.xdic_by_handle.get(&handle).copied()
+                .filter(|xdic| self.document.objects.contains_key(xdic))
         } else {
             *xdictionary_handle
         };

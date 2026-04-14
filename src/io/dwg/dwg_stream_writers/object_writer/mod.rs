@@ -763,9 +763,9 @@ impl<'a> DwgObjectWriter<'a> {
             self.writer.write_bit(false);
         }
 
-        // View control handle (soft pointer)
+        // Xref block handle (H 5, null for non-xref entries)
         self.writer
-            .write_handle(DwgReferenceType::SoftPointer, self.document.views.handle().value());
+            .write_handle(DwgReferenceType::HardPointer, 0);
 
         if self.version.r2007_plus() {
             self.writer.write_bit(false); // camera plottable
@@ -814,9 +814,9 @@ impl<'a> DwgObjectWriter<'a> {
             self.writer.write_bit_short(0);     // ortho type
         }
 
-        // UCS control handle
+        // External reference block handle (null for non-xref entries)
         self.writer
-            .write_handle(DwgReferenceType::SoftPointer, self.document.ucss.handle().value());
+            .write_handle(DwgReferenceType::HardPointer, 0);
 
         if self.version.r2000_plus() {
             self.writer

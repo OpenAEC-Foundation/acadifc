@@ -2951,24 +2951,25 @@ impl<'a> DwgObjectWriter<'a> {
         self.entity_preamble(common::OBJ_3DSOLID, &e.common);
 
         let acds = self.needs_acds_section();
-        let is_sab = !acds && e.acis_data.is_binary && !e.acis_data.sab_data.is_empty();
-        if acds {
+        let sab_written = if acds {
             // AC1027+: ACIS data is stored in the AcDsPrototype_1b section.
             // Entity stream writes acis_empty=true with no inline data.
             self.write_acis_empty();
             self.queue_sab_entry(&e.acis_data, e.common.handle);
+            false
         } else {
-            self.write_acis_data(&e.acis_data, &e.wires, &e.silhouettes);
-        }
+            self.write_acis_data(&e.acis_data, &e.wires, &e.silhouettes)
+        };
 
-        // acis_empty_bit: for SAB (binary) entities this bit is NOT written here.
-        if !is_sab {
+        // SAB binary path already wrote trailing fields; skip for SAT/empty.
+        if !sab_written {
+            // acis_empty_bit — must match acis_empty
             self.writer.write_bit(acds);
-        }
 
-        // R2007+: unknown BL field (COMMON_3DSOLID)
-        if self.version.r2007_plus() {
-            self.writer.write_bit_long(0);
+            // R2007+: unknown BL field (COMMON_3DSOLID)
+            if self.version.r2007_plus() {
+                self.writer.write_bit_long(0);
+            }
         }
 
         // 3DSOLID R2007+: history_id handle
@@ -2984,22 +2985,23 @@ impl<'a> DwgObjectWriter<'a> {
         self.entity_preamble(common::OBJ_REGION, &e.common);
 
         let acds = self.needs_acds_section();
-        let is_sab = !acds && e.acis_data.is_binary && !e.acis_data.sab_data.is_empty();
-        if acds {
+        let sab_written = if acds {
             self.write_acis_empty();
             self.queue_sab_entry(&e.acis_data, e.common.handle);
+            false
         } else {
-            self.write_acis_data(&e.acis_data, &e.wires, &e.silhouettes);
-        }
+            self.write_acis_data(&e.acis_data, &e.wires, &e.silhouettes)
+        };
 
-        // acis_empty_bit: not written for SAB entities
-        if !is_sab {
+        // SAB binary path already wrote trailing fields; skip for SAT/empty.
+        if !sab_written {
+            // acis_empty_bit — must match acis_empty
             self.writer.write_bit(acds);
-        }
 
-        // R2007+: unknown BL field (COMMON_3DSOLID)
-        if self.version.r2007_plus() {
-            self.writer.write_bit_long(0);
+            // R2007+: unknown BL field (COMMON_3DSOLID)
+            if self.version.r2007_plus() {
+                self.writer.write_bit_long(0);
+            }
         }
 
         self.register_object(e.common.handle);
@@ -3009,22 +3011,23 @@ impl<'a> DwgObjectWriter<'a> {
         self.entity_preamble(common::OBJ_BODY, &e.common);
 
         let acds = self.needs_acds_section();
-        let is_sab = !acds && e.acis_data.is_binary && !e.acis_data.sab_data.is_empty();
-        if acds {
+        let sab_written = if acds {
             self.write_acis_empty();
             self.queue_sab_entry(&e.acis_data, e.common.handle);
+            false
         } else {
-            self.write_acis_data(&e.acis_data, &e.wires, &e.silhouettes);
-        }
+            self.write_acis_data(&e.acis_data, &e.wires, &e.silhouettes)
+        };
 
-        // acis_empty_bit: not written for SAB entities
-        if !is_sab {
+        // SAB binary path already wrote trailing fields; skip for SAT/empty.
+        if !sab_written {
+            // acis_empty_bit — must match acis_empty
             self.writer.write_bit(acds);
-        }
 
-        // R2007+: unknown BL field (COMMON_3DSOLID)
-        if self.version.r2007_plus() {
-            self.writer.write_bit_long(0);
+            // R2007+: unknown BL field (COMMON_3DSOLID)
+            if self.version.r2007_plus() {
+                self.writer.write_bit_long(0);
+            }
         }
 
         self.register_object(e.common.handle);
@@ -3062,52 +3065,38 @@ impl<'a> DwgObjectWriter<'a> {
 
     /// Write ACIS/SAT modeler geometry data shared by 3DSOLID, REGION, BODY.
     ///
-    /// This writes both `ENCODE_3DSOLID` (acis data) and the wireframe part
-    /// of `COMMON_3DSOLID`.  The caller must still write `acis_empty_bit`
-    /// and any version-dependent trailing fields (history_id, etc.).
-    ///
-    /// DWG entity streams always use SAT text (version 1) with the selective
-    /// 159-cipher, regardless of the DWG file version.  SAB binary is a
-    /// DXF-only concept stored in the ACDSDATA section â€” it is never written
-    /// inline in the DWG entity stream.  If the entity contains SAB data,
-    /// it is converted back to SAT text via [`SabReader`] + [`SatDocument`].
+    /// Returns `true` when SAB binary was written (version 2); the caller
+    /// must then skip `acis_empty_bit` and `unknown_2007` trailing fields.
+    /// Returns `false` for SAT (version 1); the caller writes trailing fields.
     fn write_acis_data(
         &mut self,
         acis: &AcisData,
         wires: &[Wire],
         silhouettes: &[Silhouette],
-    ) {
+    ) -> bool {
         let has_data = acis.has_data();
         self.writer.write_bit(!has_data); // acis_empty (inverted: true = empty)
 
         if has_data {
-            // R2010+: an extra unknown bit is present between acis_empty and the version BS.
-            // R2007 and earlier do NOT have this bit (for SAT path).
-            //
-            // For SAB (is_binary=true) entities the unknown bit IS present regardless
-            // of version — we write it explicitly in the SAB path below.
-            if !acis.is_binary && self.version.r2010_plus() {
-                self.writer.write_bit(false);
-            }
+            // Unknown bit — per ODA spec / LibreDWG / ACadSharp this B
+            // is always present between acis_empty and the version BS.
+            self.writer.write_bit(false);
 
-            // ── SAB binary path (R2007+ entities) ────────────────────
-            // Write version=2 + raw SAB body bytes + wireframe_present=false.
-            // The caller must NOT write the acis_empty_bit (second copy) for SAB
-            // entities; it SHOULD still write the unknown_2007 BL field.
-            // Together these produce exactly 3 entity-data trailing bits:
-            //   wireframe_present(1=0) + BL:0-MSB(1=1) + BL:0-LSB(1=0)
-            // The fourth bit (BL:0-LSB coincides with the flag_position 0-bit)
-            // is written by the merged-stream merge() as the no-text flag.
             if acis.is_binary && !acis.sab_data.is_empty() {
-                self.writer.write_bit(false); // _unknown bit (present in R2007 SAB)
-                self.writer.write_bit_short(2_i16); // version=2
-                self.writer.write_bytes(&acis.sab_data); // raw SAB body bytes
-                self.writer.write_bit(false); // wireframe_present = false (no separate wireframe)
-                return; // caller writes unknown_2007 BL:0 (2 bits) but NOT acis_empty_bit
+                // SAB binary (version 2) — write raw bytes directly.
+                // The reader computes byte count from handle_start and
+                // returns early without reading wireframe/trailing fields.
+                self.writer.write_bit_short(2_i16);
+                self.writer.write_bytes(&acis.sab_data);
+                // Trailing bits between SAB end and merged-stream flag.
+                self.writer.write_bit(false); // wireframe_present = false
+                if self.version.r2007_plus() {
+                    self.writer.write_bit_long(0); // unknown_2007 = 0
+                }
+                return true; // caller skips acis_empty_bit + unknown_2007
             }
 
-            // ── SAT text path (version=1) ─────────────────────────────
-            // DWG entity streams always use SAT text (version 1).
+            // SAT text (version 1).
             self.writer.write_bit_short(1_i16);
 
             // Obtain SAT text â€” convert from SAB if needed.
@@ -3181,8 +3170,9 @@ impl<'a> DwgObjectWriter<'a> {
             }
         }
 
-        // NOTE: acis_empty_bit is NOT written here â€” the caller writes it
-        // after this function returns, along with any entity-specific data.
+        // NOTE: acis_empty_bit is NOT written here for SAT (version 1).
+        // The caller writes it after this function returns.
+        false
     }
 
     /// Write a single wire struct (shared by wires and silhouette wires).

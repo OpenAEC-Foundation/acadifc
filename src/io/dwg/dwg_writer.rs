@@ -222,10 +222,15 @@ fn prepare_header(
         h.paper_space_block_handle = br.handle;
     }
 
-    // ── Sync current style handles (if NULL, resolve from defaults) ──
-    if h.current_layer_handle.is_null() {
-        if let Some(layer) = document.layers.get("0") {
-            h.current_layer_handle = layer.handle;
+    // ── Sync current style handles (validate against actual objects) ──
+    // CLAYER: must point to an actual layer; fall back to "0" if invalid
+    {
+        let clayer_valid = !h.current_layer_handle.is_null()
+            && document.layers.iter().any(|l| l.handle == h.current_layer_handle);
+        if !clayer_valid {
+            if let Some(layer) = document.layers.get("0") {
+                h.current_layer_handle = layer.handle;
+            }
         }
     }
     if h.current_text_style_handle.is_null() {
@@ -250,6 +255,23 @@ fn prepare_header(
                     break;
                 }
             }
+        }
+    }
+
+    // ── Validate dim linetype handles against actual linetypes ──
+    // These can become corrupt during header read/write due to stream alignment.
+    {
+        let valid_lt = |h: Handle| -> bool {
+            h.is_null() || document.line_types.iter().any(|lt| lt.handle == h)
+        };
+        if !valid_lt(h.dim_linetype_handle) {
+            h.dim_linetype_handle = Handle::NULL;
+        }
+        if !valid_lt(h.dim_linetype1_handle) {
+            h.dim_linetype1_handle = Handle::NULL;
+        }
+        if !valid_lt(h.dim_linetype2_handle) {
+            h.dim_linetype2_handle = Handle::NULL;
         }
     }
 

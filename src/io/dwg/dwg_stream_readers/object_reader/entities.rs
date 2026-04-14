@@ -2566,6 +2566,7 @@ mod tests {
     #[test]
     fn test_acis_sab_roundtrip_r2007() {
         // Test SAB binary roundtrip (version 2)
+        // The reader calculates SAB size from bit positions, not a BL prefix.
         let v = DwgVersion::AC21;
         let d = DxfVersion::AC1021;
 
@@ -2579,7 +2580,7 @@ mod tests {
         w.write_bit(false); // acis_empty = false
         w.write_bit(false); // unknown bit (per ODA/LibreDWG spec)
         w.write_bit_short(2); // acis_version = 2 (SAB binary)
-        w.write_bit_long(sab_data.len() as i32);
+        // NO BL size prefix — reader infers size from remaining bits
         w.write_bytes(&sab_data);
         w.write_bit(false); // wireframe_present = false
         w.write_bit(false); // acis_empty_bit
@@ -2587,6 +2588,7 @@ mod tests {
         let data = w.merge();
         let hsb = w.handle_start_bits();
         let mut r = DwgMergedReader::new(data, d, hsb);
+        r.set_handle_start(hsb); // required for SAB size calculation
 
         let result = read_acis_entity(&mut r, v);
         assert!(!result.acis_empty);
