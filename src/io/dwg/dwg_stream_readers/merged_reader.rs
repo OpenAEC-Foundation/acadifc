@@ -170,30 +170,25 @@ impl DwgMergedReader {
 
     /// Set up text and handle readers for ThreeStream mode.
     ///
-    /// Called after the caller reads the BL (total_size_bits) from the main stream.
-    /// The BL is written by `save_position_for_size` in the writer, after the type code.
-    /// It stores the bit position of the text-present flag relative to position 0.
+    /// Called after the caller reads the RL (total_size_bits) from the main stream.
+    /// The RL is written by `save_position_for_size` in the writer.
+    /// It stores **one past** the text-present flag bit position (same convention
+    /// as per-object records): flag is at RL − 1, handles start at the next
+    /// byte boundary after RL.
     ///
-    /// Layout: `[type_code][BL][main_data...][text...][modular_short][flag@BL][handles...]`
+    /// Layout: `[RL][main_data...][text...][modular_short][flag@RL-1][pad][handles...]`
     pub fn setup_text_and_handle(&mut self, total_size_bits: i64) {
         if let Some(ref data) = self.raw_data {
             let dwg = DwgVersion::from_dxf_version(self.dxf_version)
                 .unwrap_or(DwgVersion::AC15);
 
-            // Text reader — positioned via the flag mechanism at total_size_bits.
-            // set_position_by_flag reads the text-present flag at total_size_bits.
-            // If the flag is FALSE, the reader is marked as empty — but we still
-            // store it so that read_variable_text() returns empty strings rather
-            // than consuming text-sized data from the main stream. This preserves
-            // alignment even when the text encoding convention differs between
-            // the writing application and our reader.
+            // Text reader — the flag bit is at RL − 1 (per-object convention,
+            // matching the classes reader and object reader).
             let mut text_reader = DwgBitReader::new(data.clone(), dwg, self.dxf_version);
-            text_reader.set_position_by_flag(total_size_bits);
+            text_reader.set_position_by_flag(total_size_bits - 1);
             self.text = Some(text_reader);
 
             // Handle reader — starts at the next byte boundary after the flag bit.
-            // The writer pads to byte boundary after the flag (write_spear_shift),
-            // matching the object reader formula: ((end_bit + 1 + 7) / 8) * 8.
             let handle_start = ((total_size_bits + 1 + 7) / 8) * 8;
             let mut handle_reader = DwgBitReader::new(data.clone(), dwg, self.dxf_version);
             handle_reader.set_position_in_bits(handle_start);

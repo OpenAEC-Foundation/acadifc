@@ -834,12 +834,15 @@ mod tests {
     #[test]
     fn test_header_roundtrip_r2007() {
         // R2007+ uses three-stream merge (main + text + handle).
-        // This test verifies the reader correctly splits the streams.
-        let original = HeaderVariables::default();
+        // This test verifies the reader correctly splits the streams,
+        // including TEXT values from the separate text sub-stream.
+        let mut original = HeaderVariables::default();
+        original.fingerprint_guid = "{TEST-GUID-1234}".to_string();
+        original.version_guid = "{VERSION-GUID-5678}".to_string();
         let written = header_writer::write_header(DxfVersion::AC1021, &original, 0);
         let read = read_header(&written, DxfVersion::AC1021, 0).unwrap();
 
-        // Verify core header variables survived the three-stream roundtrip
+        // Verify numeric/boolean header variables
         assert_eq!(read.fill_mode, original.fill_mode);
         assert_eq!(read.ortho_mode, original.ortho_mode);
         assert_eq!(read.linear_unit_format, original.linear_unit_format,
@@ -855,6 +858,12 @@ mod tests {
         assert_eq!(read.insertion_units, original.insertion_units);
         assert_eq!(read.spline_segments, original.spline_segments);
         assert_eq!(read.sort_entities, original.sort_entities);
+        // Verify TEXT values survive the three-stream roundtrip (these go in the
+        // separate text sub-stream in R2007+, not inline in main).
+        assert_eq!(read.fingerprint_guid, original.fingerprint_guid,
+            "FINGERPRINTGUID should survive three-stream roundtrip");
+        assert_eq!(read.version_guid, original.version_guid,
+            "VERSIONGUID should survive three-stream roundtrip");
     }
 
     #[test]

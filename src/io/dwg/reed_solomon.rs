@@ -39,9 +39,16 @@ pub const RS_SYSTEM_K: usize = 239;
 /// Parity bytes per codeword for system pages.
 pub const RS_SYSTEM_PARITY: usize = RS_N - RS_SYSTEM_K; // 16
 
-/// First consecutive root exponent for the generator polynomial.
-/// g(x) = ∏(x − α^i) for i = FCR .. FCR + nsym − 1.
-const RS_FCR: usize = 1;
+/// First consecutive root exponent for DWG RS encoding.
+///
+/// For AC1021 pages, the on-disk parity matches when FCR equals `k`
+/// (`block_size`):
+/// - data pages: k=251
+/// - system pages: k=239
+#[inline]
+fn rs_fcr_for_block_size(block_size: usize) -> usize {
+    block_size % RS_N
+}
 
 // ---------------------------------------------------------------------------
 // GF(2^8) arithmetic
@@ -102,7 +109,7 @@ impl GfTables {
 ///
 /// Returns `nsym + 1` coefficients in descending-degree order:
 ///   gen[0] = 1 (coefficient of x^nsym), gen[nsym] = constant term.
-fn rs_generator_poly(nsym: usize, gf: &GfTables) -> Vec<u8> {
+fn rs_generator_poly(nsym: usize, fcr: usize, gf: &GfTables) -> Vec<u8> {
     // Start with g(x) = 1  →  [1]
     let mut gen = vec![0u8; nsym + 1];
     gen[0] = 1;
@@ -110,7 +117,7 @@ fn rs_generator_poly(nsym: usize, gf: &GfTables) -> Vec<u8> {
     for i in 0..nsym {
         // Multiply g(x) by (x − α^(fcr + i)).
         // In GF(2), subtraction = addition, so (x − α^k) = (x + α^k).
-        let alpha_i = gf.exp[RS_FCR + i];
+        let alpha_i = gf.exp[(fcr + i) % RS_N];
         // Multiply in-place, processing from high degree down.
         for j in (1..=i + 1).rev() {
             gen[j] = gen[j] ^ gf.mul(gen[j - 1], alpha_i);
@@ -225,7 +232,8 @@ pub fn reed_solomon_encode(
     );
 
     let gf = GfTables::new(prim_poly);
-    let gen = rs_generator_poly(nsym, &gf);
+    let fcr = rs_fcr_for_block_size(block_size);
+    let gen = rs_generator_poly(nsym, fcr, &gf);
 
     // Zero the output buffer.
     buffer.fill(0);
@@ -308,7 +316,7 @@ pub fn reed_solomon_decode(encoded: &[u8], buffer: &mut [u8], factor: usize, blo
 pub fn reed_solomon_encode_compact(data: &[u8], block_size: usize) -> Vec<u8> {
     let nsym = 255 - block_size;
     let gf = GfTables::new(RS_DATA_PRIM_POLY);
-    let gen = rs_generator_poly(nsym, &gf);
+    let gen = rs_generator_poly(nsym, rs_fcr_for_block_size(block_size), &gf);
     let n_blocks = if data.is_empty() { 0 } else { (data.len() + block_size - 1) / block_size };
 
     let mut result = Vec::with_capacity(data.len() + n_blocks * nsym);
@@ -442,7 +450,7 @@ mod tests {
     #[test]
     fn test_generator_poly_degree() {
         let gf = GfTables::new(RS_DATA_PRIM_POLY);
-        let gen = rs_generator_poly(RS_DATA_PARITY, &gf); // nsym = 4
+        let gen = rs_generator_poly(RS_DATA_PARITY, RS_DATA_K, &gf); // nsym = 4
         assert_eq!(gen.len(), RS_DATA_PARITY + 1); // degree 4 → 5 coefficients
         assert_eq!(gen[0], 1); // monic
     }
@@ -452,16 +460,17 @@ mod tests {
         // Verify that α^fcr .. α^(fcr+nsym-1) are roots of g(x).
         let gf = GfTables::new(RS_DATA_PRIM_POLY);
         let nsym = RS_DATA_PARITY; // 4
-        let gen = rs_generator_poly(nsym, &gf);
+        let fcr = RS_DATA_K;
+        let gen = rs_generator_poly(nsym, fcr, &gf);
 
         for i in 0..nsym {
-            let alpha_i = gf.exp[RS_FCR + i]; // root
+            let alpha_i = gf.exp[(fcr + i) % RS_N]; // root
             // Evaluate g(alpha_i) using Horner's method.
             let mut val: u8 = 0;
             for &coeff in &gen {
                 val = gf.mul(val, alpha_i) ^ coeff;
             }
-            assert_eq!(val, 0, "α^{} should be a root of g(x)", RS_FCR + i);
+            assert_eq!(val, 0, "α^{} should be a root of g(x)", fcr + i);
         }
     }
 
@@ -469,18 +478,19 @@ mod tests {
     fn test_generator_poly_roots_system() {
         let gf = GfTables::new(RS_SYSTEM_PRIM_POLY);
         let nsym = RS_SYSTEM_PARITY; // 16
-        let gen = rs_generator_poly(nsym, &gf);
+        let fcr = RS_SYSTEM_K;
+        let gen = rs_generator_poly(nsym, fcr, &gf);
 
         assert_eq!(gen.len(), nsym + 1);
         assert_eq!(gen[0], 1);
 
         for i in 0..nsym {
-            let alpha_i = gf.exp[RS_FCR + i];
+            let alpha_i = gf.exp[(fcr + i) % RS_N];
             let mut val: u8 = 0;
             for &coeff in &gen {
                 val = gf.mul(val, alpha_i) ^ coeff;
             }
-            assert_eq!(val, 0, "α^{} should be a root of g(x)", RS_FCR + i);
+            assert_eq!(val, 0, "α^{} should be a root of g(x)", fcr + i);
         }
     }
 
@@ -491,19 +501,20 @@ mod tests {
         // A valid codeword c(x) must satisfy c(α^i) = 0 for all roots of g(x).
         let gf = GfTables::new(RS_DATA_PRIM_POLY);
         let nsym = RS_DATA_PARITY;
-        let gen = rs_generator_poly(nsym, &gf);
+        let fcr = RS_DATA_K;
+        let gen = rs_generator_poly(nsym, fcr, &gf);
 
         let data: Vec<u8> = (1..=RS_DATA_K as u8).collect();
         let cw = rs_encode_block(&data, nsym, &gen, &gf);
 
         // Check each root.
         for r in 0..nsym {
-            let alpha_r = gf.exp[RS_FCR + r];
+            let alpha_r = gf.exp[(fcr + r) % RS_N];
             let mut syndrome: u8 = 0;
             for &byte in cw.iter() {
                 syndrome = gf.mul(syndrome, alpha_r) ^ byte;
             }
-            assert_eq!(syndrome, 0, "syndrome at root α^{} must be 0", RS_FCR + r);
+            assert_eq!(syndrome, 0, "syndrome at root α^{} must be 0", fcr + r);
         }
     }
 
@@ -512,7 +523,7 @@ mod tests {
         // Systematic encoding: data bytes must appear unchanged at the start.
         let gf = GfTables::new(RS_SYSTEM_PRIM_POLY);
         let nsym = RS_SYSTEM_PARITY;
-        let gen = rs_generator_poly(nsym, &gf);
+        let gen = rs_generator_poly(nsym, RS_SYSTEM_K, &gf);
 
         let data = vec![0x42u8; RS_SYSTEM_K];
         let cw = rs_encode_block(&data, nsym, &gen, &gf);
@@ -524,7 +535,7 @@ mod tests {
         // All-zero data should produce all-zero codeword.
         let gf = GfTables::new(RS_DATA_PRIM_POLY);
         let nsym = RS_DATA_PARITY;
-        let gen = rs_generator_poly(nsym, &gf);
+        let gen = rs_generator_poly(nsym, RS_DATA_K, &gf);
 
         let data = vec![0u8; RS_DATA_K];
         let cw = rs_encode_block(&data, nsym, &gen, &gf);
@@ -645,19 +656,20 @@ mod tests {
     fn test_encode_block_system_poly_syndromes() {
         let gf = GfTables::new(RS_SYSTEM_PRIM_POLY);
         let nsym = RS_SYSTEM_PARITY;
-        let gen = rs_generator_poly(nsym, &gf);
+        let fcr = RS_SYSTEM_K;
+        let gen = rs_generator_poly(nsym, fcr, &gf);
 
         // Random-ish data.
         let data: Vec<u8> = (0..RS_SYSTEM_K).map(|i| ((i * 37 + 5) & 0xFF) as u8).collect();
         let cw = rs_encode_block(&data, nsym, &gen, &gf);
 
         for r in 0..nsym {
-            let alpha_r = gf.exp[RS_FCR + r];
+            let alpha_r = gf.exp[(fcr + r) % RS_N];
             let mut syndrome: u8 = 0;
             for &byte in cw.iter() {
                 syndrome = gf.mul(syndrome, alpha_r) ^ byte;
             }
-            assert_eq!(syndrome, 0, "syndrome at root α^{} must be 0", RS_FCR + r);
+            assert_eq!(syndrome, 0, "syndrome at root α^{} must be 0", fcr + r);
         }
     }
 
@@ -695,7 +707,7 @@ mod tests {
         ];
 
         let gf = GfTables::new(RS_SYSTEM_PRIM_POLY);
-        let gen = rs_generator_poly(RS_SYSTEM_PARITY, &gf);
+        let gen = rs_generator_poly(RS_SYSTEM_PARITY, 1, &gf);
         // Our gen is in descending degree order: gen[0]=1 (x^16), gen[16]=constant.
         // LibreDWG's rsgen is ascending: rsgen[0]=constant, rsgen[16]=1 (x^16).
         // So gen[i] should equal libredwg_rsgen[16 - i].
@@ -718,7 +730,7 @@ mod tests {
         // This evaluates the codeword polynomial at α^1, α^2, ..., α^16 (FCR=1).
         let gf = GfTables::new(RS_SYSTEM_PRIM_POLY);
         let nsym = RS_SYSTEM_PARITY;
-        let gen = rs_generator_poly(nsym, &gf);
+        let gen = rs_generator_poly(nsym, 1, &gf);
 
         // Test vector: first 239 bytes = 0x01, 0x02, ..., 0xEF
         let data: Vec<u8> = (1..=RS_SYSTEM_K as u8).collect();

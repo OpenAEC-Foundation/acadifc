@@ -752,7 +752,7 @@ impl DwgFileHeaderWriterAC21 {
         data: &[u8],
         encoding: u64,
         data_offset: u64,
-        _max_page_size: u64,
+        max_page_size: u64,
     ) -> Result<AC21SectionPageRecord, DxfError> {
         let page_id = self.next_page_id;
         self.next_page_id += 1;
@@ -784,7 +784,7 @@ impl DwgFileHeaderWriterAC21 {
 
             Ok(AC21SectionPageRecord {
                 data_offset,
-                page_size: aligned_size as u64,
+                page_size: max_page_size,
                 page_id,
                 uncompressed_size: data.len() as u64,
                 compressed_size: data.len() as u64,
@@ -823,7 +823,7 @@ impl DwgFileHeaderWriterAC21 {
 
             Ok(AC21SectionPageRecord {
                 data_offset,
-                page_size: aligned_size as u64,
+                page_size: max_page_size,
                 page_id,
                 uncompressed_size: data.len() as u64,
                 compressed_size: comp_size,
@@ -1482,13 +1482,18 @@ mod tests {
         let section = &writer.sections[0];
         assert_eq!(section.pages.len(), writer.page_records.len());
 
+        // Section map page_size = max decompressed page size (0xF800 for AcDbObjects).
+        // Page record size = actual on-disk RS-encoded + aligned size.
+        // They are intentionally different (matches AutoCAD behavior: spec §5.2).
+        let expected_max = section.max_page_size;
         for page in &section.pages {
-            let record = writer
+            assert_eq!(page.page_size, expected_max,
+                "section map page_size should be max_page_size");
+            let _record = writer
                 .page_records
                 .iter()
                 .find(|r| r.id == page.page_id)
                 .expect("missing page record for section page");
-            assert_eq!(page.page_size, record.size as u64);
         }
     }
 
