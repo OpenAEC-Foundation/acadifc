@@ -138,6 +138,13 @@ impl SatWriter {
             SatToken::Float(v) => {
                 output.push_str(&format_float(*v));
             }
+            SatToken::Position(x, y, z) => {
+                output.push_str(&format_float(*x));
+                output.push(' ');
+                output.push_str(&format_float(*y));
+                output.push(' ');
+                output.push_str(&format_float(*z));
+            }
             _ => {
                 output.push_str(&format!("{}", token));
             }

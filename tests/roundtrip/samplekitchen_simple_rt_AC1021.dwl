@@ -1,3 +1,0 @@
-Hakan
-DESKTOP-9BBK5L1
-Çarþamba, Nisan 15, 2026 13:34:56

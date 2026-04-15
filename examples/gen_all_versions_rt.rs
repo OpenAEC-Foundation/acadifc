@@ -66,7 +66,21 @@ fn main() {
             let result = DwgWriter::write_to_vec(&doc);
             match result {
                 Ok(bytes) => {
-                    std::fs::write(&out_path, &bytes).expect("write output");
+                    let mut written = false;
+                    for attempt in 0..5 {
+                        match std::fs::write(&out_path, &bytes) {
+                            Ok(_) => { written = true; break; }
+                            Err(e) if attempt < 4 => {
+                                std::thread::sleep(std::time::Duration::from_millis(200));
+                                continue;
+                            }
+                            Err(e) => {
+                                println!("  {} → WRITE FAILED after retries: {}", ver_str, e);
+                                total_err += 1;
+                            }
+                        }
+                    }
+                    if !written { continue; }
                     // Verify: re-read
                     let mut r2 = DwgReader::from_stream(Cursor::new(&bytes));
                     match r2.read() {

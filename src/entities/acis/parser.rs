@@ -562,7 +562,7 @@ fn looks_like_negative_index(s: &str) -> bool {
 ///
 /// By inserting a synthetic `$-1` here the rest of the codebase can use
 /// a single set of token indices regardless of the source ACIS version.
-fn normalize_v400_tokens(entity_type: &str, tokens: &mut Vec<SatToken>) {
+pub(crate) fn normalize_v400_tokens(entity_type: &str, tokens: &mut Vec<SatToken>) {
     let sentinel = SatToken::Pointer(SatPointer::NULL);
     match entity_type {
         // Sentinel at position 0

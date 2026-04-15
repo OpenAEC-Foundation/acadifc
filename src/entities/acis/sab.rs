@@ -42,6 +42,9 @@ pub mod tags {
     pub const SUBTYPE: u8 = 0x0E;
     /// End of record marker.
     pub const END_OF_RECORD: u8 = 0x11;
+    /// Long string literal (4-byte u32 length prefix + bytes).
+    /// Used for transform matrices and other long text blobs.
+    pub const LONG_STRING: u8 = 0x12;
     /// Position (3 doubles: x, y, z).
     pub const POSITION: u8 = 0x13;
     /// Direction (3 doubles: x, y, z).
@@ -330,8 +333,14 @@ impl SabWriter {
     }
 
     fn write_string(buf: &mut Vec<u8>, s: &str) {
-        buf.push(tags::STRING);
-        buf.push(s.len() as u8);
+        if s.len() > 255 {
+            // Use LONG_STRING tag for strings exceeding 1-byte length
+            buf.push(tags::LONG_STRING);
+            buf.extend_from_slice(&(s.len() as u32).to_le_bytes());
+        } else {
+            buf.push(tags::STRING);
+            buf.push(s.len() as u8);
+        }
         buf.extend_from_slice(s.as_bytes());
     }
 
@@ -502,8 +511,11 @@ impl SabReader {
         let spatial_resolution = read_tagged_double(data, &mut pos)?;
         let normal_tolerance = read_tagged_double(data, &mut pos)?;
 
-        // Third tolerance only for ACIS 7.0+
-        let resfit_tolerance = if version.major >= 7 {
+        // Third tolerance (resfit) — officially ACIS 7.0+ only, but some
+        // writers (e.g. Open Design Alliance ACIS Builder) include it in
+        // older versions too.  Peek at the next byte: if it's a DOUBLE
+        // tag we read it; otherwise skip.
+        let resfit_tolerance = if pos < data.len() && data[pos] == tags::DOUBLE {
             Some(read_tagged_double(data, &mut pos)?)
         } else {
             None
@@ -542,6 +554,31 @@ impl SabReader {
             } else {
                 return Err(SabError::UnknownTag(tag, pos));
             }
+        }
+
+        // Normalize pre-7.0 SAB records to v700 token layout by inserting
+        // synthetic sentinel pointers, just like the SAT parser does.
+        // SAB v600 records have the same layout as v400 SAT text (no
+        // sentinel pointers).  The SatWriter's skip_index logic expects
+        // the v700 layout, so we must add sentinels here.
+        if version.major < 7 {
+            for record in &mut records {
+                super::parser::normalize_v400_tokens(
+                    &record.entity_type,
+                    &mut record.tokens,
+                );
+            }
+        }
+
+        // Convert SAB boolean tags (TRUE/FALSE) to ACIS SAT keywords.
+        // SAB uses binary TRUE(0x0B)/FALSE(0x0A) tags, but SAT text
+        // uses context-dependent keywords:
+        //   face:    sense (forward/reversed), side (single/double)
+        //   coedge:  sense (forward/reversed)
+        //   edge:    sense (forward/reversed)
+        //   surface: sense (forward_v/reversed_v), bounds (I/F)
+        for record in &mut records {
+            convert_sab_booleans(&record.entity_type, &mut record.tokens);
         }
 
         Ok(SatDocument {
@@ -637,9 +674,37 @@ impl SabReader {
                 pos += 1;
                 break;
             }
-            let (token, new_pos) = Self::read_token(data, pos)?;
-            tokens.push(token);
-            pos = new_pos;
+            // LONG_STRING (tag 0x12): expand the embedded text into
+            // individual sub-tokens instead of storing as one String.
+            // SAB uses LONG_STRING for transform matrices, intcurve data,
+            // etc.  The content is space-separated SAT-style tokens
+            // (floats, keywords like no_rotate/no_reflect/no_shear).
+            if tag == tags::LONG_STRING {
+                pos += 1;
+                let len = read_u32(data, &mut pos)? as usize;
+                if pos + len > data.len() {
+                    return Err(SabError::UnexpectedEof);
+                }
+                let s = std::str::from_utf8(&data[pos..pos + len])
+                    .map_err(|_| SabError::InvalidString)?;
+                pos += len;
+                // Parse space-separated tokens from the embedded text
+                for part in s.split_whitespace() {
+                    if let Ok(v) = part.parse::<f64>() {
+                        tokens.push(SatToken::Float(v));
+                    } else if part.starts_with('$') {
+                        // Embedded pointer reference (rare but possible)
+                        let idx: i32 = part[1..].parse().unwrap_or(-1);
+                        tokens.push(SatToken::Pointer(SatPointer::new(idx)));
+                    } else {
+                        tokens.push(SatToken::Ident(part.to_string()));
+                    }
+                }
+            } else {
+                let (token, new_pos) = Self::read_token(data, pos)?;
+                tokens.push(token);
+                pos = new_pos;
+            }
         }
 
         Ok((
@@ -697,9 +762,162 @@ impl SabReader {
                 let z = read_f64(data, &mut pos)?;
                 Ok((SatToken::Position(x, y, z), pos))
             }
+            tags::LONG_STRING => {
+                // 4-byte u32 length prefix + raw text bytes
+                let len = read_u32(data, &mut pos)? as usize;
+                if pos + len > data.len() {
+                    return Err(SabError::UnexpectedEof);
+                }
+                let s = std::str::from_utf8(&data[pos..pos + len])
+                    .map_err(|_| SabError::InvalidString)?
+                    .to_string();
+                pos += len;
+                Ok((SatToken::String(s), pos))
+            }
             tags::END_OF_RECORD => Ok((SatToken::Terminator, pos)),
             _ => Err(SabError::UnknownTag(tag, pos - 1)),
         }
+    }
+}
+
+// ============================================================================
+// SAB boolean → SAT keyword conversion
+// ============================================================================
+
+/// Convert SAB TRUE/FALSE tokens to ACIS SAT keywords based on entity context.
+///
+/// SAB binary uses generic TRUE(0x0B)/FALSE(0x0A) tags for all boolean fields.
+/// SAT text uses context-dependent keywords:
+///   - face sense: `forward` / `reversed`
+///   - face side: `single` / `double`
+///   - coedge sense: `forward` / `reversed`
+///   - edge sense: `forward` / `reversed`
+///   - surface sense: `forward_v` / `reversed_v`
+///   - surface bounds: `I` (infinite) / `F` (finite)
+fn convert_sab_booleans(entity_type: &str, tokens: &mut Vec<SatToken>) {
+    match entity_type {
+        "face" => {
+            // face: ... sense side #
+            // After v700 normalization: tok[0]=sentinel, tok[1..N-2]=ptrs,
+            // tok[N-2]=sense, tok[N-1]=side
+            let len = tokens.len();
+            if len >= 2 {
+                // sense: True=forward, False=reversed
+                if matches!(tokens[len - 2], SatToken::True | SatToken::False) {
+                    let is_forward = matches!(tokens[len - 2], SatToken::True);
+                    tokens[len - 2] = SatToken::Enum(
+                        if is_forward { "forward" } else { "reversed" }.to_string(),
+                    );
+                }
+                // side: True=single, False=double
+                if matches!(tokens[len - 1], SatToken::True | SatToken::False) {
+                    let is_single = matches!(tokens[len - 1], SatToken::True);
+                    tokens[len - 1] = SatToken::Enum(
+                        if is_single { "single" } else { "double" }.to_string(),
+                    );
+                }
+            }
+        }
+        "coedge" => {
+            // coedge: ... $edge sense $loop $pcurve #
+            // Find the first True/False token and convert to sense
+            for token in tokens.iter_mut() {
+                if matches!(token, SatToken::True | SatToken::False) {
+                    let is_forward = matches!(token, SatToken::True);
+                    *token = SatToken::Enum(
+                        if is_forward { "forward" } else { "reversed" }.to_string(),
+                    );
+                    break; // only the first boolean is sense
+                }
+            }
+        }
+        "edge" => {
+            // edge: ... $coedge $curve sense convexity unknown #
+            // Find True/False tokens: first is sense
+            for token in tokens.iter_mut() {
+                if matches!(token, SatToken::True | SatToken::False) {
+                    let is_forward = matches!(token, SatToken::True);
+                    *token = SatToken::Enum(
+                        if is_forward { "forward" } else { "reversed" }.to_string(),
+                    );
+                    break;
+                }
+            }
+        }
+        "cone-surface" => {
+            // cone-surface in v400: bool layout is position-dependent.
+            // SAB stores booleans at the same structural positions as SAT, but
+            // v600 and v400 interpret them differently:
+            //   bool 0,1 → bounds (I/F)
+            //   bool 2   → sense (forward/reversed)
+            //   bool 3+  → bounds (I/F)
+            let mut bool_idx = 0u32;
+            for token in tokens.iter_mut() {
+                if matches!(token, SatToken::True | SatToken::False) {
+                    let is_true = matches!(token, SatToken::True);
+                    *token = if bool_idx == 2 {
+                        SatToken::Enum(
+                            if is_true { "forward" } else { "reversed" }.to_string(),
+                        )
+                    } else {
+                        SatToken::Enum(if is_true { "I" } else { "F" }.to_string())
+                    };
+                    bool_idx += 1;
+                }
+            }
+        }
+        _ if entity_type.ends_with("-surface") => {
+            // Generic surface: first bool = sense (forward_v/reverse_v),
+            // remaining bools = bound infinity (I/F).
+            // Note: v400 ACIS uses "reverse_v" (not "reversed_v").
+            let mut first = true;
+            for token in tokens.iter_mut() {
+                if matches!(token, SatToken::True | SatToken::False) {
+                    if first {
+                        let is_forward = matches!(token, SatToken::True);
+                        *token = SatToken::Enum(
+                            if is_forward { "forward_v" } else { "reverse_v" }.to_string(),
+                        );
+                        first = false;
+                    } else {
+                        let is_infinite = matches!(token, SatToken::True);
+                        *token = SatToken::Enum(
+                            if is_infinite { "I" } else { "F" }.to_string(),
+                        );
+                    }
+                }
+            }
+        }
+        _ if entity_type.ends_with("-curve") => {
+            // Curve entities have varying boolean layouts:
+            //
+            // straight-curve, ellipse-curve: all booleans are bounds (I/F).
+            //   In v400, ellipse-curve has no sense — just 2 bounds.
+            //
+            // intcurve-curve, bs2-curve, bs3-curve: first bool = sense, rest = bounds.
+            let has_sense =
+                entity_type != "straight-curve" && entity_type != "ellipse-curve";
+            let mut found_sense = false;
+            for token in tokens.iter_mut() {
+                if matches!(token, SatToken::True | SatToken::False) {
+                    if has_sense && !found_sense {
+                        // First boolean is sense for curves that have it
+                        let is_forward = matches!(token, SatToken::True);
+                        *token = SatToken::Enum(
+                            if is_forward { "forward" } else { "reversed" }.to_string(),
+                        );
+                        found_sense = true;
+                    } else {
+                        // Bound: True=Infinite(I), False=Finite(F)
+                        let is_infinite = matches!(token, SatToken::True);
+                        *token = SatToken::Enum(
+                            if is_infinite { "I" } else { "F" }.to_string(),
+                        );
+                    }
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -869,16 +1087,16 @@ mod tests {
         let sab = SabWriter::write(&doc);
         let roundtrip = SabReader::read(&sab).unwrap();
 
-        // forward/single → True, True
+        // forward/single → Enum("forward"), Enum("single")
         let face1 = &roundtrip.records[0];
         let last_two: Vec<_> = face1.tokens.iter().rev().take(2).collect();
-        assert!(matches!(last_two[0], SatToken::True));
-        assert!(matches!(last_two[1], SatToken::True));
+        assert_eq!(last_two[0], &SatToken::Enum("single".to_string()));
+        assert_eq!(last_two[1], &SatToken::Enum("forward".to_string()));
 
-        // reversed/double → False, False
+        // reversed/double → Enum("reversed"), Enum("double")
         let face2 = &roundtrip.records[1];
         let last_two: Vec<_> = face2.tokens.iter().rev().take(2).collect();
-        assert!(matches!(last_two[0], SatToken::False));
-        assert!(matches!(last_two[1], SatToken::False));
+        assert_eq!(last_two[0], &SatToken::Enum("double".to_string()));
+        assert_eq!(last_two[1], &SatToken::Enum("reversed".to_string()));
     }
 }
