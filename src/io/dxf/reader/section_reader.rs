@@ -578,6 +578,12 @@ impl<'a> SectionReader<'a> {
                         }
 
                         // Find the BlockRecord and set handles
+                        if document.block_records.get(&block_name).is_none() {
+                            let mut br = BlockRecord::new(block_name.clone());
+                            br.handle = document.allocate_handle();
+                            document.block_records.add_or_replace(br);
+                        }
+
                         if let Some(block_record) = document.block_records.get_mut(&block_name) {
                             block_record.entity_handles = entity_handles;
                             block_record.xref_path = block.xref_path.clone();
