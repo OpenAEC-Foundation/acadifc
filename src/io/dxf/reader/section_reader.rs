@@ -342,15 +342,24 @@ impl<'a> SectionReader<'a> {
         Ok(())
     }
 
-    /// Read a 3D point header variable (three successive code/value pairs: 10/20/30)
+    /// Read a 3D point header variable (up to three successive code/value pairs: 10/20/30).
+    /// Older formats (e.g. AC1009/R12) may only supply X and Y for variables like $EXTMIN/$EXTMAX.
+    /// Non-coordinate pairs (code 9 = next variable name, code 0 = section end, etc.) are pushed
+    /// back so the main header loop can process them normally.
     fn read_header_point3(&mut self, target: &mut Vector3) -> Result<()> {
         for _ in 0..3 {
             if let Some(p) = self.reader.read_pair()? {
-                if let Some(v) = p.as_double() {
-                    let base = p.code % 100;
-                    if base < 10 || base == 10 { target.x = v; }
-                    else if base >= 20 && base < 30 { target.y = v; }
-                    else { target.z = v; }
+                let base = p.code % 100;
+                // Coordinate codes are 10–39 (X=1x, Y=2x, Z=3x); anything else belongs to the next token
+                if base >= 10 && base < 40 {
+                    if let Some(v) = p.as_double() {
+                        if base < 20 { target.x = v; }
+                        else if base < 30 { target.y = v; }
+                        else { target.z = v; }
+                    }
+                } else {
+                    self.reader.push_back(p);
+                    break;
                 }
             }
         }
