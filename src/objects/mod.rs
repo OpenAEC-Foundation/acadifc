@@ -156,6 +156,14 @@ pub struct Layout {
     /// pairs on read and replay them verbatim on write.
     #[cfg_attr(feature = "serde", serde(skip))]
     pub raw_plot_settings_codes: Option<Vec<(i32, String)>>,
+    /// Physical paper width in mm (from embedded PlotSettings, code 44).
+    /// Zero means unknown / not read from the file.
+    pub paper_width: f64,
+    /// Physical paper height in mm (from embedded PlotSettings, code 45).
+    /// Zero means unknown / not read from the file.
+    pub paper_height: f64,
+    /// Plot rotation from PlotSettings (code 73): 0=none, 1=90°, 2=180°, 3=270°.
+    pub plot_rotation: i16,
 }
 
 impl Layout {
@@ -182,6 +190,9 @@ impl Layout {
             reactors: Vec::new(),
             xdictionary_handle: None,
             raw_plot_settings_codes: None,
+            paper_width: 0.0,
+            paper_height: 0.0,
+            plot_rotation: 0,
         }
     }
 }

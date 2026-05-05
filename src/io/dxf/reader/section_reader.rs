@@ -342,24 +342,15 @@ impl<'a> SectionReader<'a> {
         Ok(())
     }
 
-    /// Read a 3D point header variable (up to three successive code/value pairs: 10/20/30).
-    /// Older formats (e.g. AC1009/R12) may only supply X and Y for variables like $EXTMIN/$EXTMAX.
-    /// Non-coordinate pairs (code 9 = next variable name, code 0 = section end, etc.) are pushed
-    /// back so the main header loop can process them normally.
+    /// Read a 3D point header variable (three successive code/value pairs: 10/20/30)
     fn read_header_point3(&mut self, target: &mut Vector3) -> Result<()> {
         for _ in 0..3 {
             if let Some(p) = self.reader.read_pair()? {
-                let base = p.code % 100;
-                // Coordinate codes are 10–39 (X=1x, Y=2x, Z=3x); anything else belongs to the next token
-                if base >= 10 && base < 40 {
-                    if let Some(v) = p.as_double() {
-                        if base < 20 { target.x = v; }
-                        else if base < 30 { target.y = v; }
-                        else { target.z = v; }
-                    }
-                } else {
-                    self.reader.push_back(p);
-                    break;
+                if let Some(v) = p.as_double() {
+                    let base = p.code % 100;
+                    if base < 10 || base == 10 { target.x = v; }
+                    else if base >= 20 && base < 30 { target.y = v; }
+                    else { target.z = v; }
                 }
             }
         }
@@ -578,14 +569,8 @@ impl<'a> SectionReader<'a> {
                         // Insert block entities into the document's flat entity map
                         // and collect their handles for the block record.
                         let mut entity_handles = Vec::with_capacity(block_entities.len());
-                        for mut entity in block_entities {
-                            let h = if entity.common().handle.is_null() {
-                                let new_h = document.allocate_handle();
-                                entity.as_entity_mut().set_handle(new_h);
-                                new_h
-                            } else {
-                                entity.common().handle
-                            };
+                        for entity in block_entities {
+                            let h = entity.common().handle;
                             entity_handles.push(h);
                             let idx = document.entities.len();
                             document.entities.push(entity);
@@ -593,12 +578,6 @@ impl<'a> SectionReader<'a> {
                         }
 
                         // Find the BlockRecord and set handles
-                        if document.block_records.get(&block_name).is_none() {
-                            let mut br = BlockRecord::new(block_name.clone());
-                            br.handle = document.allocate_handle();
-                            document.block_records.add_or_replace(br);
-                        }
-
                         if let Some(block_record) = document.block_records.get_mut(&block_name) {
                             block_record.entity_handles = entity_handles;
                             block_record.xref_path = block.xref_path.clone();
@@ -1368,6 +1347,14 @@ impl<'a> SectionReader<'a> {
         }
 
         if !plot_settings_codes.is_empty() {
+            for &(code, ref val) in &plot_settings_codes {
+                match code {
+                    44 => { if let Ok(v) = val.parse::<f64>() { layout.paper_width  = v; } }
+                    45 => { if let Ok(v) = val.parse::<f64>() { layout.paper_height = v; } }
+                    73 => { if let Ok(v) = val.parse::<i16>() { layout.plot_rotation = v; } }
+                    _ => {}
+                }
+            }
             layout.raw_plot_settings_codes = Some(plot_settings_codes);
         }
 

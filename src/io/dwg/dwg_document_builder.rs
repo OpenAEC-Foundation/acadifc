@@ -2028,6 +2028,9 @@ impl DwgDocumentBuilder {
                     obj.ucs_ortho_type = data.ucs_ortho_type;
                     obj.block_record = Handle::from(data.block_record_handle);
                     obj.viewport = Handle::from(data.viewport_handle);
+                    obj.paper_width   = data.plot_settings.paper_width;
+                    obj.paper_height  = data.plot_settings.paper_height;
+                    obj.plot_rotation = data.plot_settings.rotation;
                     document.objects.insert(
                         Handle::from(handle),
                         crate::objects::ObjectType::Layout(obj),
