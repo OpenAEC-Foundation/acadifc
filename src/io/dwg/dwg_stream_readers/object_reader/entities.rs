@@ -1280,7 +1280,12 @@ pub fn read_hatch_boundary_path(reader: &mut DwgMergedReader, version: DwgVersio
         }
     }
 
-    let boundary_handle_count = reader.read_bit_long();
+    // Cap the boundary-handle count to a sane upper bound. Corrupt /
+    // misaligned hatch records have been seen to emit ~1.9 × 10^9 here,
+    // which spins read_handle() for tens of seconds per record. AutoCAD
+    // hatches realistically carry well under MAX_ARRAY_COUNT (100k)
+    // associative boundary references.
+    let boundary_handle_count = safe_count(reader.read_bit_long());
 
     HatchBoundaryPath { flags, edges, polyline_vertices, polyline_closed, boundary_handle_count }
 }
