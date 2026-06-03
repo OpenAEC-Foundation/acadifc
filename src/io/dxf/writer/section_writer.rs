@@ -549,6 +549,17 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         Ok(())
     }
 
+    /// Persist the annotative flag as XDATA under the `ACAD_ANNOTATIVE`
+    /// application. Only written when the record is annotative; its absence on
+    /// read means non-annotative.
+    fn write_annotative_xdata(&mut self, annotative: bool) -> Result<()> {
+        if annotative {
+            self.writer.write_string(1001, "ACAD_ANNOTATIVE")?;
+            self.writer.write_i16(1070, 1)?;
+        }
+        Ok(())
+    }
+
     fn write_style_entry(&mut self, style: &TextStyle, owner: Handle) -> Result<()> {
         self.writer.write_string(0, "STYLE")?;
         self.write_common_table_data(style.handle(), owner)?;
@@ -566,6 +577,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_double(42, style.effective_last_height())?;
         self.writer.write_string(3, &style.font_file)?;
         self.writer.write_string(4, &style.big_font_file)?;
+        self.write_annotative_xdata(style.annotative)?;
 
         Ok(())
     }
@@ -782,6 +794,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // Line weights
         self.writer.write_i16(371, dimstyle.dimlwd)?;
         self.writer.write_i16(372, dimstyle.dimlwe)?;
+        self.write_annotative_xdata(dimstyle.annotative)?;
 
         Ok(())
     }
@@ -2878,6 +2891,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
         // Break gap size
         self.writer.write_double(143, style.break_gap_size)?;
+        self.write_annotative_xdata(style.is_annotative)?;
 
         Ok(())
     }
@@ -2923,6 +2937,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
         // Write cell style info for title row
         self.write_table_cell_style("TITLE", &style.title_row_style)?;
+        self.write_annotative_xdata(style.annotative)?;
 
         Ok(())
     }

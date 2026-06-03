@@ -2151,3 +2151,97 @@ fn roundtrip_vport_render_mode() {
         "DWG lost GouraudShadedWithEdges: {dwg:?}"
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Annotative flag round-trip (TextStyle / DimStyle / MLeaderStyle / TableStyle)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Populate a document with an annotative variant of each style record.
+fn build_annotative_document() -> CadDocument {
+    use acadrust::objects::{MultiLeaderStyle, ObjectType, TableStyle};
+    let mut doc = CadDocument::with_version(DxfVersion::AC1032);
+
+    if let Some(s) = doc.text_styles.get_mut("Standard") {
+        s.annotative = true;
+    }
+    if let Some(d) = doc.dim_styles.get_mut("Standard") {
+        d.annotative = true;
+    }
+
+    let mut mls = MultiLeaderStyle::new("AnnoML");
+    mls.handle = doc.allocate_handle();
+    mls.is_annotative = true;
+    doc.objects
+        .insert(mls.handle, ObjectType::MultiLeaderStyle(mls));
+
+    let mut tbs = TableStyle::new("AnnoTS");
+    tbs.handle = doc.allocate_handle();
+    tbs.annotative = true;
+    doc.objects.insert(tbs.handle, ObjectType::TableStyle(tbs));
+
+    doc
+}
+
+fn assert_annotative_preserved(doc: &CadDocument, label: &str) {
+    use acadrust::objects::ObjectType;
+    assert!(
+        doc.text_styles.get("Standard").map(|s| s.annotative).unwrap_or(false),
+        "{label}: text style annotative flag lost"
+    );
+    assert!(
+        doc.dim_styles.get("Standard").map(|d| d.annotative).unwrap_or(false),
+        "{label}: dim style annotative flag lost"
+    );
+    let ml = doc.objects.values().find_map(|o| match o {
+        ObjectType::MultiLeaderStyle(s) => Some(s),
+        _ => None,
+    });
+    assert!(
+        ml.map(|s| s.is_annotative).unwrap_or(false),
+        "{label}: multileader style annotative flag lost"
+    );
+    let ts = doc.objects.values().find_map(|o| match o {
+        ObjectType::TableStyle(s) => Some(s),
+        _ => None,
+    });
+    assert!(
+        ts.map(|s| s.annotative).unwrap_or(false),
+        "{label}: table style annotative flag lost"
+    );
+}
+
+#[test]
+fn dxf_roundtrip_annotative_styles() {
+    let doc = build_annotative_document();
+    let rt = dxf_roundtrip(doc);
+    assert_annotative_preserved(&rt, "DXF");
+}
+
+// DWG annotative round-trip is blocked on a pre-existing gap: `TableStyle`
+// objects are not serialized to DWG at all (they sit in the writer's
+// "unsupported objects — skip" list, see object_writer/objects.rs). Until
+// TableStyle has a full DWG writer, annotative-on-table cannot survive a DWG
+// round-trip, so this whole-suite assertion can't pass. The annotative EED
+// hook for the field-by-field records (Text/Dim/MLeader) is the smaller part;
+// the blocker is TableStyle DWG serialization.
+#[test]
+#[ignore = "DWG TableStyle serialization not implemented; annotative-in-DWG pending that"]
+fn dwg_roundtrip_annotative_styles() {
+    let doc = build_annotative_document();
+    let rt = dwg_roundtrip(&doc);
+    assert_annotative_preserved(&rt, "DWG");
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+

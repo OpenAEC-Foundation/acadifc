@@ -1761,6 +1761,7 @@ impl<'a> SectionReader<'a> {
                         style.last_height = lh;
                     }
                 }
+                1001 => { if pair.value_string == "ACAD_ANNOTATIVE" { style.annotative = true; } }
                 _ => {}
             }
         }
@@ -1981,6 +1982,7 @@ impl<'a> SectionReader<'a> {
                 347 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { ds.dimltex2_handle = Handle::new(h); } }
                 371 => { if let Some(v) = pair.as_i16() { ds.dimlwd = v; } }
                 372 => { if let Some(v) = pair.as_i16() { ds.dimlwe = v; } }
+                1001 => { if pair.value_string == "ACAD_ANNOTATIVE" { ds.annotative = true; } }
                 _ => {}
             }
         }
@@ -5417,6 +5419,7 @@ impl<'a> SectionReader<'a> {
                 341 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { style.arrowhead_handle = Some(Handle::new(h)); } }
                 342 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { style.text_style_handle = Some(Handle::new(h)); } }
                 343 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { style.block_content_handle = Some(Handle::new(h)); } }
+                1001 => { if pair.value_string == "ACAD_ANNOTATIVE" { style.is_annotative = true; } }
                 _ => {}
             }
         }
@@ -5467,6 +5470,7 @@ impl<'a> SectionReader<'a> {
                 3 => ts.name = pair.value_string.clone(),
                 40 => { if let Some(v) = pair.as_double() { ts.horizontal_margin = v; } }
                 41 => { if let Some(v) = pair.as_double() { ts.vertical_margin = v; } }
+                1001 => { if pair.value_string == "ACAD_ANNOTATIVE" { ts.annotative = true; } }
                 _ => {}
             }
         }
