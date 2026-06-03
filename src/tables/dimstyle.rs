@@ -188,6 +188,9 @@ pub struct DimStyle {
 
     /// Obsolete DIMUNIT (code 270)
     pub dimunit: i16,
+    /// Annotative: dimensions using this style scale with the annotation scale.
+    /// Persisted via the record's extension-dictionary `AnnotativeData` XRECORD.
+    pub annotative: bool,
 }
 
 impl DimStyle {
@@ -285,6 +288,7 @@ impl DimStyle {
             dimltex2_handle: Handle::NULL,
             // Obsolete
             dimunit: 2,
+            annotative: false,
         }
     }
 
