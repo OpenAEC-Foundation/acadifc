@@ -2224,10 +2224,17 @@ fn dxf_roundtrip_annotative_styles() {
 }
 
 #[test]
-fn dwg_roundtrip_annotative_mleader() {
-    // MLEADERSTYLE carries annotative as a native DWG bit, so it round-trips.
-    // (STYLE/DIMSTYLE via AcadAnnotative EED and TABLESTYLE DWG serialization
-    // are tracked separately.)
+fn dwg_roundtrip_annotative_styles() {
+    // MLEADERSTYLE: native DWG bit. STYLE/DIMSTYLE: AcadAnnotative EED.
+    // (TABLESTYLE is not yet serialized to DWG — tracked separately.)
     let rt = dwg_roundtrip(&build_annotative_document());
+    assert!(
+        rt.text_styles.get("Standard").map(|s| s.annotative).unwrap_or(false),
+        "DWG: text style annotative lost"
+    );
+    assert!(
+        rt.dim_styles.get("Standard").map(|d| d.annotative).unwrap_or(false),
+        "DWG: dim style annotative lost"
+    );
     assert!(mleader_is_annotative(&rt), "DWG: mleader style annotative lost");
 }

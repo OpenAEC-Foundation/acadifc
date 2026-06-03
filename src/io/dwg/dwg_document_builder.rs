@@ -960,6 +960,36 @@ impl DwgDocumentBuilder {
             document.header.handle_seed = max_from_reader + 1;
         }
 
+        // ── Annotative flag from `AcadAnnotative` EED (STYLE / DIMSTYLE) ──
+        // These records have no native annotative field; the flag is stored as
+        // extended data under the `AcadAnnotative` application.
+        if let Some(anno_h) = document.app_ids.get("AcadAnnotative").map(|a| a.handle.value()) {
+            let wide = self.obj_reader.version().r2007_plus();
+            let flags: std::collections::HashMap<Handle, bool> = document
+                .eed_by_handle
+                .iter()
+                .filter_map(|(h, blocks)| {
+                    blocks
+                        .iter()
+                        .find(|(a, _)| *a == anno_h)
+                        .and_then(|(_, bytes)| {
+                            crate::io::dwg::annotative_eed::decode_flag(bytes, wide)
+                        })
+                        .map(|f| (*h, f))
+                })
+                .collect();
+            for ts in document.text_styles.iter_mut() {
+                if let Some(&f) = flags.get(&ts.handle) {
+                    ts.annotative = f;
+                }
+            }
+            for ds in document.dim_styles.iter_mut() {
+                if let Some(&f) = flags.get(&ds.handle) {
+                    ds.annotative = f;
+                }
+            }
+        }
+
         self.notifications
     }
 

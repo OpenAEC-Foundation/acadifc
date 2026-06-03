@@ -603,12 +603,14 @@ impl<'a> DwgObjectWriter<'a> {
     }
 
     fn write_text_style(&mut self, style: &crate::tables::TextStyle) {
-        self.write_common_non_entity_data(
+        let anno = self.annotative_eed_block(style.annotative);
+        self.write_common_non_entity_data_eed(
             common::OBJ_STYLE,
             style.handle,
             self.document.text_styles.handle(),
             &[],
             &None,
+            anno,
         );
 
         // Entry name
@@ -1101,12 +1103,14 @@ impl<'a> DwgObjectWriter<'a> {
     }
 
     fn write_dimstyle(&mut self, ds: &crate::tables::DimStyle) {
-        self.write_common_non_entity_data(
+        let anno = self.annotative_eed_block(ds.annotative);
+        self.write_common_non_entity_data_eed(
             common::OBJ_DIMSTYLE,
             ds.handle,
             self.document.dim_styles.handle(),
             &[],
             &None,
+            anno,
         );
 
         // Common: Entry name TV 2
