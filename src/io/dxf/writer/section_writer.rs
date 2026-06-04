@@ -264,6 +264,10 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.write_header_variable("$PLIMCHECK", |w| w.write_i16(70, if hdr.paper_space_limit_check { 1 } else { 0 }))?;
         self.write_header_variable("$VISRETAIN", |w| w.write_i16(70, if hdr.retain_xref_visibility { 1 } else { 0 }))?;
 
+        // === Current annotation scale (R2008+) ===
+        self.write_header_variable("$CANNOSCALE", |w| w.write_string(1, &hdr.current_annotation_scale))?;
+        self.write_header_variable("$CANNOSCALEVALUE", |w| w.write_double(40, hdr.annotation_scale_value))?;
+
         // === Time ===
         self.write_header_variable("$TDCREATE", |w| w.write_double(40, hdr.create_date_julian))?;
         self.write_header_variable("$TDUPDATE", |w| w.write_double(40, hdr.update_date_julian))?;

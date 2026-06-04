@@ -194,6 +194,8 @@ impl<'a> SectionReader<'a> {
                 "$USERR4" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_double() { hdr.user_real4 = v; } } }
                 "$USERR5" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_double() { hdr.user_real5 = v; } } }
                 "$PSVPSCALE" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_double() { hdr.viewport_scale_factor = v; } } }
+                "$CANNOSCALE" => { if let Some(p) = self.reader.read_pair()? { hdr.current_annotation_scale = p.value_string.clone(); } }
+                "$CANNOSCALEVALUE" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_double() { hdr.annotation_scale_value = v; } } }
                 "$SHADOWPLANELOCATION" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_double() { hdr.shadow_plane_location = v; } } }
                 "$LOFTANG1" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_double() { hdr.loft_angle1 = v; } } }
                 "$LOFTANG2" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_double() { hdr.loft_angle2 = v; } } }
