@@ -194,6 +194,8 @@ impl<'a> SectionReader<'a> {
                 "$USERR4" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_double() { hdr.user_real4 = v; } } }
                 "$USERR5" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_double() { hdr.user_real5 = v; } } }
                 "$PSVPSCALE" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_double() { hdr.viewport_scale_factor = v; } } }
+                "$CANNOSCALE" => { if let Some(p) = self.reader.read_pair()? { hdr.current_annotation_scale = p.value_string.clone(); } }
+                "$CANNOSCALEVALUE" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_double() { hdr.annotation_scale_value = v; } } }
                 "$SHADOWPLANELOCATION" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_double() { hdr.shadow_plane_location = v; } } }
                 "$LOFTANG1" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_double() { hdr.loft_angle1 = v; } } }
                 "$LOFTANG2" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_double() { hdr.loft_angle2 = v; } } }
@@ -1761,6 +1763,11 @@ impl<'a> SectionReader<'a> {
                         style.last_height = lh;
                     }
                 }
+                1001 => {
+                    if pair.value_string == "AcadAnnotative" {
+                        style.annotative = self.read_annotative_xdata(pair)?;
+                    }
+                }
                 _ => {}
             }
         }
@@ -1981,6 +1988,7 @@ impl<'a> SectionReader<'a> {
                 347 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { ds.dimltex2_handle = Handle::new(h); } }
                 371 => { if let Some(v) = pair.as_i16() { ds.dimlwd = v; } }
                 372 => { if let Some(v) = pair.as_i16() { ds.dimlwe = v; } }
+                1001 => { if pair.value_string == "AcadAnnotative" { ds.annotative = self.read_annotative_xdata(pair)?; } }
                 _ => {}
             }
         }
@@ -2088,6 +2096,7 @@ impl<'a> SectionReader<'a> {
 
     /// Read VPORT table
     fn read_vport_table(&mut self, document: &mut CadDocument) -> Result<()> {
+        document.vports.clear();
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 && pair.value_string == "ENDTAB" {
                 break;
@@ -2095,7 +2104,7 @@ impl<'a> SectionReader<'a> {
 
             if pair.code == 0 && pair.value_string == "VPORT" {
                 if let Some(vport) = self.read_vport_entry()? {
-                    document.vports.add_or_replace(vport);
+                    document.vports.add_allow_duplicate(vport);
                 }
             }
         }
@@ -2147,6 +2156,7 @@ impl<'a> SectionReader<'a> {
                 76 => { if let Some(v) = pair.as_i16() { vport.grid_on = v != 0; } }
                 77 => { if let Some(v) = pair.as_i16() { vport.snap_style = v != 0; } }
                 78 => { if let Some(v) = pair.as_i16() { vport.snap_isopair = v; } }
+                281 => { if let Some(v) = pair.as_i16() { vport.render_mode = ViewportRenderMode::from_value(v); } }
                 _ => {}
             }
         }
@@ -4583,6 +4593,36 @@ impl<'a> SectionReader<'a> {
         Ok((xdata, None))
     }
 
+    /// Parse the `AcadAnnotative` XDATA following a `1001` pair on a style
+    /// record and return its annotative flag. The block has the form
+    /// `AnnotativeData { 1 <flag> }`; the flag is the last 16-bit integer.
+    /// The terminating non-XDATA pair is pushed back for the caller's loop.
+    fn read_annotative_xdata(
+        &mut self,
+        pair: super::stream_reader::DxfCodePair,
+    ) -> Result<bool> {
+        use crate::xdata::XDataValue;
+        self.reader.push_back(pair);
+        let (xdata, next_pair) = self.read_extended_data()?;
+        if let Some(p) = next_pair {
+            self.reader.push_back(p);
+        }
+        let flag = xdata
+            .get_record("AcadAnnotative")
+            .and_then(|r| {
+                r.values
+                    .iter()
+                    .filter_map(|v| match v {
+                        XDataValue::Integer16(n) => Some(*n),
+                        _ => None,
+                    })
+                    .last()
+            })
+            .map(|n| n != 0)
+            .unwrap_or(false);
+        Ok(flag)
+    }
+
     // ===== New Entity Readers =====
 
     /// Read a VIEWPORT entity
@@ -5415,6 +5455,7 @@ impl<'a> SectionReader<'a> {
                 341 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { style.arrowhead_handle = Some(Handle::new(h)); } }
                 342 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { style.text_style_handle = Some(Handle::new(h)); } }
                 343 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { style.block_content_handle = Some(Handle::new(h)); } }
+                296 => { if let Some(v) = pair.as_bool() { style.is_annotative = v; } }
                 _ => {}
             }
         }
@@ -5465,6 +5506,7 @@ impl<'a> SectionReader<'a> {
                 3 => ts.name = pair.value_string.clone(),
                 40 => { if let Some(v) = pair.as_double() { ts.horizontal_margin = v; } }
                 41 => { if let Some(v) = pair.as_double() { ts.vertical_margin = v; } }
+                1001 => { if pair.value_string == "AcadAnnotative" { ts.annotative = self.read_annotative_xdata(pair)?; } }
                 _ => {}
             }
         }

@@ -603,12 +603,14 @@ impl<'a> DwgObjectWriter<'a> {
     }
 
     fn write_text_style(&mut self, style: &crate::tables::TextStyle) {
-        self.write_common_non_entity_data(
+        let anno = self.annotative_eed_block(style.annotative);
+        self.write_common_non_entity_data_eed(
             common::OBJ_STYLE,
             style.handle,
             self.document.text_styles.handle(),
             &[],
             &None,
+            anno,
         );
 
         // Entry name
@@ -847,20 +849,36 @@ impl<'a> DwgObjectWriter<'a> {
             let ext_width = ext.max.x - ext.min.x;
 
             for vp in &mut entries {
-                // Only adjust the *Active viewport (the main one)
                 if vp.name == "*Active" {
                     let ar = if vp.aspect_ratio > 0.0 {
                         vp.aspect_ratio
                     } else {
                         1.0
                     };
-                    // Ensure the full extents fit, with 10% margin
-                    let vh = (ext_height.max(ext_width / ar)) * 1.1;
-                    vp.view_height = if vh > 0.0 { vh } else { 10.0 };
-                    // view_center is in DCS, whose origin = view_target.
-                    // Keep view_target at its default (origin) so
-                    // view_center acts as the WCS center directly.
-                    vp.view_center = Vector2::new(center.x, center.y);
+                    // Only apply the zoom-extents fix when this viewport's
+                    // CURRENT view would MISS the geometry (a default / empty
+                    // view). A real saved view is left untouched — crucially,
+                    // each pane of a tiled model layout is stored as its own
+                    // duplicate `*Active` entry with a distinct view, and
+                    // overwriting them all here would collapse every pane to
+                    // the same camera.
+                    let half_h = vp.view_height.abs() / 2.0;
+                    let half_w = half_h * ar;
+                    let cx = vp.view_target.x + vp.view_center.x;
+                    let cy = vp.view_target.y + vp.view_center.y;
+                    let overlaps = cx + half_w >= ext.min.x
+                        && cx - half_w <= ext.max.x
+                        && cy + half_h >= ext.min.y
+                        && cy - half_h <= ext.max.y;
+                    if !overlaps {
+                        // Ensure the full extents fit, with 10% margin.
+                        let vh = (ext_height.max(ext_width / ar)) * 1.1;
+                        vp.view_height = if vh > 0.0 { vh } else { 10.0 };
+                        // view_center is in DCS, whose origin = view_target.
+                        // Keep view_target at its default (origin) so
+                        // view_center acts as the WCS center directly.
+                        vp.view_center = Vector2::new(center.x, center.y);
+                    }
                 }
             }
         }
@@ -916,7 +934,7 @@ impl<'a> DwgObjectWriter<'a> {
 
         // R2000+: Render Mode RC 281
         if self.version.r2000_plus() {
-            self.writer.write_byte(0);
+            self.writer.write_byte(vport.render_mode.to_value() as u8);
         }
 
         // R2007+: lighting
@@ -1085,12 +1103,14 @@ impl<'a> DwgObjectWriter<'a> {
     }
 
     fn write_dimstyle(&mut self, ds: &crate::tables::DimStyle) {
-        self.write_common_non_entity_data(
+        let anno = self.annotative_eed_block(ds.annotative);
+        self.write_common_non_entity_data_eed(
             common::OBJ_DIMSTYLE,
             ds.handle,
             self.document.dim_styles.handle(),
             &[],
             &None,
+            anno,
         );
 
         // Common: Entry name TV 2

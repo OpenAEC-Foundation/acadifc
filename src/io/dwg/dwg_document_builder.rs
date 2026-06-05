@@ -415,6 +415,7 @@ impl DwgDocumentBuilder {
         let _ = document.block_records.remove("*Model_Space");
         let _ = document.block_records.remove("*Paper_Space");
 
+        let mut cleared_default_vports = false;
         for entry in &parsed_entries {
             match entry {
                 ParsedEntry::Layer(h, data) => {
@@ -636,6 +637,10 @@ impl DwgDocumentBuilder {
                     let _ = document.ucss.add(ucs);
                 },
                 ParsedEntry::VPort(h, data) => {
+                    if !cleared_default_vports {
+                        document.vports.clear();
+                        cleared_default_vports = true;
+                    }
                     let mut vp = crate::tables::VPort::new(&data.name);
                     vp.handle = Handle::from(*h);
                     vp.lower_left = data.lower_left;
@@ -664,8 +669,10 @@ impl DwgDocumentBuilder {
                     vp.snap_style = data.snap_style;
                     vp.snap_isopair = data.snap_isopair;
                     vp.snap_rotation = data.snap_rotation;
-                    let _ = document.vports.remove(&data.name);
-                    let _ = document.vports.add(vp);
+                    vp.render_mode = ViewportRenderMode::from_value(
+                        data.render_mode.unwrap_or(0) as i16,
+                    );
+                    document.vports.add_allow_duplicate(vp);
                 },
                 ParsedEntry::AppId(h, data) => {
                     let mut app = crate::tables::AppId::new(&data.name);
@@ -951,6 +958,36 @@ impl DwgDocumentBuilder {
         let max_from_reader = handles.iter().max().copied().unwrap_or(0);
         if max_from_reader + 1 > document.header.handle_seed {
             document.header.handle_seed = max_from_reader + 1;
+        }
+
+        // ── Annotative flag from `AcadAnnotative` EED (STYLE / DIMSTYLE) ──
+        // These records have no native annotative field; the flag is stored as
+        // extended data under the `AcadAnnotative` application.
+        if let Some(anno_h) = document.app_ids.get("AcadAnnotative").map(|a| a.handle.value()) {
+            let wide = self.obj_reader.version().r2007_plus();
+            let flags: std::collections::HashMap<Handle, bool> = document
+                .eed_by_handle
+                .iter()
+                .filter_map(|(h, blocks)| {
+                    blocks
+                        .iter()
+                        .find(|(a, _)| *a == anno_h)
+                        .and_then(|(_, bytes)| {
+                            crate::io::dwg::annotative_eed::decode_flag(bytes, wide)
+                        })
+                        .map(|f| (*h, f))
+                })
+                .collect();
+            for ts in document.text_styles.iter_mut() {
+                if let Some(&f) = flags.get(&ts.handle) {
+                    ts.annotative = f;
+                }
+            }
+            for ds in document.dim_styles.iter_mut() {
+                if let Some(&f) = flags.get(&ds.handle) {
+                    ds.annotative = f;
+                }
+            }
         }
 
         self.notifications
@@ -1773,6 +1810,23 @@ impl DwgDocumentBuilder {
                     e.brightness = data.brightness;
                     e.contrast = data.contrast;
                     e.fade = data.fade;
+                    // Propagate clip boundary the same way Wipeout does — the
+                    // parser used to discard the vertices, leaving the default
+                    // boundary on the entity. Without this, clip regions
+                    // shrink/expand by orders of magnitude on render.
+                    e.clip_boundary = crate::entities::raster_image::ClipBoundary {
+                        clip_type: if data.clip_type == 1 {
+                            crate::entities::raster_image::ClipType::Rectangular
+                        } else {
+                            crate::entities::raster_image::ClipType::Polygonal
+                        },
+                        clip_mode: if data.clip_inverted {
+                            crate::entities::raster_image::ClipMode::Inside
+                        } else {
+                            crate::entities::raster_image::ClipMode::Outside
+                        },
+                        vertices: data.clip_boundary_vertices,
+                    };
                     if data.definition_handle != 0 {
                         e.definition_handle = Some(Handle::from(data.definition_handle));
                     }
@@ -1797,6 +1851,12 @@ impl DwgDocumentBuilder {
                     e.brightness = data.brightness;
                     e.contrast = data.contrast;
                     e.fade = data.fade;
+                    e.clip_type = if data.clip_type == 1 {
+                        crate::entities::WipeoutClipType::Rectangular
+                    } else {
+                        crate::entities::WipeoutClipType::Polygonal
+                    };
+                    e.clip_boundary_vertices = data.clip_boundary_vertices;
                     if data.definition_handle != 0 {
                         e.definition_handle = Some(Handle::from(data.definition_handle));
                     }

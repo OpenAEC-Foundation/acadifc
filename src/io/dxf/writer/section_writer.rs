@@ -264,6 +264,10 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.write_header_variable("$PLIMCHECK", |w| w.write_i16(70, if hdr.paper_space_limit_check { 1 } else { 0 }))?;
         self.write_header_variable("$VISRETAIN", |w| w.write_i16(70, if hdr.retain_xref_visibility { 1 } else { 0 }))?;
 
+        // === Current annotation scale (R2008+) ===
+        self.write_header_variable("$CANNOSCALE", |w| w.write_string(1, &hdr.current_annotation_scale))?;
+        self.write_header_variable("$CANNOSCALEVALUE", |w| w.write_double(40, hdr.annotation_scale_value))?;
+
         // === Time ===
         self.write_header_variable("$TDCREATE", |w| w.write_double(40, hdr.create_date_julian))?;
         self.write_header_variable("$TDUPDATE", |w| w.write_double(40, hdr.update_date_julian))?;
@@ -434,6 +438,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // Snap isopair
         self.writer.write_i16(78, vport.snap_isopair)?;
 
+        // Render mode / visual style
+        self.writer.write_i16(281, vport.render_mode.to_value())?;
+
         Ok(())
     }
 
@@ -546,6 +553,24 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         Ok(())
     }
 
+    /// Persist the annotative flag the standard way: XDATA under the
+    /// `AcadAnnotative` application, in the form
+    /// `AnnotativeData { <version=1> <flag> }`. Written only when the record
+    /// is annotative; its absence on read means non-annotative. This matches
+    /// how AutoCAD stores annotative on STYLE / DIMSTYLE / TABLESTYLE records.
+    fn write_annotative_xdata(&mut self, annotative: bool) -> Result<()> {
+        if !annotative {
+            return Ok(());
+        }
+        self.writer.write_string(1001, "AcadAnnotative")?;
+        self.writer.write_string(1000, "AnnotativeData")?;
+        self.writer.write_string(1002, "{")?;
+        self.writer.write_i16(1070, 1)?;
+        self.writer.write_i16(1070, 1)?;
+        self.writer.write_string(1002, "}")?;
+        Ok(())
+    }
+
     fn write_style_entry(&mut self, style: &TextStyle, owner: Handle) -> Result<()> {
         self.writer.write_string(0, "STYLE")?;
         self.write_common_table_data(style.handle(), owner)?;
@@ -563,6 +588,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_double(42, style.effective_last_height())?;
         self.writer.write_string(3, &style.font_file)?;
         self.writer.write_string(4, &style.big_font_file)?;
+        self.write_annotative_xdata(style.annotative)?;
 
         Ok(())
     }
@@ -779,6 +805,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // Line weights
         self.writer.write_i16(371, dimstyle.dimlwd)?;
         self.writer.write_i16(372, dimstyle.dimlwe)?;
+        self.write_annotative_xdata(dimstyle.annotative)?;
 
         Ok(())
     }
@@ -2920,6 +2947,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
         // Write cell style info for title row
         self.write_table_cell_style("TITLE", &style.title_row_style)?;
+        self.write_annotative_xdata(style.annotative)?;
 
         Ok(())
     }

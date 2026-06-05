@@ -206,6 +206,12 @@ pub struct HeaderVariables {
     pub user_real5: f64,
     /// PSVPSCALE - Viewport default view scale factor (R2000+)
     pub viewport_scale_factor: f64,
+    /// CANNOSCALE - Name of the current annotation scale for the active
+    /// space, e.g. "1:50" (R2008+). Default "1:1".
+    pub current_annotation_scale: String,
+    /// CANNOSCALEVALUE - Value of the current annotation scale as a
+    /// paper/drawing factor: 1:50 -> 0.02, 2:1 -> 2.0 (R2008+). Default 1.0.
+    pub annotation_scale_value: f64,
     /// SHADOWPLANELOCATION - Shadow plane Z location
     pub shadow_plane_location: f64,
     /// LOFTANG1 - Loft angle 1
@@ -660,6 +666,8 @@ impl Default for HeaderVariables {
             multiline_scale: 1.0,
             user_real1: 0.0, user_real2: 0.0, user_real3: 0.0, user_real4: 0.0, user_real5: 0.0,
             viewport_scale_factor: 0.0,
+            current_annotation_scale: "1:1".to_string(),
+            annotation_scale_value: 1.0,
             shadow_plane_location: 0.0,
             loft_angle1: std::f64::consts::FRAC_PI_2,
             loft_angle2: std::f64::consts::FRAC_PI_2,
@@ -1070,6 +1078,11 @@ impl CadDocument {
         let mut acad = AppId::acad();
         acad.set_handle(self.allocate_handle());
         self.app_ids.add(acad).ok();
+
+        // Application ID under which annotative styles store their flag (XDATA).
+        let mut annotative = AppId::new("AcadAnnotative");
+        annotative.set_handle(self.allocate_handle());
+        self.app_ids.add(annotative).ok();
 
         // Add standard viewport
         let mut active_vport = VPort::active();
