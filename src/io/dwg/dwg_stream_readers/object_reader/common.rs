@@ -120,6 +120,9 @@ pub const OBJ_DBCOLOR: i16 = 0x81;          // 129
 pub const OBJ_WIPEOUTVARIABLES: i16 = 0x82; // 130
 pub const OBJ_TABLECONTENT: i16 = 0x69;     // 105
 pub const OBJ_TABLESTYLE: i16 = 0x6A;       // 106
+// GEODATA has no fixed DWG type code (it is always class-based); 0x83 is a free
+// internal sentinel used by the class-number map + builder dispatch.
+pub const OBJ_GEODATA: i16 = 0x83;          // 131
 
 /// Returns true if the type code is a graphical entity (not a table / object).
 pub fn is_entity_type(type_code: i16) -> bool {
@@ -167,6 +170,7 @@ pub fn dxf_name_to_type_code(dxf_name: &str) -> Option<i16> {
         "WIPEOUTVARIABLES" => Some(OBJ_WIPEOUTVARIABLES),
         "TABLECONTENT" => Some(OBJ_TABLECONTENT),
         "TABLESTYLE" => Some(OBJ_TABLESTYLE),
+        "GEODATA" | "ACDBGEODATA" => Some(OBJ_GEODATA),
         _ => None,
     }
 }
