@@ -610,6 +610,97 @@ pub fn read_wipeout_variables(reader: &mut DwgMergedReader) -> WipeoutVariablesD
     WipeoutVariablesData { display_frame }
 }
 
+/// GeoData (AcDbGeoData) object-specific fields.
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct GeoDataData {
+    pub version: i32,
+    pub host_block: u64,
+    pub coordinate_type: i16,
+    pub design_point: Vector3,
+    pub reference_point: Vector3,
+    pub north_direction: Vector2,
+    pub up_direction: Vector3,
+    pub horizontal_unit_scale: f64,
+    pub vertical_unit_scale: f64,
+    pub horizontal_units: i32,
+    pub vertical_units: i32,
+    pub scale_estimation_method: i32,
+    pub user_scale_factor: f64,
+    pub sea_level_correction: bool,
+    pub sea_level_elevation: f64,
+    pub coordinate_projection_radius: f64,
+    pub coordinate_system_definition: String,
+    pub geo_rss_tag: String,
+    pub observation_from_tag: String,
+    pub observation_to_tag: String,
+    pub observation_coverage_tag: String,
+}
+
+/// Read the AcDbGeoData object body (after common non-entity data).
+///
+/// Ported from ACadSharp `DwgObjectReader.readGeoData`. The field order is
+/// version-dependent: R2010/R2013 store the coordinate system as a MapGuide XML
+/// string, R2009 as a WKT PROJCS string. Trailing geo-mesh points/faces are not
+/// read (not needed for the coordinate system; the per-object reader is bounded).
+pub fn read_geodata(reader: &mut DwgMergedReader) -> GeoDataData {
+    let mut d = GeoDataData {
+        horizontal_unit_scale: 1.0,
+        vertical_unit_scale: 1.0,
+        user_scale_factor: 1.0,
+        ..Default::default()
+    };
+
+    // BL object version
+    d.version = reader.read_bit_long();
+    // H soft pointer to host block
+    d.host_block = reader.read_handle();
+    // BS design coordinate type
+    d.coordinate_type = reader.read_bit_short();
+
+    if d.version == 1 {
+        // R2009
+        d.reference_point = reader.read_3bit_double();
+        d.horizontal_units = reader.read_bit_long();
+        d.vertical_units = d.horizontal_units;
+        d.design_point = reader.read_3bit_double();
+        let _obsolete = reader.read_3bit_double();
+        d.up_direction = reader.read_3bit_double();
+        // BD angle of north direction (radians, clockwise from (0,1))
+        let angle = std::f64::consts::FRAC_PI_2 - reader.read_bit_double();
+        d.north_direction = Vector2::new(angle.cos(), angle.sin());
+        let _obsolete2 = reader.read_3bit_double();
+        d.coordinate_system_definition = reader.read_variable_text();
+        d.geo_rss_tag = reader.read_variable_text();
+        d.horizontal_unit_scale = reader.read_bit_double();
+        d.vertical_unit_scale = d.horizontal_unit_scale;
+        let _datum = reader.read_variable_text();
+        let _wkt = reader.read_variable_text();
+    } else {
+        // R2010 / R2013 (and newer)
+        d.design_point = reader.read_3bit_double();
+        d.reference_point = reader.read_3bit_double();
+        d.horizontal_unit_scale = reader.read_bit_double();
+        d.horizontal_units = reader.read_bit_long();
+        d.vertical_unit_scale = reader.read_bit_double();
+        d.vertical_units = reader.read_bit_long();
+        d.up_direction = reader.read_3bit_double();
+        d.north_direction = reader.read_2raw_double();
+        d.scale_estimation_method = reader.read_bit_long();
+        d.user_scale_factor = reader.read_bit_double();
+        d.sea_level_correction = reader.read_bit();
+        d.sea_level_elevation = reader.read_bit_double();
+        d.coordinate_projection_radius = reader.read_bit_double();
+        d.coordinate_system_definition = reader.read_variable_text();
+        d.geo_rss_tag = reader.read_variable_text();
+    }
+
+    d.observation_from_tag = reader.read_variable_text();
+    d.observation_to_tag = reader.read_variable_text();
+    d.observation_coverage_tag = reader.read_variable_text();
+    d
+}
+
 // ════════════════════════════════════════════════════════════════════════
 //  Tests
 // ════════════════════════════════════════════════════════════════════════
@@ -662,6 +753,44 @@ mod tests {
         let dv = read_dictionary_variable(&mut r);
         assert_eq!(dv.schema_number, 0);
         assert_eq!(dv.value, "test_value");
+    }
+
+    #[test]
+    fn test_geodata_roundtrip_r2013() {
+        let v = DwgVersion::AC15;
+        let d = DxfVersion::AC1015;
+        let csd = "<Dictionary><ProjectedCoordinateSystem id=\"MO83-WF\"/></Dictionary>";
+        let mut r = make_reader(v, d, |w| {
+            w.write_bit_long(3); // object version (R2013)
+            w.write_handle(DwgReferenceType::SoftOwnership, 0x30); // host block
+            w.write_bit_short(2); // coordinate type
+            w.write_3bit_double(Vector3::new(1.0, 2.0, 3.0)); // design point
+            w.write_3bit_double(Vector3::new(4.0, 5.0, 6.0)); // reference point
+            w.write_bit_double(1.0); // horizontal unit scale
+            w.write_bit_long(9); // horizontal units
+            w.write_bit_double(1.0); // vertical unit scale
+            w.write_bit_long(9); // vertical units
+            w.write_3bit_double(Vector3::new(0.0, 0.0, 1.0)); // up direction
+            w.write_2raw_double(Vector2::new(0.0, 1.0)); // north direction
+            w.write_bit_long(0); // scale estimation method
+            w.write_bit_double(1.0); // user scale factor
+            w.write_bit(false); // sea-level correction
+            w.write_bit_double(0.0); // sea-level elevation
+            w.write_bit_double(6378137.0); // coordinate projection radius
+            w.write_variable_text(csd); // coordinate system definition
+            w.write_variable_text("georss-tag"); // geo rss tag
+            w.write_variable_text("from"); // observation from
+            w.write_variable_text("to"); // observation to
+            w.write_variable_text("cov"); // observation coverage
+        });
+        let g = read_geodata(&mut r);
+        assert_eq!(g.version, 3);
+        assert_eq!(g.coordinate_type, 2);
+        assert_eq!(g.design_point, Vector3::new(1.0, 2.0, 3.0));
+        assert_eq!(g.reference_point, Vector3::new(4.0, 5.0, 6.0));
+        assert_eq!(g.coordinate_system_definition, csd);
+        assert_eq!(g.geo_rss_tag, "georss-tag");
+        assert_eq!(g.observation_coverage_tag, "cov");
     }
 
     #[test]
