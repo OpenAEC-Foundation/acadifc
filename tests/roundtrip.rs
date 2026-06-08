@@ -2102,3 +2102,139 @@ fn hatch_polyline_edge_roundtrip() {
         panic!("Expected Polyline edge");
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  VPORT render mode (visual style) — DXF code 281 / DWG RC 281
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Distinct per-tile visual styles on duplicate `*Active` VPORT entries must
+/// survive both DXF and DWG roundtrips.
+#[test]
+fn roundtrip_vport_render_mode() {
+    use acadrust::entities::ViewportRenderMode as M;
+    use acadrust::tables::VPort;
+
+    let (mut doc, _) = build_rich_document(DxfVersion::AC1032);
+    // Replace the vport table with two tiled *Active entries carrying
+    // distinct visual styles (the model-tile scenario).
+    doc.vports.clear();
+    let mut a = VPort::new("*Active");
+    a.view_height = 100.0;
+    a.render_mode = M::FlatShaded;
+    a.handle = doc.allocate_handle();
+    let mut b = VPort::new("*Active");
+    b.view_height = 200.0;
+    b.render_mode = M::GouraudShadedWithEdges;
+    b.handle = doc.allocate_handle();
+    doc.vports.add_allow_duplicate(a);
+    doc.vports.add_allow_duplicate(b);
+
+    let modes = |d: &CadDocument| -> Vec<M> {
+        d.vports
+            .iter()
+            .filter(|v| v.name == "*Active")
+            .map(|v| v.render_mode)
+            .collect()
+    };
+
+    let dxf = modes(&dxf_roundtrip(doc.clone()));
+    assert!(dxf.contains(&M::FlatShaded), "DXF lost FlatShaded: {dxf:?}");
+    assert!(
+        dxf.contains(&M::GouraudShadedWithEdges),
+        "DXF lost GouraudShadedWithEdges: {dxf:?}"
+    );
+
+    let dwg = modes(&dwg_roundtrip(&doc));
+    assert!(dwg.contains(&M::FlatShaded), "DWG lost FlatShaded: {dwg:?}");
+    assert!(
+        dwg.contains(&M::GouraudShadedWithEdges),
+        "DWG lost GouraudShadedWithEdges: {dwg:?}"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Annotative flag round-trip
+//
+//  Per the DXF/DWG standard the flag lives in different places per record:
+//   • MLEADERSTYLE — native attribute (DXF group 296, DWG bit).
+//   • STYLE / DIMSTYLE / TABLESTYLE — XDATA under the `AcadAnnotative`
+//     application: `AnnotativeData { 1 <flag> }`.
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn build_annotative_document() -> CadDocument {
+    use acadrust::objects::{MultiLeaderStyle, ObjectType, TableStyle};
+    let mut doc = CadDocument::with_version(DxfVersion::AC1032);
+
+    if let Some(s) = doc.text_styles.get_mut("Standard") {
+        s.annotative = true;
+    }
+    if let Some(d) = doc.dim_styles.get_mut("Standard") {
+        d.annotative = true;
+    }
+
+    let mut mls = MultiLeaderStyle::new("AnnoML");
+    mls.handle = doc.allocate_handle();
+    mls.is_annotative = true;
+    doc.objects
+        .insert(mls.handle, ObjectType::MultiLeaderStyle(mls));
+
+    let mut tbs = TableStyle::new("AnnoTS");
+    tbs.handle = doc.allocate_handle();
+    tbs.annotative = true;
+    doc.objects.insert(tbs.handle, ObjectType::TableStyle(tbs));
+
+    doc
+}
+
+fn mleader_is_annotative(doc: &CadDocument) -> bool {
+    use acadrust::objects::ObjectType;
+    doc.objects
+        .values()
+        .find_map(|o| match o {
+            ObjectType::MultiLeaderStyle(s) => Some(s.is_annotative),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
+fn table_is_annotative(doc: &CadDocument) -> bool {
+    use acadrust::objects::ObjectType;
+    doc.objects
+        .values()
+        .find_map(|o| match o {
+            ObjectType::TableStyle(s) => Some(s.annotative),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
+#[test]
+fn dxf_roundtrip_annotative_styles() {
+    let rt = dxf_roundtrip(build_annotative_document());
+    assert!(
+        rt.text_styles.get("Standard").map(|s| s.annotative).unwrap_or(false),
+        "DXF: text style annotative lost"
+    );
+    assert!(
+        rt.dim_styles.get("Standard").map(|d| d.annotative).unwrap_or(false),
+        "DXF: dim style annotative lost"
+    );
+    assert!(mleader_is_annotative(&rt), "DXF: mleader style annotative lost");
+    assert!(table_is_annotative(&rt), "DXF: table style annotative lost");
+}
+
+#[test]
+fn dwg_roundtrip_annotative_styles() {
+    // MLEADERSTYLE: native DWG bit. STYLE/DIMSTYLE: AcadAnnotative EED.
+    // (TABLESTYLE is not yet serialized to DWG — tracked separately.)
+    let rt = dwg_roundtrip(&build_annotative_document());
+    assert!(
+        rt.text_styles.get("Standard").map(|s| s.annotative).unwrap_or(false),
+        "DWG: text style annotative lost"
+    );
+    assert!(
+        rt.dim_styles.get("Standard").map(|d| d.annotative).unwrap_or(false),
+        "DWG: dim style annotative lost"
+    );
+    assert!(mleader_is_annotative(&rt), "DWG: mleader style annotative lost");
+}

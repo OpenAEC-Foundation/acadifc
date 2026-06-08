@@ -1,6 +1,7 @@
 //! Viewport table entry
 
 use super::TableEntry;
+use crate::entities::ViewportRenderMode;
 use crate::types::{Handle, Vector2, Vector3};
 
 /// A viewport table entry
@@ -55,6 +56,8 @@ pub struct VPort {
     pub snap_isopair: i16,
     /// Snap rotation angle
     pub snap_rotation: f64,
+    /// Visual style / render mode (DXF code 281)
+    pub render_mode: ViewportRenderMode,
 }
 
 impl VPort {
@@ -85,6 +88,7 @@ impl VPort {
             snap_style: false,
             snap_isopair: 0,
             snap_rotation: 0.0,
+            render_mode: ViewportRenderMode::Wireframe2D,
         }
     }
 

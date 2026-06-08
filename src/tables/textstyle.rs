@@ -55,6 +55,10 @@ pub struct TextStyle {
     pub true_type_font: String,
     /// Whether this style is xref-dependent
     pub xref_dependent: bool,
+    /// Annotative: entities using this style scale with the annotation scale.
+    /// Persisted as XDATA under the `AcadAnnotative` application:
+    /// `AnnotativeData { 1 <flag> }`.
+    pub annotative: bool,
 }
 
 impl TextStyle {
@@ -72,6 +76,7 @@ impl TextStyle {
             big_font_file: String::new(),
             true_type_font: String::new(),
             xref_dependent: false,
+            annotative: false,
         }
     }
 
@@ -89,6 +94,7 @@ impl TextStyle {
             big_font_file: String::new(),
             true_type_font: String::new(),
             xref_dependent: false,
+            annotative: false,
         }
     }
 

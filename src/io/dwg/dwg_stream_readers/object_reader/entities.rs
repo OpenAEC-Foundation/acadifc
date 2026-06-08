@@ -345,23 +345,30 @@ pub fn read_face3d(reader: &mut DwgMergedReader, version: DwgVersion) -> Face3DD
         Face3DData { first_corner, second_corner, third_corner, fourth_corner, invisible_edges }
     } else {
         let has_no_flags = reader.read_bit();
-        let z_are_same = reader.read_bit();
+        // ODA spec "Z is zero" — corner1's Z is omitted from the stream
+        // (treated as 0.0) when set. Corners 2–4 always encode their Z as
+        // BD-with-default (with the previous corner's Z as the default),
+        // independent of this flag. Skipping those reads on the later
+        // corners desynchronises the bit cursor: corner-3 Y and corner-4
+        // X then collapse to defaults, and the quad reads as a degenerate
+        // edge along the corner-1 Y line.
+        let z_is_zero = reader.read_bit();
 
         let x1 = reader.read_raw_double();
         let y1 = reader.read_raw_double();
-        let z1 = if !z_are_same { reader.read_raw_double() } else { 0.0 };
+        let z1 = if !z_is_zero { reader.read_raw_double() } else { 0.0 };
 
         let x2 = reader.read_bit_double_with_default(x1);
         let y2 = reader.read_bit_double_with_default(y1);
-        let z2 = if !z_are_same { reader.read_bit_double_with_default(z1) } else { z1 };
+        let z2 = reader.read_bit_double_with_default(z1);
 
         let x3 = reader.read_bit_double_with_default(x2);
         let y3 = reader.read_bit_double_with_default(y2);
-        let z3 = if !z_are_same { reader.read_bit_double_with_default(z2) } else { z1 };
+        let z3 = reader.read_bit_double_with_default(z2);
 
         let x4 = reader.read_bit_double_with_default(x3);
         let y4 = reader.read_bit_double_with_default(y3);
-        let z4 = if !z_are_same { reader.read_bit_double_with_default(z3) } else { z1 };
+        let z4 = reader.read_bit_double_with_default(z3);
 
         let invisible_edges = if !has_no_flags { reader.read_bit_short() } else { 0 };
 
@@ -1061,6 +1068,10 @@ pub struct RasterImageData {
     pub clip_type: i16,
     pub definition_handle: u64,
     pub reactor_handle: u64,
+    /// Clip boundary vertices in image pixel space (range 0..size for rect;
+    /// arbitrary polygon for polygonal). For rectangular clips two corners
+    /// are stored; for polygonal, three or more sequential vertices.
+    pub clip_boundary_vertices: Vec<Vector2>,
 }
 
 #[derive(Debug, Clone)]
@@ -1280,7 +1291,12 @@ pub fn read_hatch_boundary_path(reader: &mut DwgMergedReader, version: DwgVersio
         }
     }
 
-    let boundary_handle_count = reader.read_bit_long();
+    // Cap the boundary-handle count to a sane upper bound. Corrupt /
+    // misaligned hatch records have been seen to emit ~1.9 × 10^9 here,
+    // which spins read_handle() for tens of seconds per record. AutoCAD
+    // hatches realistically carry well under MAX_ARRAY_COUNT (100k)
+    // associative boundary references.
+    let boundary_handle_count = safe_count(reader.read_bit_long());
 
     HatchBoundaryPath { flags, edges, polyline_vertices, polyline_closed, boundary_handle_count }
 }
@@ -1604,14 +1620,18 @@ pub fn read_raster_image(reader: &mut DwgMergedReader, version: DwgVersion) -> R
 
     // Clip boundary
     let clip_type = reader.read_bit_short();
+    let mut clip_boundary_vertices: Vec<Vector2> = Vec::new();
     if clip_type == 1 {
-        // Rectangular: 2 fixed vertices
-        let _pt1 = reader.read_2raw_double();
-        let _pt2 = reader.read_2raw_double();
+        // Rectangular: 2 opposite-corner vertices
+        clip_boundary_vertices.push(reader.read_2raw_double());
+        clip_boundary_vertices.push(reader.read_2raw_double());
     } else {
         // Polygonal
-        let n = safe_count(reader.read_bit_long());
-        for _ in 0..n { let _pt = reader.read_2raw_double(); }
+        let n = safe_count(reader.read_bit_long()) as usize;
+        clip_boundary_vertices.reserve(n);
+        for _ in 0..n {
+            clip_boundary_vertices.push(reader.read_2raw_double());
+        }
     }
 
     let definition_handle = reader.read_handle();
@@ -1621,6 +1641,7 @@ pub fn read_raster_image(reader: &mut DwgMergedReader, version: DwgVersion) -> R
         class_version, insertion_point, u_vector, v_vector, size,
         flags, clipping_enabled, brightness, contrast, fade, clip_inverted,
         clip_type, definition_handle, reactor_handle,
+        clip_boundary_vertices,
     }
 }
 

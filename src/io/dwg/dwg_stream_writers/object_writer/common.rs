@@ -507,6 +507,43 @@ impl<'a> DwgObjectWriter<'a> {
         reactors: &[Handle],
         xdictionary_handle: &Option<Handle>,
     ) {
+        self.write_common_non_entity_data_eed(
+            type_code,
+            handle,
+            owner_handle,
+            reactors,
+            xdictionary_handle,
+            None,
+        );
+    }
+
+    /// Build the `AcadAnnotative` EED block `(app_handle, bytes)` for a style
+    /// record, or `None` when it isn't annotative (or the `AcadAnnotative`
+    /// appid is missing). Encodes `AnnotativeData { 1 <flag> }` per the ODA EED
+    /// spec, using the version's string width.
+    pub fn annotative_eed_block(&self, annotative: bool) -> Option<(u64, Vec<u8>)> {
+        if !annotative {
+            return None;
+        }
+        let app = self.document.app_ids.get("AcadAnnotative")?;
+        let bytes =
+            crate::io::dwg::annotative_eed::encode(self.version.r2007_plus(), annotative);
+        Some((app.handle.value(), bytes))
+    }
+
+    /// As [`write_common_non_entity_data`], but merges one extra EED block
+    /// (e.g. the annotative marker) with any raw EED preserved by handle.
+    /// An existing block for the same application is replaced, so the marker
+    /// is written exactly once.
+    pub fn write_common_non_entity_data_eed(
+        &mut self,
+        type_code: i16,
+        handle: Handle,
+        owner_handle: Handle,
+        reactors: &[Handle],
+        xdictionary_handle: &Option<Handle>,
+        extra_eed: Option<(u64, Vec<u8>)>,
+    ) {
         // ── writeCommonData portion ──
 
         // Object type
@@ -526,6 +563,10 @@ impl<'a> DwgObjectWriter<'a> {
         let mut eed = crate::xdata::ExtendedData::default();
         if let Some(raw) = self.document.eed_by_handle.get(&handle) {
             eed.raw_dwg_eed = raw.clone();
+        }
+        if let Some((app, bytes)) = extra_eed {
+            eed.raw_dwg_eed.retain(|(a, _)| *a != app);
+            eed.raw_dwg_eed.push((app, bytes));
         }
         self.write_extended_data(&eed);
 

@@ -172,6 +172,7 @@ pub struct VPortData {
     pub snap_base: Vector2,
     pub snap_spacing: Vector2,
     pub xref_handle: u64,
+    pub render_mode: Option<u8>,
 }
 
 /// Parsed APPID data.
@@ -625,9 +626,11 @@ pub fn read_vport(
     let _front_clip_z = reader.read_bit();
 
     // R2000+: render mode
-    if version.r2000_plus() {
-        let _render_mode = reader.read_byte();
-    }
+    let render_mode = if version.r2000_plus() {
+        Some(reader.read_byte())
+    } else {
+        None
+    };
 
     // R2007+: lighting
     if version.r2007_plus() {
@@ -697,6 +700,7 @@ pub fn read_vport(
         fast_zoom, ucsicon_lower, ucsicon_origin, grid_on,
         grid_spacing, snap_on, snap_style, snap_isopair,
         snap_rotation, snap_base, snap_spacing, xref_handle,
+        render_mode,
     }
 }
 

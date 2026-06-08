@@ -33,6 +33,7 @@
 //! | AC1027      | R2013   | Paged + LZ77 |
 //! | AC1032      | R2018   | Paged + LZ77 |
 
+pub mod annotative_eed;
 pub mod checksum;
 pub mod compression;
 pub mod compressor_ac21;

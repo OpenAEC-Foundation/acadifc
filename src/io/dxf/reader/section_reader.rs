@@ -194,6 +194,8 @@ impl<'a> SectionReader<'a> {
                 "$USERR4" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_double() { hdr.user_real4 = v; } } }
                 "$USERR5" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_double() { hdr.user_real5 = v; } } }
                 "$PSVPSCALE" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_double() { hdr.viewport_scale_factor = v; } } }
+                "$CANNOSCALE" => { if let Some(p) = self.reader.read_pair()? { hdr.current_annotation_scale = p.value_string.clone(); } }
+                "$CANNOSCALEVALUE" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_double() { hdr.annotation_scale_value = v; } } }
                 "$SHADOWPLANELOCATION" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_double() { hdr.shadow_plane_location = v; } } }
                 "$LOFTANG1" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_double() { hdr.loft_angle1 = v; } } }
                 "$LOFTANG2" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_double() { hdr.loft_angle2 = v; } } }
@@ -342,15 +344,24 @@ impl<'a> SectionReader<'a> {
         Ok(())
     }
 
-    /// Read a 3D point header variable (three successive code/value pairs: 10/20/30)
+    /// Read a 3D point header variable (up to three successive code/value pairs: 10/20/30).
+    /// Older formats (e.g. AC1009/R12) may only supply X and Y for variables like $EXTMIN/$EXTMAX.
+    /// Non-coordinate pairs (code 9 = next variable name, code 0 = section end, etc.) are pushed
+    /// back so the main header loop can process them normally.
     fn read_header_point3(&mut self, target: &mut Vector3) -> Result<()> {
         for _ in 0..3 {
             if let Some(p) = self.reader.read_pair()? {
-                if let Some(v) = p.as_double() {
-                    let base = p.code % 100;
-                    if base < 10 || base == 10 { target.x = v; }
-                    else if base >= 20 && base < 30 { target.y = v; }
-                    else { target.z = v; }
+                let base = p.code % 100;
+                // Coordinate codes are 10–39 (X=1x, Y=2x, Z=3x); anything else belongs to the next token
+                if base >= 10 && base < 40 {
+                    if let Some(v) = p.as_double() {
+                        if base < 20 { target.x = v; }
+                        else if base < 30 { target.y = v; }
+                        else { target.z = v; }
+                    }
+                } else {
+                    self.reader.push_back(p);
+                    break;
                 }
             }
         }
@@ -569,8 +580,14 @@ impl<'a> SectionReader<'a> {
                         // Insert block entities into the document's flat entity map
                         // and collect their handles for the block record.
                         let mut entity_handles = Vec::with_capacity(block_entities.len());
-                        for entity in block_entities {
-                            let h = entity.common().handle;
+                        for mut entity in block_entities {
+                            let h = if entity.common().handle.is_null() {
+                                let new_h = document.allocate_handle();
+                                entity.as_entity_mut().set_handle(new_h);
+                                new_h
+                            } else {
+                                entity.common().handle
+                            };
                             entity_handles.push(h);
                             let idx = document.entities.len();
                             document.entities.push(entity);
@@ -578,6 +595,12 @@ impl<'a> SectionReader<'a> {
                         }
 
                         // Find the BlockRecord and set handles
+                        if document.block_records.get(&block_name).is_none() {
+                            let mut br = BlockRecord::new(block_name.clone());
+                            br.handle = document.allocate_handle();
+                            document.block_records.add_or_replace(br);
+                        }
+
                         if let Some(block_record) = document.block_records.get_mut(&block_name) {
                             block_record.entity_handles = entity_handles;
                             block_record.xref_path = block.xref_path.clone();
@@ -1347,6 +1370,14 @@ impl<'a> SectionReader<'a> {
         }
 
         if !plot_settings_codes.is_empty() {
+            for &(code, ref val) in &plot_settings_codes {
+                match code {
+                    44 => { if let Ok(v) = val.parse::<f64>() { layout.paper_width  = v; } }
+                    45 => { if let Ok(v) = val.parse::<f64>() { layout.paper_height = v; } }
+                    73 => { if let Ok(v) = val.parse::<i16>() { layout.plot_rotation = v; } }
+                    _ => {}
+                }
+            }
             layout.raw_plot_settings_codes = Some(plot_settings_codes);
         }
 
@@ -1732,6 +1763,11 @@ impl<'a> SectionReader<'a> {
                         style.last_height = lh;
                     }
                 }
+                1001 => {
+                    if pair.value_string == "AcadAnnotative" {
+                        style.annotative = self.read_annotative_xdata(pair)?;
+                    }
+                }
                 _ => {}
             }
         }
@@ -1952,6 +1988,7 @@ impl<'a> SectionReader<'a> {
                 347 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { ds.dimltex2_handle = Handle::new(h); } }
                 371 => { if let Some(v) = pair.as_i16() { ds.dimlwd = v; } }
                 372 => { if let Some(v) = pair.as_i16() { ds.dimlwe = v; } }
+                1001 => { if pair.value_string == "AcadAnnotative" { ds.annotative = self.read_annotative_xdata(pair)?; } }
                 _ => {}
             }
         }
@@ -2059,6 +2096,7 @@ impl<'a> SectionReader<'a> {
 
     /// Read VPORT table
     fn read_vport_table(&mut self, document: &mut CadDocument) -> Result<()> {
+        document.vports.clear();
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 && pair.value_string == "ENDTAB" {
                 break;
@@ -2066,7 +2104,7 @@ impl<'a> SectionReader<'a> {
 
             if pair.code == 0 && pair.value_string == "VPORT" {
                 if let Some(vport) = self.read_vport_entry()? {
-                    document.vports.add_or_replace(vport);
+                    document.vports.add_allow_duplicate(vport);
                 }
             }
         }
@@ -2118,6 +2156,7 @@ impl<'a> SectionReader<'a> {
                 76 => { if let Some(v) = pair.as_i16() { vport.grid_on = v != 0; } }
                 77 => { if let Some(v) = pair.as_i16() { vport.snap_style = v != 0; } }
                 78 => { if let Some(v) = pair.as_i16() { vport.snap_isopair = v; } }
+                281 => { if let Some(v) = pair.as_i16() { vport.render_mode = ViewportRenderMode::from_value(v); } }
                 _ => {}
             }
         }
@@ -4554,6 +4593,36 @@ impl<'a> SectionReader<'a> {
         Ok((xdata, None))
     }
 
+    /// Parse the `AcadAnnotative` XDATA following a `1001` pair on a style
+    /// record and return its annotative flag. The block has the form
+    /// `AnnotativeData { 1 <flag> }`; the flag is the last 16-bit integer.
+    /// The terminating non-XDATA pair is pushed back for the caller's loop.
+    fn read_annotative_xdata(
+        &mut self,
+        pair: super::stream_reader::DxfCodePair,
+    ) -> Result<bool> {
+        use crate::xdata::XDataValue;
+        self.reader.push_back(pair);
+        let (xdata, next_pair) = self.read_extended_data()?;
+        if let Some(p) = next_pair {
+            self.reader.push_back(p);
+        }
+        let flag = xdata
+            .get_record("AcadAnnotative")
+            .and_then(|r| {
+                r.values
+                    .iter()
+                    .filter_map(|v| match v {
+                        XDataValue::Integer16(n) => Some(*n),
+                        _ => None,
+                    })
+                    .last()
+            })
+            .map(|n| n != 0)
+            .unwrap_or(false);
+        Ok(flag)
+    }
+
     // ===== New Entity Readers =====
 
     /// Read a VIEWPORT entity
@@ -5386,6 +5455,7 @@ impl<'a> SectionReader<'a> {
                 341 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { style.arrowhead_handle = Some(Handle::new(h)); } }
                 342 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { style.text_style_handle = Some(Handle::new(h)); } }
                 343 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { style.block_content_handle = Some(Handle::new(h)); } }
+                296 => { if let Some(v) = pair.as_bool() { style.is_annotative = v; } }
                 _ => {}
             }
         }
@@ -5436,6 +5506,7 @@ impl<'a> SectionReader<'a> {
                 3 => ts.name = pair.value_string.clone(),
                 40 => { if let Some(v) = pair.as_double() { ts.horizontal_margin = v; } }
                 41 => { if let Some(v) = pair.as_double() { ts.vertical_margin = v; } }
+                1001 => { if pair.value_string == "AcadAnnotative" { ts.annotative = self.read_annotative_xdata(pair)?; } }
                 _ => {}
             }
         }
