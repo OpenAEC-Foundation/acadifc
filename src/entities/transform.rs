@@ -6,6 +6,21 @@
 use super::*;
 use crate::types::{Matrix3, Transform, Vector2, Vector3};
 
+
+/// True when `transform` reverses orientation (negative upper-3×3
+/// determinant — an odd number of mirrors). Plane-curve direction data
+/// (polyline bulges, hatch boundary arc flags) must flip with it.
+pub(crate) fn is_reflecting(transform: &Transform) -> bool {
+    let m = transform.matrix.m;
+    Matrix3::from_rows(
+        [m[0][0], m[0][1], m[0][2]],
+        [m[1][0], m[1][1], m[1][2]],
+        [m[2][0], m[2][1], m[2][2]],
+    )
+    .determinant()
+        < 0.0
+}
+
 // ── Point ────────────────────────────────────────────────────────────────────
 
 pub(crate) fn transform_point(e: &mut Point, transform: &Transform) {
@@ -66,8 +81,14 @@ pub(crate) fn transform_polyline(e: &mut Polyline, transform: &Transform) {
 // ── Polyline2D ───────────────────────────────────────────────────────────────
 
 pub(crate) fn transform_polyline2d(e: &mut Polyline2D, transform: &Transform) {
+    let flip = is_reflecting(transform);
     for vertex in &mut e.vertices {
         vertex.location = transform.apply(vertex.location);
+        if flip {
+            // Bulge encodes the arc's side/direction in the plane; a
+            // reflection reverses it.
+            vertex.bulge = -vertex.bulge;
+        }
     }
 }
 
@@ -82,11 +103,18 @@ pub(crate) fn transform_polyline3d(e: &mut Polyline3D, transform: &Transform) {
 // ── LwPolyline ───────────────────────────────────────────────────────────────
 
 pub(crate) fn transform_lwpolyline(e: &mut LwPolyline, transform: &Transform) {
+    let flip = is_reflecting(transform);
     for vertex in &mut e.vertices {
         let pt3d = Vector3::new(vertex.location.x, vertex.location.y, e.elevation);
         let transformed = transform.apply(pt3d);
         vertex.location.x = transformed.x;
         vertex.location.y = transformed.y;
+        if flip {
+            // Bulge encodes the arc's side/direction in the plane; a
+            // reflection reverses it. Without this, exploding a mirrored
+            // INSERT bows every bulged segment to the wrong side.
+            vertex.bulge = -vertex.bulge;
+        }
     }
     if !e.vertices.is_empty() {
         let pt3d = Vector3::new(0.0, 0.0, e.elevation);
@@ -1073,5 +1101,35 @@ mod tests {
             (sweep - 0.82586).abs() < 1e-9,
             "sweep must stay 0.82586, got {sweep}"
         );
+    }
+
+    // Exploding a mirrored INSERT routes plain entities through
+    // apply_transform → transform_lwpolyline. The bulge encodes which side
+    // the arc bows to; a reflection must negate it or every bulged segment
+    // bows the wrong way after EXPLODE.
+    #[test]
+    fn test_reflecting_transform_negates_lwpolyline_bulge() {
+        let mut lw = LwPolyline::new();
+        let mut v0 = LwVertex::new(crate::types::Vector2::new(0.0, 0.0));
+        v0.bulge = 0.5;
+        let mut v1 = LwVertex::new(crate::types::Vector2::new(10.0, 0.0));
+        v1.bulge = -0.3;
+        lw.add_vertex(v0);
+        lw.add_vertex(v1);
+
+        // Mirror across Y (x → -x): reflection, bulges must negate.
+        let mut a = lw.clone();
+        transform_lwpolyline(&mut a, &Transform::from_scaling(Vector3::new(-1.0, 1.0, 1.0)));
+        assert!((a.vertices[0].bulge - (-0.5)).abs() < 1e-12);
+        assert!((a.vertices[1].bulge - 0.3).abs() < 1e-12);
+
+        // Pure rotation (det > 0): bulges untouched.
+        let mut b = lw.clone();
+        transform_lwpolyline(
+            &mut b,
+            &Transform::from_rotation(Vector3::new(0.0, 0.0, 1.0), std::f64::consts::FRAC_PI_2),
+        );
+        assert!((b.vertices[0].bulge - 0.5).abs() < 1e-12);
+        assert!((b.vertices[1].bulge - (-0.3)).abs() < 1e-12);
     }
 }
