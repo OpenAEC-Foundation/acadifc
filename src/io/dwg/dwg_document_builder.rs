@@ -2359,6 +2359,37 @@ impl DwgDocumentBuilder {
                         crate::objects::ObjectType::WipeoutVariables(obj),
                     );
                 },
+                OBJ_GEODATA => {
+                    let data = objects::read_geodata(&mut reader);
+                    let mut obj = crate::objects::GeoData::new();
+                    obj.handle = Handle::from(handle);
+                    obj.owner = owner_handle;
+                    obj.version = data.version;
+                    obj.host_block = Handle::from(data.host_block);
+                    obj.coordinate_type = data.coordinate_type;
+                    obj.design_point = data.design_point;
+                    obj.reference_point = data.reference_point;
+                    obj.north_direction = data.north_direction;
+                    obj.up_direction = data.up_direction;
+                    obj.horizontal_unit_scale = data.horizontal_unit_scale;
+                    obj.vertical_unit_scale = data.vertical_unit_scale;
+                    obj.horizontal_units = data.horizontal_units;
+                    obj.vertical_units = data.vertical_units;
+                    obj.scale_estimation_method = data.scale_estimation_method;
+                    obj.user_scale_factor = data.user_scale_factor;
+                    obj.sea_level_correction = data.sea_level_correction;
+                    obj.sea_level_elevation = data.sea_level_elevation;
+                    obj.coordinate_projection_radius = data.coordinate_projection_radius;
+                    obj.coordinate_system_definition = data.coordinate_system_definition;
+                    obj.geo_rss_tag = data.geo_rss_tag;
+                    obj.observation_from_tag = data.observation_from_tag;
+                    obj.observation_to_tag = data.observation_to_tag;
+                    obj.observation_coverage_tag = data.observation_coverage_tag;
+                    document.objects.insert(
+                        Handle::from(handle),
+                        crate::objects::ObjectType::GeoData(obj),
+                    );
+                },
                 _ => {
                     // Preserve unrecognised non-entity objects verbatim so
                     // they survive roundtrip without losing their handles.

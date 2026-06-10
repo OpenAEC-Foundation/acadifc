@@ -3,7 +3,7 @@
 //! These are minimal representations of DXF objects that ACadSharp supports
 //! but that don't require full rich data models for typical usage.
 
-use crate::types::Handle;
+use crate::types::{Handle, Vector2, Vector3};
 
 /// Trait for minimal stub objects that only need handle + owner fields.
 /// Used by the generic `read_stub_object` reader.
@@ -99,7 +99,11 @@ impl Default for Material {
     fn default() -> Self { Self::new() }
 }
 
-/// GeoData — geographic location data for a drawing
+/// GeoData — geographic location data for a drawing (AcDbGeoData).
+///
+/// Carries the drawing's georeference, most importantly the coordinate-system
+/// definition (a MapGuide coordinate-system XML string on R2010+; a WKT PROJCS
+/// string on R2009).
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GeoData {
@@ -107,10 +111,48 @@ pub struct GeoData {
     pub handle: Handle,
     /// Owner handle
     pub owner: Handle,
-    /// Object version (code 90)
+    /// Object version (code 90): 1 = R2009, 2 = R2010, 3 = R2013
     pub version: i32,
+    /// Soft pointer to the host block record
+    pub host_block: Handle,
     /// Coordinate type (code 70): 0 = unknown, 1 = local grid, 2 = projected grid, 3 = geographic
     pub coordinate_type: i16,
+    /// Design point (WCS) (codes 10/20/30)
+    pub design_point: Vector3,
+    /// Reference point (geographic/projected) (codes 11/21/31)
+    pub reference_point: Vector3,
+    /// North direction vector (codes 12/22)
+    pub north_direction: Vector2,
+    /// Up direction (codes 210/220/230)
+    pub up_direction: Vector3,
+    /// Horizontal unit scale (code 41)
+    pub horizontal_unit_scale: f64,
+    /// Vertical unit scale (code 40)
+    pub vertical_unit_scale: f64,
+    /// Horizontal units (code 91)
+    pub horizontal_units: i32,
+    /// Vertical units (code 92)
+    pub vertical_units: i32,
+    /// Scale estimation method (code 95)
+    pub scale_estimation_method: i32,
+    /// User-specified scale factor (code 141)
+    pub user_scale_factor: f64,
+    /// Enable sea-level correction (code 294)
+    pub sea_level_correction: bool,
+    /// Sea-level elevation (code 142)
+    pub sea_level_elevation: f64,
+    /// Coordinate projection radius (code 143)
+    pub coordinate_projection_radius: f64,
+    /// Coordinate system definition (code 301): MapGuide XML (R2010+) or WKT (R2009)
+    pub coordinate_system_definition: String,
+    /// Geo RSS tag (code 302)
+    pub geo_rss_tag: String,
+    /// Observation-from tag (code 305)
+    pub observation_from_tag: String,
+    /// Observation-to tag (code 306)
+    pub observation_to_tag: String,
+    /// Observation-coverage tag (code 307)
+    pub observation_coverage_tag: String,
 }
 
 impl GeoData {
@@ -120,7 +162,26 @@ impl GeoData {
             handle: Handle::NULL,
             owner: Handle::NULL,
             version: 2,
+            host_block: Handle::NULL,
             coordinate_type: 0,
+            design_point: Vector3::default(),
+            reference_point: Vector3::default(),
+            north_direction: Vector2::default(),
+            up_direction: Vector3::default(),
+            horizontal_unit_scale: 1.0,
+            vertical_unit_scale: 1.0,
+            horizontal_units: 0,
+            vertical_units: 0,
+            scale_estimation_method: 0,
+            user_scale_factor: 1.0,
+            sea_level_correction: false,
+            sea_level_elevation: 0.0,
+            coordinate_projection_radius: 0.0,
+            coordinate_system_definition: String::new(),
+            geo_rss_tag: String::new(),
+            observation_from_tag: String::new(),
+            observation_to_tag: String::new(),
+            observation_coverage_tag: String::new(),
         }
     }
 }
