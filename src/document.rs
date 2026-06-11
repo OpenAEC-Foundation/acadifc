@@ -930,6 +930,20 @@ pub struct CadDocument {
     /// All objects in the document (indexed by handle)
     pub objects: HashMap<Handle, ObjectType>,
 
+    /// Parsed dynamic-block visibility parameters, keyed by parameter handle.
+    /// A *side* view: the objects themselves are still kept verbatim in
+    /// `objects` as `ObjectType::Unknown` for DWG round-trip. Lets consumers
+    /// enumerate visibility states and their per-state visible-entity sets
+    /// without re-decoding the raw object stream.
+    pub block_visibility_params: HashMap<Handle, crate::objects::BlockVisibilityParameter>,
+
+    /// AcDbBlockRepresentationData link: representation-object handle → the
+    /// dynamic block-definition handle it represents (group code 340). Lets a
+    /// consumer connect an anonymous evaluated block to its dynamic definition
+    /// (and thus to that definition's visibility parameter). Side view; the
+    /// objects stay verbatim as `ObjectType::Unknown`.
+    pub block_representations: HashMap<Handle, Handle>,
+
     /// Raw EED blobs per handle — populated during DWG read, consumed during DWG write.
     /// Keyed by the object/table-entry handle. Not serialized.
     pub(crate) eed_by_handle: HashMap<Handle, Vec<(u64, Vec<u8>)>>,
@@ -970,6 +984,8 @@ impl CadDocument {
             entities: Vec::new(),
             entity_index: HashMap::new(),
             objects: HashMap::new(),
+            block_visibility_params: HashMap::new(),
+            block_representations: HashMap::new(),
             eed_by_handle: HashMap::new(),
             xdic_by_handle: HashMap::new(),
             reactors_by_handle: HashMap::new(),
@@ -1645,6 +1661,70 @@ impl CadDocument {
     /// Iterate over all entities mutably
     pub fn entities_mut(&mut self) -> impl Iterator<Item = &mut EntityType> {
         self.entities.iter_mut()
+    }
+
+    /// Owner handle of a dictionary/unknown object, for ownership-chain walks.
+    fn object_owner(&self, h: Handle) -> Option<Handle> {
+        match self.objects.get(&h)? {
+            ObjectType::Dictionary(d) => Some(d.owner),
+            ObjectType::DictionaryWithDefault(_) => None,
+            ObjectType::Unknown { owner, .. } => Some(*owner),
+            _ => None,
+        }
+    }
+
+    /// Walk the ownership chain upward from `start` (inclusive) and report
+    /// whether it passes through `target`. Bounded to avoid cycles.
+    fn owner_chain_reaches(&self, start: Handle, target: Handle) -> bool {
+        let mut cur = start;
+        for _ in 0..16 {
+            if cur == target {
+                return true;
+            }
+            match self.object_owner(cur) {
+                Some(next) if next != cur && next.value() != 0 => cur = next,
+                _ => break,
+            }
+        }
+        cur == target
+    }
+
+    /// Resolve the visibility parameter governing a dynamic block definition,
+    /// if that block carries one (via its ACAD_ENHANCEDBLOCK evaluation graph).
+    pub fn block_visibility_param_for_def(
+        &self,
+        def_block: Handle,
+    ) -> Option<&crate::objects::BlockVisibilityParameter> {
+        self.block_visibility_params
+            .values()
+            .find(|p| self.owner_chain_reaches(p.owner, def_block))
+    }
+
+    /// Resolve the dynamic visibility parameter for a block reference (INSERT),
+    /// returning `(dynamic_definition_block, parameter)`.
+    ///
+    /// An evaluated (anonymous) block reference records its dynamic definition
+    /// through an `AcDbBlockRepresentationData` object reachable from the
+    /// INSERT's extension dictionary. That definition's enhanced-block graph
+    /// then carries the visibility parameter.
+    pub fn dynamic_visibility_for_insert(
+        &self,
+        insert_handle: Handle,
+    ) -> Option<(Handle, &crate::objects::BlockVisibilityParameter)> {
+        let insert = self.entities.iter().find_map(|e| match e {
+            EntityType::Insert(i) if i.common.handle == insert_handle => Some(i),
+            _ => None,
+        })?;
+        let xdict = insert.common.xdictionary_handle?;
+        // Find the representation object owned (transitively) by this INSERT's
+        // extension dictionary; it names the dynamic definition block.
+        let def_block = self
+            .block_representations
+            .iter()
+            .find(|(rep, _)| self.owner_chain_reaches(**rep, xdict))
+            .map(|(_, def)| *def)?;
+        let param = self.block_visibility_param_for_def(def_block)?;
+        Some((def_block, param))
     }
 
     /// Resolve handle references after reading a DXF file.

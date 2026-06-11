@@ -305,6 +305,116 @@ pub fn read_dictionary_variable(reader: &mut DwgMergedReader) -> DictionaryVaria
     DictionaryVariableData { schema_number, value }
 }
 
+/// Read an AcDbBlockVisibilityParameter object body (after the common
+/// non-entity header). Follows the class chain
+/// AcDbEvalExpr → AcDbBlockElement → AcDbBlockParameter →
+/// AcDbBlock1PtParameter → AcDbBlockVisibilityParameter.
+///
+/// Numeric fields come from the main stream, text from the text stream, and
+/// handles from the handle stream — the merged reader keeps the three cursors
+/// independent, so reads in spec order self-align across the substreams.
+///
+/// `handle`/`owner` are filled by the caller. Returns the parsed parameter.
+pub fn read_block_visibility_parameter(
+    reader: &mut DwgMergedReader,
+) -> crate::objects::BlockVisibilityParameter {
+    use crate::objects::{BlockVisibilityParameter, BlockVisibilityState};
+    let mut p = BlockVisibilityParameter::default();
+
+    // ── AcDbEvalExpr ──
+    let _parent_id = reader.read_bit_long(); // BLd parentid
+    let _major = reader.read_bit_long(); // BL (98)
+    let _minor = reader.read_bit_long(); // BL (99)
+    let value_code = reader.read_bit_short(); // BSd value_code (70)
+    match value_code {
+        40 => {
+            let _ = reader.read_bit_double();
+        }
+        10 | 11 => {
+            let _ = reader.read_2raw_double();
+        }
+        1 => {
+            let _ = reader.read_variable_text();
+        }
+        90 => {
+            let _ = reader.read_bit_long();
+        }
+        91 => {
+            let _ = reader.read_handle();
+        }
+        70 => {
+            let _ = reader.read_bit_short();
+        }
+        _ => {}
+    }
+    let _node_id = reader.read_bit_long(); // BL nodeid
+
+    // ── AcDbBlockElement ──
+    let _elem_name = reader.read_variable_text(); // T name (300)
+    let _be_major = reader.read_bit_long(); // BL (98)
+    let _be_minor = reader.read_bit_long(); // BL (99)
+    let _eed1071 = reader.read_bit_long(); // BL (1071)
+
+    // ── AcDbBlockParameter ──
+    let _show_properties = reader.read_bit(); // B (280)
+    let _chain_actions = reader.read_bit(); // B (281)
+
+    // ── AcDbBlock1PtParameter ──
+    p.def_point = reader.read_3bit_double(); // 3BD def_pt (1010)
+    // Two PropInfo blocks: each is a BL connection count + (BL code, T name) pairs.
+    for _ in 0..2 {
+        let n = safe_count(reader.read_bit_long());
+        for _ in 0..n {
+            let _code = reader.read_bit_long();
+            let _name = reader.read_variable_text();
+        }
+    }
+    let _num_propinfos = reader.read_bit_long(); // BL num_propinfos
+
+    // ── AcDbBlockVisibilityParameter ──
+    let _is_initialized = reader.read_bit(); // B (281)
+    p.name = reader.read_variable_text(); // T blockvisi_name (301)
+    p.description = reader.read_variable_text(); // T blockvisi_desc (302)
+    let _unknown_bool = reader.read_bit(); // B (91)
+
+    let num_blocks = safe_count(reader.read_bit_long()); // BL num_blocks (93)
+    for _ in 0..num_blocks {
+        p.all_blocks.push(crate::types::Handle::from(reader.read_handle()));
+    }
+
+    let num_states = safe_count(reader.read_bit_long()); // BL num_states (92)
+    for _ in 0..num_states {
+        let mut st = BlockVisibilityState {
+            name: reader.read_variable_text(), // T state name (303)
+            ..Default::default()
+        };
+        let nb = safe_count(reader.read_bit_long()); // BL (94)
+        for _ in 0..nb {
+            st.visible_blocks
+                .push(crate::types::Handle::from(reader.read_handle()));
+        }
+        let np = safe_count(reader.read_bit_long()); // BL (95)
+        for _ in 0..np {
+            st.visible_params
+                .push(crate::types::Handle::from(reader.read_handle()));
+        }
+        p.states.push(st);
+    }
+
+    p
+}
+
+/// Read an AcDbBlockRepresentationData object body (after the common
+/// non-entity header) and return the handle of the dynamic block definition
+/// it represents (group code 340, a hard pointer). This is the link from an
+/// anonymous evaluated block back to its dynamic block definition.
+///
+/// Layout: BS flag (70), then the block handle from the handle stream.
+pub fn read_block_representation_data(reader: &mut DwgMergedReader) -> crate::types::Handle {
+    let _flag = reader.read_bit_short(); // BS (70)
+    crate::types::Handle::from(reader.read_handle()) // H block (3, 340)
+}
+
 /// Read the PlotSettings data portion (shared by Layout and standalone PlotSettings).
 pub fn read_plot_settings_data(reader: &mut DwgMergedReader, version: DwgVersion) -> PlotSettingsData {
     let page_name = reader.read_variable_text();
