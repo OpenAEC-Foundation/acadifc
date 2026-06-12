@@ -3,6 +3,7 @@
 //! Objects are non-graphical elements in a DXF file, such as dictionaries,
 //! layouts, groups, and other organizational structures.
 
+mod block_visibility;
 mod dictionary_variable;
 mod group;
 mod image_definition;
@@ -15,6 +16,7 @@ mod table_style;
 mod xrecord;
 mod stub_objects;
 
+pub use block_visibility::{BlockVisibilityParameter, BlockVisibilityState};
 pub use dictionary_variable::DictionaryVariable;
 pub use group::Group;
 pub use image_definition::{ImageDefinition, ImageDefinitionReactor, ResolutionUnit};

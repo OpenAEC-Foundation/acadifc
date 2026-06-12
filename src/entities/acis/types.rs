@@ -360,12 +360,47 @@ impl SatRecord {
 
     /// Returns the float value of the token at the given position.
     pub fn token_float(&self, index: usize) -> Option<f64> {
-        self.tokens.get(index).and_then(|t| t.as_float())
+        // Coordinate-aware flat-float indexing. SAT text stores a point/vector
+        // as three separate float tokens, so the geometry accessors read
+        // px,py,pz / nx,ny,nz at consecutive indices. SAB/ASM (AutoCAD 2013+)
+        // packs each coordinate triple into ONE Position/Direction token, so
+        // expand those into three consecutive float slots here. Records with
+        // no Position tokens (all SAT, most SAB scalars) index 1:1 as before.
+        let mut slot = 0usize;
+        for t in &self.tokens {
+            if let SatToken::Position(x, y, z) = t {
+                for &c in &[*x, *y, *z] {
+                    if slot == index {
+                        return Some(c);
+                    }
+                    slot += 1;
+                }
+            } else {
+                if slot == index {
+                    return t.as_float();
+                }
+                slot += 1;
+            }
+        }
+        None
     }
 
     /// Returns the pointer at the given token position.
     pub fn token_pointer(&self, index: usize) -> Option<SatPointer> {
         self.tokens.get(index).and_then(|t| t.as_pointer())
+    }
+
+    /// Pointer by ordinal: the `index`-th pointer token, skipping interleaved
+    /// scalar tokens. Most accessors use absolute positions (`token_pointer`)
+    /// because ACIS keeps parameters in fixed slots, but a few records gained
+    /// an extra scalar field in ASM (ShapeManager, AutoCAD 2013+) — e.g. a
+    /// vertex's tolerance int between its edge and point — where ordinal
+    /// indexing stays correct for both ACIS and ASM.
+    pub fn nth_pointer(&self, index: usize) -> Option<SatPointer> {
+        self.tokens
+            .iter()
+            .filter_map(|t| t.as_pointer())
+            .nth(index)
     }
 
     /// Returns the string value at the given token position.
@@ -803,12 +838,16 @@ impl<'a> SatVertex<'a> {
 
     /// Pointer to the edge.
     pub fn edge(&self) -> SatPointer {
-        self.record.token_pointer(1).unwrap_or(SatPointer::NULL)
+        self.record.nth_pointer(1).unwrap_or(SatPointer::NULL)
     }
 
     /// Pointer to the point geometry.
+    ///
+    /// Uses pointer-ordinal indexing so the ASM (AutoCAD 2013+) vertex layout
+    /// `$attr $edge <tolerance:int> $point` resolves the same as the classic
+    /// ACIS `$attr $edge $point`.
     pub fn point(&self) -> SatPointer {
-        self.record.token_pointer(2).unwrap_or(SatPointer::NULL)
+        self.record.nth_pointer(2).unwrap_or(SatPointer::NULL)
     }
 }
 

@@ -49,6 +49,9 @@ pub mod tags {
     pub const POSITION: u8 = 0x13;
     /// Direction (3 doubles: x, y, z).
     pub const DIRECTION: u8 = 0x14;
+    /// Enumerated value (4-byte int). Emitted by ASM / ShapeManager records
+    /// (AutoCAD 2013+); read like an integer.
+    pub const ENUM: u8 = 0x15;
 }
 
 /// SAB header magic string.
@@ -485,14 +488,19 @@ pub struct SabReader;
 impl SabReader {
     /// Parse SAB binary data into a SAT document.
     pub fn read(data: &[u8]) -> Result<SatDocument, SabError> {
-        if data.len() < SAB_MAGIC.len() {
+        // Two header magics: classic ACIS ("ACIS BinaryFile", 15 bytes) and the
+        // newer Autodesk ShapeManager ("ASM BinaryFile", 14 bytes) emitted by
+        // AutoCAD 2013+ and carried in the AcDs data store. In both the version
+        // u32 begins 15 bytes in: ACIS's magic is 15 bytes; ASM's 14-byte magic
+        // is followed by one trailing byte before the header ints.
+        const SAB_MAGIC_ASM: &[u8] = b"ASM BinaryFile";
+        let mut pos = if data.starts_with(SAB_MAGIC) {
+            SAB_MAGIC.len()
+        } else if data.starts_with(SAB_MAGIC_ASM) {
+            SAB_MAGIC.len() // 15 = 14-byte ASM magic + 1 trailing byte
+        } else {
             return Err(SabError::InvalidMagic);
-        }
-        if &data[..SAB_MAGIC.len()] != SAB_MAGIC {
-            return Err(SabError::InvalidMagic);
-        }
-
-        let mut pos = SAB_MAGIC.len();
+        };
 
         // Header ints (4 × u32 LE)
         let version_num = read_u32(data, &mut pos)?;
@@ -734,7 +742,7 @@ impl SabReader {
                 let val = read_i32(data, &mut pos)?;
                 Ok((SatToken::Pointer(SatPointer::new(val)), pos))
             }
-            tags::INTEGER => {
+            tags::INTEGER | tags::ENUM => {
                 let val = read_i32(data, &mut pos)?;
                 Ok((SatToken::Integer(val as i64), pos))
             }

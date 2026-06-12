@@ -43,19 +43,17 @@ pub(crate) fn mirror_ellipse(e: &mut Ellipse, transform: &Transform) {
 // ── LwPolyline ───────────────────────────────────────────────────────────────
 
 pub(crate) fn mirror_lwpolyline(e: &mut LwPolyline, transform: &Transform) {
+    // transform_lwpolyline negates bulges itself whenever the transform
+    // reflects (det < 0) — no extra post-processing needed.
     super::transform::transform_lwpolyline(e, transform);
-    for vertex in &mut e.vertices {
-        vertex.bulge = -vertex.bulge;
-    }
 }
 
 // ── Polyline (3D heavy) ──────────────────────────────────────────────────────
 
 pub(crate) fn mirror_polyline2d(e: &mut Polyline2D, transform: &Transform) {
+    // transform_polyline2d negates bulges itself whenever the transform
+    // reflects (det < 0) — no extra post-processing needed.
     super::transform::transform_polyline2d(e, transform);
-    for vertex in &mut e.vertices {
-        vertex.bulge = -vertex.bulge;
-    }
 }
 
 // ── Face3D ───────────────────────────────────────────────────────────────────
@@ -123,53 +121,12 @@ pub(crate) fn mirror_shape(e: &mut Shape, transform: &Transform) {
 // ── Hatch ────────────────────────────────────────────────────────────────────
 
 pub(crate) fn mirror_hatch(e: &mut Hatch, transform: &Transform) {
-    use crate::types::normalize_angle;
-
+    // transform_hatch handles reflections itself: it flips the boundary-arc
+    // direction flags, re-mirrors the stored angles and preserves the stored
+    // sweep (including wrap-encoded end angles above 2π). The old angle-swap
+    // post-processing here double-corrected on top of that and re-normalized
+    // the angles, breaking wrap-encoded arcs.
     super::transform::transform_hatch(e, transform);
-
-    for path in &mut e.paths {
-        for edge in &mut path.edges {
-            match edge {
-                BoundaryEdge::CircularArc(arc) => {
-                    let old_start = arc.start_angle;
-                    let old_end = arc.end_angle;
-
-                    let center_3d = Vector3::new(arc.center.x, arc.center.y, 0.0);
-                    let start_pt = Vector3::new(
-                        arc.center.x + arc.radius * old_start.cos(),
-                        arc.center.y + arc.radius * old_start.sin(),
-                        0.0,
-                    );
-                    let end_pt = Vector3::new(
-                        arc.center.x + arc.radius * old_end.cos(),
-                        arc.center.y + arc.radius * old_end.sin(),
-                        0.0,
-                    );
-                    let ms = transform.apply(start_pt);
-                    let me = transform.apply(end_pt);
-
-                    arc.start_angle =
-                        normalize_angle((me.y - center_3d.y).atan2(me.x - center_3d.x));
-                    arc.end_angle =
-                        normalize_angle((ms.y - center_3d.y).atan2(ms.x - center_3d.x));
-                    arc.counter_clockwise = !arc.counter_clockwise;
-                }
-                BoundaryEdge::EllipticArc(ellipse) => {
-                    let new_start = -ellipse.end_angle;
-                    let new_end = -ellipse.start_angle;
-                    ellipse.start_angle = new_start;
-                    ellipse.end_angle = new_end;
-                    ellipse.counter_clockwise = !ellipse.counter_clockwise;
-                }
-                BoundaryEdge::Polyline(poly) => {
-                    for v in &mut poly.vertices {
-                        v.z = -v.z;
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
 }
 
 // ── EntityType dispatch ──────────────────────────────────────────────────────

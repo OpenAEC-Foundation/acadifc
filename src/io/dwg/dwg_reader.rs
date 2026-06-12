@@ -172,6 +172,90 @@ impl DwgReadOptions {
     }
 }
 
+/// Find the first occurrence of `needle` in `haystack` at or after `from`.
+fn find_subsequence(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    (from..=haystack.len() - needle.len()).find(|&i| &haystack[i..i + needle.len()] == needle)
+}
+
+/// Extract every SAB (ACIS/ASM binary) blob from a decompressed AcDs section.
+///
+/// Each blob runs from its header magic — `"ACIS BinaryFile"` (classic ACIS) or
+/// `"ASM BinaryFile"` (Autodesk ShapeManager, AutoCAD 2013+) — through the
+/// `End-of-ASM-data` terminator. Blobs are returned in the order they appear,
+/// which matches the order the modeler entities were written.
+fn extract_acds_sab_blobs(buf: &[u8]) -> Vec<Vec<u8>> {
+    // 0E 03 "End" 0E 02 "of" 0E 03 "ASM" 0D 04 "data"
+    const END_MARKER: &[u8] = b"\x0E\x03End\x0E\x02of\x0E\x03ASM\x0D\x04data";
+    const ACIS_MAGIC: &[u8] = b"ACIS BinaryFile";
+    const ASM_MAGIC: &[u8] = b"ASM BinaryFile";
+
+    let mut blobs = Vec::new();
+    let mut pos = 0usize;
+    while pos < buf.len() {
+        let acis = find_subsequence(buf, ACIS_MAGIC, pos);
+        let asm = find_subsequence(buf, ASM_MAGIC, pos);
+        let start = match (acis, asm) {
+            (Some(a), Some(b)) => a.min(b),
+            (Some(a), None) => a,
+            (None, Some(b)) => b,
+            (None, None) => break,
+        };
+        match find_subsequence(buf, END_MARKER, start) {
+            Some(end) => {
+                let stop = end + END_MARKER.len();
+                blobs.push(buf[start..stop].to_vec());
+                pos = stop;
+            }
+            None => break,
+        }
+    }
+    blobs
+}
+
+/// Attach extracted AcDs SAB blobs, in order, to the document's modeler
+/// (3DSOLID / REGION / BODY) entities. Returns the number attached.
+fn attach_acds_sab_blobs(document: &mut crate::document::CadDocument, blobs: Vec<Vec<u8>>) -> usize {
+    use crate::entities::solid3d::AcisVersion;
+    use crate::entities::EntityType;
+
+    let mut it = blobs.into_iter();
+    let mut attached = 0usize;
+    for entity in document.entities_mut() {
+        let acis = match entity {
+            EntityType::Solid3D(s) => &mut s.acis_data,
+            EntityType::Region(r) => &mut r.acis_data,
+            EntityType::Body(b) => &mut b.acis_data,
+            _ => continue,
+        };
+        match it.next() {
+            Some(blob) => {
+                acis.sab_data = blob;
+                acis.sat_data = String::new();
+                acis.is_binary = true;
+                acis.version = AcisVersion::Version2;
+                attached += 1;
+            }
+            None => break,
+        }
+    }
+    attached
+}
+
+/// Decode a section name from a fixed 64-byte, null-terminated field.
+///
+/// The name ends at the first null byte. Some writers leave non-zero garbage
+/// in the bytes *after* the terminator instead of zero-padding the field, so
+/// trimming trailing nulls is not enough — it would keep the embedded null and
+/// the junk that follows (e.g. `"AcDb:Handles\0t…"`), and the name would then
+/// fail to match when looking the section up.
+fn section_name_from_field(name_buf: &[u8; 64]) -> String {
+    let end = name_buf.iter().position(|&b| b == 0).unwrap_or(name_buf.len());
+    String::from_utf8_lossy(&name_buf[..end]).into_owned()
+}
+
 /// DWG file reader with CRC-64 extraction support.
 ///
 /// Reads DWG binary files and provides access to all internal
@@ -334,6 +418,22 @@ impl<R: Read + Seek> DwgReader<R> {
                         format!("Failed to init object reader: {}", e),
                     ),
                 }
+            }
+        }
+
+        // 6. R2013+ (AC1027+): 3DSOLID / REGION / BODY ACIS geometry is not
+        //    stored inline — it lives as SAB blobs in the AcDs (Autodesk Data
+        //    Store) section. Extract those blobs and attach them, in document
+        //    order, to the modeler-geometry entities that arrived with only a
+        //    stub. Files without an AcDs section keep their inline data.
+        if let Ok(acds_buf) = self.get_section_buffer("AcDb:AcDsPrototype_1b", &info) {
+            let blobs = extract_acds_sab_blobs(&acds_buf);
+            if !blobs.is_empty() {
+                let attached = attach_acds_sab_blobs(&mut document, blobs);
+                self.notifications.notify(
+                    NotificationType::Warning,
+                    format!("AcDs: attached {} SAB blob(s) to modeler entities", attached),
+                );
             }
         }
 
@@ -768,12 +868,14 @@ impl<R: Read + Seek> DwgReader<R> {
             let _section_id = cursor.read_i32::<LittleEndian>()?;
             let encrypted = cursor.read_i32::<LittleEndian>()?;
 
-            // Section name (64 bytes, zero-padded)
+            // Section name (64-byte field, null-terminated). Some writers leave
+            // non-zero garbage in the bytes *after* the terminator instead of
+            // zero-padding, so cut at the first null rather than trimming
+            // trailing nulls — otherwise the embedded null plus trailing junk
+            // survives and the name fails to match (e.g. "AcDb:Handles\0t…").
             let mut name_buf = [0u8; 64];
             cursor.read_exact(&mut name_buf)?;
-            let name = String::from_utf8_lossy(&name_buf)
-                .trim_end_matches('\0')
-                .to_string();
+            let name = section_name_from_field(&name_buf);
 
             // Per-page entries: pageNumber(4), compressedSize(4), offset(8)
             let mut pages = Vec::new();
@@ -1614,5 +1716,37 @@ impl std::fmt::Display for CrcExtractionReport {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod section_name_tests {
+    use super::section_name_from_field;
+
+    fn field(prefix: &[u8]) -> [u8; 64] {
+        let mut b = [0u8; 64];
+        b[..prefix.len()].copy_from_slice(prefix);
+        b
+    }
+
+    #[test]
+    fn clean_zero_padded_name() {
+        assert_eq!(section_name_from_field(&field(b"AcDb:Handles")), "AcDb:Handles");
+    }
+
+    #[test]
+    fn stops_at_first_null_ignoring_trailing_garbage() {
+        // Terminator at index 12, then non-zero junk — the real-world case that
+        // broke `trim_end_matches('\0')`.
+        let mut b = field(b"AcDb:Handles");
+        b[13] = b't';
+        b[14] = 0x01;
+        b[20] = b'X';
+        assert_eq!(section_name_from_field(&b), "AcDb:Handles");
+    }
+
+    #[test]
+    fn empty_when_first_byte_null() {
+        assert_eq!(section_name_from_field(&[0u8; 64]), "");
     }
 }

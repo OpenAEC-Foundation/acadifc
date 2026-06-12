@@ -389,10 +389,13 @@ impl Insert {
 
             // Circle → Ellipse so non-uniform scale works
             EntityType::Circle(circle) => {
+                // CIRCLE stores `center` in OCS; ELLIPSE is a WCS entity —
+                // convert on the way in (identity for the Z-up normal).
+                let ocs_to_wcs = Matrix3::arbitrary_axis(circle.normal);
                 let mut ellipse = Ellipse {
                     common: circle.common.clone(),
-                    center: circle.center,
-                    major_axis: Vector3::UNIT_X * circle.radius,
+                    center: ocs_to_wcs * circle.center,
+                    major_axis: ocs_to_wcs * (Vector3::UNIT_X * circle.radius),
                     minor_axis_ratio: 1.0,
                     start_parameter: 0.0,
                     end_parameter: std::f64::consts::TAU,
@@ -491,10 +494,15 @@ impl Insert {
 
     /// Explode an arc with non-uniform XY scale — converts to an elliptical arc (Ellipse).
     fn explode_arc_to_ellipse(&self, arc: &Arc, transform: &Transform) -> EntityType {
+        // ARC stores `center` in OCS; ELLIPSE is a WCS entity. Convert on the
+        // way in (identity for the common Z-up normal). The arc's angles are
+        // measured against the OCS X axis, which becomes the ellipse's major
+        // axis below — so the parameters carry over unchanged.
+        let ocs_to_wcs = Matrix3::arbitrary_axis(arc.normal);
         let mut ellipse = Ellipse {
             common: arc.common.clone(),
-            center: arc.center,
-            major_axis: Vector3::UNIT_X * arc.radius,
+            center: ocs_to_wcs * arc.center,
+            major_axis: ocs_to_wcs * (Vector3::UNIT_X * arc.radius),
             minor_axis_ratio: 1.0,
             start_parameter: arc.start_angle,
             end_parameter: arc.end_angle,
@@ -511,17 +519,18 @@ impl Insert {
     /// unchanged), this properly computes the new ratio by transforming both
     /// major and minor axis directions independently. The new normal is derived
     /// from `new_major × new_minor`, which automatically encodes any handedness
-    /// flip introduced by a reflective transform (det < 0). The stored
-    /// `major_axis` is then expressed in the new ellipse's OCS so the renderer
-    /// reconstructs the correct WCS direction together with the derived normal,
-    /// preserving the original sweep direction.
+    /// flip introduced by a reflective transform (det < 0), preserving the
+    /// original sweep direction.
+    ///
+    /// ELLIPSE is one of the few WCS entities in DXF: `center` (code 10) and
+    /// `major_axis` (code 11) are world coordinates, NOT OCS — so the transform
+    /// applies to the stored values directly and the results are stored back
+    /// as-is. (An earlier revision round-tripped them through the
+    /// arbitrary-axis OCS, which made files with a non-Z-up result — e.g. a
+    /// mirrored explode — read wrong in other CAD applications.)
     fn apply_full_ellipse_transform(ellipse: &mut Ellipse, transform: &Transform) {
-        // Convert center and major axis (both stored in OCS per the arbitrary-axis
-        // algorithm) to WCS so the INSERT transform can be applied uniformly.
-        // For normal=(0,0,1) OCS == WCS and these conversions are no-ops.
-        let ocs_to_wcs = Matrix3::arbitrary_axis(ellipse.normal);
-        let center_wcs = ocs_to_wcs * ellipse.center;
-        let major_wcs = ocs_to_wcs * ellipse.major_axis;
+        let center_wcs = ellipse.center;
+        let major_wcs = ellipse.major_axis;
 
         // Original minor axis vector (WCS, perpendicular to major in the ellipse plane).
         let original_minor_dir = ellipse.normal.cross(&major_wcs).normalize();
@@ -558,16 +567,8 @@ impl Insert {
             Self::transform_normal(transform, ellipse.normal)
         };
 
-        // Re-express center and major axis in the new OCS so the renderer
-        // (which interprets `center` and `major_axis` components in OCS)
-        // reconstructs the correct WCS values.
-        let new_ocs_to_wcs = Matrix3::arbitrary_axis(new_normal);
-        let new_wcs_to_ocs = new_ocs_to_wcs.transpose();
-        let center_ocs = new_wcs_to_ocs * new_center_wcs;
-        let major_ocs = new_wcs_to_ocs * final_major_wcs;
-
-        ellipse.center = center_ocs;
-        ellipse.major_axis = major_ocs;
+        ellipse.center = new_center_wcs;
+        ellipse.major_axis = final_major_wcs;
         ellipse.minor_axis_ratio = if final_major_wcs.length() > 1e-12 {
             final_minor_wcs.length() / final_major_wcs.length()
         } else {
@@ -1346,11 +1347,10 @@ mod tests {
     // ── Mirrored INSERT ellipse handedness ──────────────────────
 
     /// Reconstruct an ellipse's three sample points at t = start, mid, end in WCS.
-    /// Both `center` and `major_axis` are interpreted as OCS (arbitrary-axis algorithm).
+    /// ELLIPSE is a WCS entity: `center` and `major_axis` are world coordinates.
     fn ellipse_sample_points(e: &Ellipse) -> (Vector3, Vector3, Vector3) {
-        let basis = Matrix3::arbitrary_axis(e.normal);
-        let center_wcs = basis * e.center;
-        let major_wcs = basis * e.major_axis;
+        let center_wcs = e.center;
+        let major_wcs = e.major_axis;
         let major_len = major_wcs.length();
         let u = major_wcs * (1.0 / major_len.max(1e-12));
         let v = e.normal.cross(&u);

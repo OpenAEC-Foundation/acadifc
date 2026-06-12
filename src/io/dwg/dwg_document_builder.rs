@@ -2390,6 +2390,53 @@ impl DwgDocumentBuilder {
                         crate::objects::ObjectType::GeoData(obj),
                     );
                 },
+                OBJ_BLOCKVISIBILITYPARAMETER => {
+                    // Parse the visibility states into the side map, then still
+                    // store the object verbatim as Unknown so DWG round-trip is
+                    // byte-exact (no typed writer needed).
+                    let mut param = objects::read_block_visibility_parameter(&mut reader);
+                    param.handle = Handle::from(handle);
+                    param.owner = owner_handle;
+                    document
+                        .block_visibility_params
+                        .insert(Handle::from(handle), param);
+
+                    let type_name = format!("DWG_OBJ_{}", type_code);
+                    let raw_handle_bits = reader.get_handle_bits();
+                    let raw_data = reader.raw_merged_data();
+                    document.objects.insert(
+                        Handle::from(handle),
+                        crate::objects::ObjectType::Unknown {
+                            type_name,
+                            handle: Handle::from(handle),
+                            owner: owner_handle,
+                            raw_dxf_codes: None,
+                            raw_dwg_data: Some(raw_data),
+                            raw_dwg_handle_bits: raw_handle_bits,
+                        },
+                    );
+                }
+                OBJ_BLOCKREPRESENTATIONDATA => {
+                    let block = objects::read_block_representation_data(&mut reader);
+                    document
+                        .block_representations
+                        .insert(Handle::from(handle), block);
+
+                    let type_name = format!("DWG_OBJ_{}", type_code);
+                    let raw_handle_bits = reader.get_handle_bits();
+                    let raw_data = reader.raw_merged_data();
+                    document.objects.insert(
+                        Handle::from(handle),
+                        crate::objects::ObjectType::Unknown {
+                            type_name,
+                            handle: Handle::from(handle),
+                            owner: owner_handle,
+                            raw_dxf_codes: None,
+                            raw_dwg_data: Some(raw_data),
+                            raw_dwg_handle_bits: raw_handle_bits,
+                        },
+                    );
+                }
                 _ => {
                     // Preserve unrecognised non-entity objects verbatim so
                     // they survive roundtrip without losing their handles.

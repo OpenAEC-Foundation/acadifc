@@ -6,6 +6,21 @@
 use super::*;
 use crate::types::{Matrix3, Transform, Vector2, Vector3};
 
+
+/// True when `transform` reverses orientation (negative upper-3×3
+/// determinant — an odd number of mirrors). Plane-curve direction data
+/// (polyline bulges, hatch boundary arc flags) must flip with it.
+pub(crate) fn is_reflecting(transform: &Transform) -> bool {
+    let m = transform.matrix.m;
+    Matrix3::from_rows(
+        [m[0][0], m[0][1], m[0][2]],
+        [m[1][0], m[1][1], m[1][2]],
+        [m[2][0], m[2][1], m[2][2]],
+    )
+    .determinant()
+        < 0.0
+}
+
 // ── Point ────────────────────────────────────────────────────────────────────
 
 pub(crate) fn transform_point(e: &mut Point, transform: &Transform) {
@@ -66,8 +81,14 @@ pub(crate) fn transform_polyline(e: &mut Polyline, transform: &Transform) {
 // ── Polyline2D ───────────────────────────────────────────────────────────────
 
 pub(crate) fn transform_polyline2d(e: &mut Polyline2D, transform: &Transform) {
+    let flip = is_reflecting(transform);
     for vertex in &mut e.vertices {
         vertex.location = transform.apply(vertex.location);
+        if flip {
+            // Bulge encodes the arc's side/direction in the plane; a
+            // reflection reverses it.
+            vertex.bulge = -vertex.bulge;
+        }
     }
 }
 
@@ -82,11 +103,18 @@ pub(crate) fn transform_polyline3d(e: &mut Polyline3D, transform: &Transform) {
 // ── LwPolyline ───────────────────────────────────────────────────────────────
 
 pub(crate) fn transform_lwpolyline(e: &mut LwPolyline, transform: &Transform) {
+    let flip = is_reflecting(transform);
     for vertex in &mut e.vertices {
         let pt3d = Vector3::new(vertex.location.x, vertex.location.y, e.elevation);
         let transformed = transform.apply(pt3d);
         vertex.location.x = transformed.x;
         vertex.location.y = transformed.y;
+        if flip {
+            // Bulge encodes the arc's side/direction in the plane; a
+            // reflection reverses it. Without this, exploding a mirrored
+            // INSERT bows every bulged segment to the wrong side.
+            vertex.bulge = -vertex.bulge;
+        }
     }
     if !e.vertices.is_empty() {
         let pt3d = Vector3::new(0.0, 0.0, e.elevation);
@@ -200,49 +228,74 @@ pub(crate) fn transform_hatch(e: &mut Hatch, transform: &Transform) {
                     line.end = transform_ocs_point(line.end);
                 }
                 BoundaryEdge::CircularArc(arc) => {
-                    let new_start = transform_ocs_angle(arc.start_angle);
-                    let new_end = transform_ocs_angle(arc.end_angle);
+                    // Stored-angle convention for boundary arcs, verified
+                    // against real AutoCAD output:
+                    //
+                    // 1. A clockwise (ccw = false) edge stores MIRRORED angles —
+                    //    the true point is `center + r·(cos(-θ), sin(-θ))`
+                    //    (endpoint continuity with adjacent edges: Δ = 0.0).
+                    // 2. The stored sweep is ALWAYS forward: `end - start ≥ 0`.
+                    //    When the arc crosses the 0 axis, AutoCAD writes `end`
+                    //    ABOVE 2π (e.g. start 5.81 → end 6.64). Normalizing the
+                    //    angles into [0, 2π) silently turns that 0.83 rad arc
+                    //    into its 5.46 rad complement — the giant wrong-way
+                    //    arcs this function used to produce via
+                    //    `transform_ocs_angle`'s atan2 normalization.
+                    //
+                    // So: transform only the START angle (one point, modulo is
+                    // fine) in TRUE angle space, and carry the stored sweep over
+                    // unchanged. The sweep is invariant under both rotation and
+                    // flip: a flip negates the true sweep AND mirrors the stored
+                    // space, which cancel.
+                    let to_true = |a: f64, ccw: bool| if ccw { a } else { -a };
+                    let norm = |a: f64| a.rem_euclid(2.0 * std::f64::consts::PI);
+                    let stored_sweep = arc.end_angle - arc.start_angle;
+                    let true_start = to_true(arc.start_angle, arc.counter_clockwise);
+                    let new_ccw = arc.counter_clockwise ^ is_flipped;
                     let center = transform_ocs_point(arc.center);
 
                     if is_uniform {
+                        let new_true_start = transform_ocs_angle(true_start);
+                        let new_start = norm(to_true(new_true_start, new_ccw));
                         arc.center = center;
                         arc.radius *= scale_x;
-                        if is_flipped {
-                            arc.counter_clockwise = !arc.counter_clockwise;
-                        }
+                        arc.counter_clockwise = new_ccw;
                         arc.start_angle = new_start;
-                        arc.end_angle = new_end;
+                        arc.end_angle = new_start + stored_sweep;
                     } else {
                         let major_axis_wcs = trans_ocs_x_wcs * arc.radius;
                         let major_axis_ocs_3d = new_wcs_to_ocs * major_axis_wcs;
                         let major_axis_endpoint =
                             Vector2::new(major_axis_ocs_3d.x, major_axis_ocs_3d.y);
 
-                        let mut ellipse = EllipticArcEdge {
+                        // The ellipse parameter equals the circle's TRUE angle:
+                        // the transformed axes carry the deformation, so the
+                        // parameter is unchanged — only re-mirrored for the new
+                        // direction flag, with the stored sweep carried over.
+                        let mut start = norm(to_true(true_start, new_ccw));
+                        let mut ratio = scale_y / scale_x;
+                        let mut major = major_axis_endpoint;
+                        if ratio > 1.0 {
+                            let len = major.length() * ratio;
+                            major = Vector2::new(-major.y, major.x).normalize() * len;
+                            ratio = 1.0 / ratio;
+                            // Major axis rotated +90°: true parameter shifts by
+                            // -π/2; stored space mirrors that for CW edges.
+                            let shift = if new_ccw {
+                                -std::f64::consts::FRAC_PI_2
+                            } else {
+                                std::f64::consts::FRAC_PI_2
+                            };
+                            start = norm(start + shift);
+                        }
+                        *edge = BoundaryEdge::EllipticArc(EllipticArcEdge {
                             center,
-                            major_axis_endpoint,
-                            minor_axis_ratio: scale_y / scale_x,
-                            start_angle: arc.start_angle,
-                            end_angle: arc.end_angle,
-                            counter_clockwise: arc.counter_clockwise,
-                        };
-                        if is_flipped {
-                            ellipse.counter_clockwise = !ellipse.counter_clockwise;
-                        }
-
-                        if ellipse.minor_axis_ratio > 1.0 {
-                            let old_major = ellipse.major_axis_endpoint;
-                            let old_major_len = old_major.length();
-                            let new_major_len = old_major_len * ellipse.minor_axis_ratio;
-                            let new_major_dir =
-                                Vector2::new(-old_major.y, old_major.x).normalize();
-                            ellipse.major_axis_endpoint = new_major_dir * new_major_len;
-                            ellipse.minor_axis_ratio = 1.0 / ellipse.minor_axis_ratio;
-                            ellipse.start_angle -= std::f64::consts::FRAC_PI_2;
-                            ellipse.end_angle -= std::f64::consts::FRAC_PI_2;
-                        }
-
-                        *edge = BoundaryEdge::EllipticArc(ellipse);
+                            major_axis_endpoint: major,
+                            minor_axis_ratio: ratio,
+                            start_angle: start,
+                            end_angle: start + stored_sweep,
+                            counter_clockwise: new_ccw,
+                        });
                     }
                 }
                 BoundaryEdge::EllipticArc(ellipse) => {
@@ -281,15 +334,30 @@ pub(crate) fn transform_hatch(e: &mut Hatch, transform: &Transform) {
                     let new_minor_len = new_minor_ocs.length();
 
                     ellipse.center = center;
+                    // Same stored-angle convention as CircularArc: CW edges
+                    // keep mirrored parameters, and the stored sweep
+                    // (end - start ≥ 0, end may exceed 2π to encode a wrap)
+                    // must survive untouched. Transform only the start
+                    // parameter and carry the sweep over.
+                    let norm = |a: f64| a.rem_euclid(2.0 * std::f64::consts::PI);
+                    let stored_sweep = ellipse.end_angle - ellipse.start_angle;
                     if is_flipped {
                         ellipse.counter_clockwise = !ellipse.counter_clockwise;
+                        ellipse.start_angle = norm(-ellipse.start_angle);
                     }
 
                     if new_minor_len > new_major_len + 1e-12 {
                         ellipse.major_axis_endpoint = new_minor_ocs;
                         ellipse.minor_axis_ratio = new_major_len / new_minor_len;
-                        ellipse.start_angle -= std::f64::consts::FRAC_PI_2;
-                        ellipse.end_angle -= std::f64::consts::FRAC_PI_2;
+                        // True parameter shifts by -π/2 (major rotated +90°);
+                        // stored space mirrors that for CW edges.
+                        let shift = if ellipse.counter_clockwise {
+                            -std::f64::consts::FRAC_PI_2
+                        } else {
+                            std::f64::consts::FRAC_PI_2
+                        };
+                        ellipse.start_angle = norm(ellipse.start_angle + shift);
+                        ellipse.end_angle = ellipse.start_angle + stored_sweep;
                     } else {
                         ellipse.major_axis_endpoint = new_major_ocs;
                         ellipse.minor_axis_ratio = if new_major_len > 1e-12 {
@@ -297,6 +365,7 @@ pub(crate) fn transform_hatch(e: &mut Hatch, transform: &Transform) {
                         } else {
                             1.0
                         };
+                        ellipse.end_angle = ellipse.start_angle + stored_sweep;
                     }
                 }
                 BoundaryEdge::Spline(spline) => {
@@ -906,5 +975,161 @@ mod tests {
         } else {
             panic!("Expected Circle");
         }
+    }
+
+    // Mirroring a hatch must keep its boundary arc edges continuous with the
+    // adjacent line edges. DXF stores CW (ccw=false) arc-edge angles MIRRORED
+    // — the true point is center + r·(cos(-θ), sin(-θ)) — verified against
+    // AutoCAD output by endpoint continuity. The old code stored geometric
+    // angles after a flip, so hatches inside mirrored INSERTs swept the wrong
+    // way and covered the complementary region.
+    #[test]
+    fn test_mirror_hatch_arc_edge_stays_continuous() {
+        use crate::entities::hatch::{BoundaryEdge, BoundaryPath, CircularArcEdge, LineEdge};
+        use crate::types::Vector2;
+
+        // Path: line from (2,0)→... then a CCW half-circle r=1 centered at
+        // (1,0) from angle 0 to π (i.e. (2,0) → (0,0)), then line back.
+        let mut path = BoundaryPath::new();
+        path.edges.push(BoundaryEdge::Line(LineEdge {
+            start: Vector2::new(0.0, -1.0),
+            end: Vector2::new(2.0, 0.0),
+        }));
+        path.edges.push(BoundaryEdge::CircularArc(CircularArcEdge {
+            center: Vector2::new(1.0, 0.0),
+            radius: 1.0,
+            start_angle: 0.0,
+            end_angle: std::f64::consts::PI,
+            counter_clockwise: true,
+        }));
+        path.edges.push(BoundaryEdge::Line(LineEdge {
+            start: Vector2::new(0.0, 0.0),
+            end: Vector2::new(0.0, -1.0),
+        }));
+        let mut hatch = Hatch::new();
+        hatch.paths.push(path);
+
+        // Mirror across the Y axis (x → -x): det < 0, handedness flips.
+        let t = Transform::from_scaling(Vector3::new(-1.0, 1.0, 1.0));
+        transform_hatch(&mut hatch, &t);
+
+        let edges = &hatch.paths[0].edges;
+        let (l1, arc, l2) = match (&edges[0], &edges[1], &edges[2]) {
+            (BoundaryEdge::Line(a), BoundaryEdge::CircularArc(b), BoundaryEdge::Line(c)) => {
+                (a, b, c)
+            }
+            _ => panic!("edge kinds changed"),
+        };
+        // Stored-angle convention: true point of a CW edge is at -θ.
+        let pt = |theta: f64, ccw: bool| {
+            let a = if ccw { theta } else { -theta };
+            (arc.center.x + arc.radius * a.cos(), arc.center.y + arc.radius * a.sin())
+        };
+        let (sx, sy) = pt(arc.start_angle, arc.counter_clockwise);
+        let (ex, ey) = pt(arc.end_angle, arc.counter_clockwise);
+        assert!(!arc.counter_clockwise, "mirror must flip the direction flag");
+        assert!(
+            (sx - l1.end.x).abs() < 1e-9 && (sy - l1.end.y).abs() < 1e-9,
+            "arc start {:?} must meet previous line end {:?}",
+            (sx, sy),
+            (l1.end.x, l1.end.y)
+        );
+        assert!(
+            (ex - l2.start.x).abs() < 1e-9 && (ey - l2.start.y).abs() < 1e-9,
+            "arc end {:?} must meet next line start {:?}",
+            (ex, ey),
+            (l2.start.x, l2.start.y)
+        );
+        // Midpoint sanity: the half-circle bulges DOWN after a y-axis mirror?
+        // Original bulges up (+y); x-mirror keeps +y bulge at mirrored x.
+        let mid_a = {
+            let s = if arc.counter_clockwise { arc.start_angle } else { -arc.start_angle };
+            let e = if arc.counter_clockwise { arc.end_angle } else { -arc.end_angle };
+            let mut sweep = e - s;
+            if arc.counter_clockwise && sweep <= 0.0 { sweep += std::f64::consts::TAU; }
+            if !arc.counter_clockwise && sweep >= 0.0 { sweep -= std::f64::consts::TAU; }
+            s + sweep / 2.0
+        };
+        let (mx, my) = (arc.center.x + arc.radius * mid_a.cos(), arc.center.y + arc.radius * mid_a.sin());
+        assert!(
+            (mx - (-1.0)).abs() < 1e-9 && (my - 1.0).abs() < 1e-9,
+            "arc midpoint {:?} must be the mirror of (1,1) → (-1,1)",
+            (mx, my)
+        );
+    }
+
+    // The stored sweep of a boundary arc is always forward (end - start ≥ 0)
+    // and AutoCAD encodes a wrap through 0 by writing `end` ABOVE 2π
+    // (e.g. start 5.81 → end 6.64 for a 0.83 rad arc). Any normalization of
+    // the angles into [0, 2π) flips such an arc into its huge complement —
+    // the regression seen in real survey DWGs. Translation must keep the
+    // angles bit-identical; a mirror must preserve the sweep magnitude.
+    #[test]
+    fn test_hatch_arc_wrap_sweep_survives_transform() {
+        use crate::entities::hatch::{BoundaryEdge, BoundaryPath, CircularArcEdge};
+        use crate::types::Vector2;
+
+        let mk = || {
+            let mut path = BoundaryPath::new();
+            path.edges.push(BoundaryEdge::CircularArc(CircularArcEdge {
+                center: Vector2::new(10.0, 5.0),
+                radius: 61.3,
+                start_angle: 5.80985,
+                end_angle: 6.63571, // > 2π: wrap-encoded short arc
+                counter_clockwise: false,
+            }));
+            let mut h = Hatch::new();
+            h.paths.push(path);
+            h
+        };
+
+        // Pure translation: angles must be untouched.
+        let mut h = mk();
+        transform_hatch(&mut h, &Transform::from_translation(Vector3::new(3.0, -2.0, 0.0)));
+        let BoundaryEdge::CircularArc(a) = &h.paths[0].edges[0] else { panic!() };
+        assert!((a.start_angle - 5.80985).abs() < 1e-9, "start changed: {}", a.start_angle);
+        assert!((a.end_angle - 6.63571).abs() < 1e-9, "end changed: {}", a.end_angle);
+        assert!(!a.counter_clockwise);
+
+        // Mirror: sweep magnitude must survive (0.82586), direction flag flips.
+        let mut h = mk();
+        transform_hatch(&mut h, &Transform::from_scaling(Vector3::new(-1.0, 1.0, 1.0)));
+        let BoundaryEdge::CircularArc(a) = &h.paths[0].edges[0] else { panic!() };
+        assert!(a.counter_clockwise, "mirror must flip the flag");
+        let sweep = a.end_angle - a.start_angle;
+        assert!(
+            (sweep - 0.82586).abs() < 1e-9,
+            "sweep must stay 0.82586, got {sweep}"
+        );
+    }
+
+    // Exploding a mirrored INSERT routes plain entities through
+    // apply_transform → transform_lwpolyline. The bulge encodes which side
+    // the arc bows to; a reflection must negate it or every bulged segment
+    // bows the wrong way after EXPLODE.
+    #[test]
+    fn test_reflecting_transform_negates_lwpolyline_bulge() {
+        let mut lw = LwPolyline::new();
+        let mut v0 = LwVertex::new(crate::types::Vector2::new(0.0, 0.0));
+        v0.bulge = 0.5;
+        let mut v1 = LwVertex::new(crate::types::Vector2::new(10.0, 0.0));
+        v1.bulge = -0.3;
+        lw.add_vertex(v0);
+        lw.add_vertex(v1);
+
+        // Mirror across Y (x → -x): reflection, bulges must negate.
+        let mut a = lw.clone();
+        transform_lwpolyline(&mut a, &Transform::from_scaling(Vector3::new(-1.0, 1.0, 1.0)));
+        assert!((a.vertices[0].bulge - (-0.5)).abs() < 1e-12);
+        assert!((a.vertices[1].bulge - 0.3).abs() < 1e-12);
+
+        // Pure rotation (det > 0): bulges untouched.
+        let mut b = lw.clone();
+        transform_lwpolyline(
+            &mut b,
+            &Transform::from_rotation(Vector3::new(0.0, 0.0, 1.0), std::f64::consts::FRAC_PI_2),
+        );
+        assert!((b.vertices[0].bulge - 0.5).abs() < 1e-12);
+        assert!((b.vertices[1].bulge - (-0.3)).abs() < 1e-12);
     }
 }
