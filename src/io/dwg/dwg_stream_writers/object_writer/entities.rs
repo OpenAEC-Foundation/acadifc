@@ -1443,8 +1443,9 @@ impl<'a> DwgObjectWriter<'a> {
         // Elevation BD 11 Z-coord
         self.writer.write_bit_double(base.text_middle_point.z);
 
-        // Flags byte (0 = text user-defined location)
-        self.writer.write_byte(0);
+        // Flags byte — bit 0: text positioned at a user-defined location.
+        self.writer
+            .write_byte(if base.text_user_positioned { 0x01 } else { 0 });
 
         // User text TV 1
         self.writer.write_variable_text(&base.text);

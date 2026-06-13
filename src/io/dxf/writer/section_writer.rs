@@ -1583,6 +1583,12 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_string(2, &base.block_name)?;
         self.writer.write_point3d(10, base.definition_point)?;
         self.writer.write_point3d(11, base.text_middle_point)?;
+        // Bit 0x80 marks text positioned at a user-defined location.
+        let type_flags = if base.text_user_positioned {
+            type_flags | 0x80
+        } else {
+            type_flags
+        };
         self.writer.write_i16(70, type_flags)?;
         self.writer.write_double(53, base.text_rotation)?;
         self.writer.write_string(3, &base.style_name)?;

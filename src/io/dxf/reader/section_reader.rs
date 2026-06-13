@@ -3255,6 +3255,7 @@ impl<'a> SectionReader<'a> {
         use crate::entities::dimension::*;
 
         let mut dim_type = DimensionType::Linear;
+        let mut text_user_positioned = false;
         let mut definition_point = PointReader::new();
         let mut text_middle_point = PointReader::new();
         let mut insertion_point = PointReader::new();
@@ -3304,6 +3305,9 @@ impl<'a> SectionReader<'a> {
                             6 => DimensionType::Ordinate,
                             _ => DimensionType::Linear,
                         };
+                        // Bit 0x80: text was positioned at a user-defined
+                        // location rather than the style default.
+                        text_user_positioned = (type_val & 0x80) != 0;
                     }
                 }
                 1 => text = pair.value_string.clone(),
@@ -3451,6 +3455,7 @@ impl<'a> SectionReader<'a> {
             if let Some(pt) = text_middle_point.get_point() {
                 dc.text_middle_point = pt;
             }
+            dc.text_user_positioned = text_user_positioned;
             if let Some(pt) = definition_point.get_point() {
                 dc.definition_point = pt;
             }

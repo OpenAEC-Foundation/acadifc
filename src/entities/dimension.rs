@@ -76,6 +76,11 @@ pub struct DimensionBase {
     pub block_name: String,
     /// Line spacing factor
     pub line_spacing_factor: f64,
+    /// Dimension text was positioned at a user-defined location rather than at
+    /// the style's default (DXF group 70, bit 0x80). When false the text
+    /// follows the dimension style (DIMTAD etc.); when true `text_middle_point`
+    /// is an explicit override.
+    pub text_user_positioned: bool,
 }
 
 impl DimensionBase {
@@ -98,6 +103,7 @@ impl DimensionBase {
             version: 0,
             block_name: String::new(),
             line_spacing_factor: 1.0,
+            text_user_positioned: false,
         }
     }
 
