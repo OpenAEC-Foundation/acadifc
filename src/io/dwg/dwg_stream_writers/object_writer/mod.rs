@@ -277,7 +277,9 @@ impl<'a> DwgObjectWriter<'a> {
     /// Currently disabled: always write inline because the DWG reader doesn't yet
     /// parse the AcDsPrototype_1b section, which causes ACIS data loss on read-back.
     fn needs_acds_section(&self) -> bool {
-        false // self.dxf_version >= DxfVersion::AC1027
+        // R2013+ stores ACIS (3DSOLID/REGION/BODY/SURFACE) geometry in the
+        // AcDsPrototype_1b section rather than inline in the entity stream.
+        self.version.r2013_plus(self.dxf_version)
     }
 
     /// Find the root dictionary handle by scanning document.objects.

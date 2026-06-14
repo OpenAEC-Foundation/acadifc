@@ -748,6 +748,14 @@ pub(crate) fn transform_body(e: &mut Body, transform: &Transform) {
     }
 }
 
+pub(crate) fn transform_surface(e: &mut crate::entities::Surface, transform: &Transform) {
+    for wire in &mut e.wires {
+        for pt in &mut wire.points {
+            *pt = transform.apply(*pt);
+        }
+    }
+}
+
 // ── Table ────────────────────────────────────────────────────────────────────
 
 pub(crate) fn transform_table(e: &mut Table, transform: &Transform) {
@@ -901,6 +909,7 @@ impl EntityType {
             EntityType::Solid3D(e) => transform_solid3d(e, transform),
             EntityType::Region(e) => transform_region(e, transform),
             EntityType::Body(e) => transform_body(e, transform),
+            EntityType::Surface(e) => transform_surface(e, transform),
             EntityType::Table(e) => transform_table(e, transform),
             EntityType::Tolerance(e) => transform_tolerance(e, transform),
             EntityType::PolyfaceMesh(e) => transform_polyface_mesh(e, transform),

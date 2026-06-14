@@ -1030,6 +1030,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             EntityType::Solid3D(e) => self.write_solid3d(e, owner),
             EntityType::Region(e) => self.write_region(e, owner),
             EntityType::Body(e) => self.write_body(e, owner),
+            // DXF surface export not yet supported; skip rather than emit
+            // malformed geometry.
+            EntityType::Surface(_) => Ok(()),
             EntityType::Table(e) => self.write_acad_table(e, owner),
             EntityType::Tolerance(e) => self.write_tolerance(e, owner),
             EntityType::PolyfaceMesh(e) => self.write_polyface_mesh(e, owner),

@@ -813,6 +813,7 @@ impl EntityType {
             | EntityType::Solid3D(_)
             | EntityType::Region(_)
             | EntityType::Body(_)
+            | EntityType::Surface(_)
             | EntityType::Table(_)
             | EntityType::Tolerance(_)
             | EntityType::Wipeout(_)

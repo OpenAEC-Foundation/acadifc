@@ -40,6 +40,7 @@ pub mod mline;
 pub mod mesh;
 pub mod raster_image;
 pub mod solid3d;
+pub mod surface;
 pub mod acis;
 pub mod table;
 pub mod tolerance;
@@ -100,6 +101,7 @@ pub use solid3d::{
     Solid3D, Region, Body, Wire, Silhouette, AcisData,
     WireType, AcisVersion,
 };
+pub use surface::{Surface, SurfaceKind};
 pub use table::{
     Table, TableBuilder, TableCell, TableRow, TableColumn,
     CellContent, CellValue, CellStyle, CellBorder, CellRange,
@@ -408,6 +410,8 @@ pub enum EntityType {
     Region(Region),
     /// Body entity
     Body(Body),
+    /// Surface entity (ACAD_SURFACE family: lofted/swept/extruded/etc.)
+    Surface(Surface),
     /// Table entity
     Table(Table),
     /// Tolerance entity (geometric tolerancing)
@@ -466,6 +470,7 @@ impl EntityType {
             EntityType::Solid3D(e) => e,
             EntityType::Region(e) => e,
             EntityType::Body(e) => e,
+            EntityType::Surface(e) => e,
             EntityType::Table(e) => e,
             EntityType::Tolerance(e) => e,
             EntityType::PolyfaceMesh(e) => e,
@@ -514,6 +519,7 @@ impl EntityType {
             EntityType::Solid3D(e) => e,
             EntityType::Region(e) => e,
             EntityType::Body(e) => e,
+            EntityType::Surface(e) => e,
             EntityType::Table(e) => e,
             EntityType::Tolerance(e) => e,
             EntityType::PolyfaceMesh(e) => e,
@@ -562,6 +568,7 @@ impl EntityType {
             EntityType::Solid3D(e) => &e.common,
             EntityType::Region(e) => &e.common,
             EntityType::Body(e) => &e.common,
+            EntityType::Surface(e) => &e.common,
             EntityType::Table(e) => &e.common,
             EntityType::Tolerance(e) => &e.common,
             EntityType::PolyfaceMesh(e) => &e.common,
@@ -610,6 +617,7 @@ impl EntityType {
             EntityType::Solid3D(e) => &mut e.common,
             EntityType::Region(e) => &mut e.common,
             EntityType::Body(e) => &mut e.common,
+            EntityType::Surface(e) => &mut e.common,
             EntityType::Table(e) => &mut e.common,
             EntityType::Tolerance(e) => &mut e.common,
             EntityType::PolyfaceMesh(e) => &mut e.common,

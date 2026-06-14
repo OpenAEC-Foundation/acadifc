@@ -60,6 +60,20 @@ impl<'a> DwgObjectWriter<'a> {
             EntityType::Solid3D(e) => self.write_solid3d(e),
             EntityType::Region(e) => self.write_region(e),
             EntityType::Body(e) => self.write_body(e),
+            EntityType::Surface(e) => {
+                // Round-trip the surface verbatim from its preserved raw bytes
+                // (no native surface encoder yet). Without raw data we skip it,
+                // exactly like an unknown entity.
+                if let Some(ref raw_data) = e.raw_dwg_data {
+                    self.register_raw_object(e.common.handle, raw_data, e.dwg_handle_bits);
+                    // On R2013+ the ACIS geometry lives in the AcDsPrototype
+                    // section, not the entity record — re-queue it so the SAB
+                    // survives write-back alongside the raw entity stub.
+                    if self.needs_acds_section() {
+                        self.queue_sab_entry(&e.acis_data, e.common.handle);
+                    }
+                }
+            }
             EntityType::Table(_)
             | EntityType::Underlay(_) => {
                 // Not yet supported â€” silently skip

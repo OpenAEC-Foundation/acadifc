@@ -228,6 +228,7 @@ fn attach_acds_sab_blobs(document: &mut crate::document::CadDocument, blobs: Vec
             EntityType::Solid3D(s) => &mut s.acis_data,
             EntityType::Region(r) => &mut r.acis_data,
             EntityType::Body(b) => &mut b.acis_data,
+            EntityType::Surface(s) => &mut s.acis_data,
             _ => continue,
         };
         match it.next() {

@@ -809,12 +809,8 @@ fn build_acds_prototype(sab_entries: &[(Handle, Vec<u8>)]) -> Vec<u8> {
         return Vec::new();
     }
 
-    // Use first entry only (extend to multi-entry later if needed).
-    let (entity_handle, sab_data) = &sab_entries[0];
-    let handle_val = entity_handle.value() as u32;
-
-    // ── Segment 1: _data_ id=2 (SAB data records) ─────────────────
-    let data2 = build_acds_data2_segment(handle_val, sab_data);
+    // ── Segment 1: _data_ id=2 (SAB data records, one per ACIS entity) ──
+    let data2 = build_acds_data2_segment(sab_entries);
 
     // ── Segment 2: _data_ id=3 (thumbnail, empty boilerplate) ─────
     #[rustfmt::skip]
@@ -830,7 +826,7 @@ fn build_acds_prototype(sab_entries: &[(Handle, Vec<u8>)]) -> Vec<u8> {
     ];
 
     // ── Segment 3: datidx id=4 ────────────────────────────────────
-    let datidx = build_acds_datidx();
+    let datidx = build_acds_datidx(sab_entries.len());
 
     // ── Segment 4: schdat id=5 (schema definitions, fixed) ────────
     let schdat = ACDS_SCHDAT_TEMPLATE;
@@ -839,7 +835,8 @@ fn build_acds_prototype(sab_entries: &[(Handle, Vec<u8>)]) -> Vec<u8> {
     let schidx = ACDS_SCHIDX_TEMPLATE;
 
     // ── Segment 6: search id=7 ───────────────────────────────────
-    let search = build_acds_search_segment(handle_val);
+    let handles: Vec<u32> = sab_entries.iter().map(|(h, _)| h.value() as u32).collect();
+    let search = build_acds_search_segment(&handles);
 
     // ── Segment 7: segidx id=1 ───────────────────────────────────
     // Compute offsets (all relative to section start = after jard header)
@@ -923,11 +920,15 @@ fn build_acds_jard_header(
     h
 }
 
-/// Build `_data_` segment id=2 containing SAB record(s).
-fn build_acds_data2_segment(handle_val: u32, sab_data: &[u8]) -> Vec<u8> {
-    let sab_len = sab_data.len();
-    // Raw size = 48 (segment header) + 36 (record metadata) + sab_len
-    let raw_size = 84 + sab_len;
+/// Build `_data_` segment id=2 containing one SAB record per ACIS entity.
+///
+/// Each record is a 36-byte metadata block (record index, entity handle, blob
+/// size) followed by the raw SAB blob; records are concatenated in entity
+/// order and the whole segment is padded to a 16-byte boundary.
+fn build_acds_data2_segment(entries: &[(Handle, Vec<u8>)]) -> Vec<u8> {
+    // Raw size = 48 (segment header) + Σ (36 metadata + blob) per record.
+    let records_size: usize = entries.iter().map(|(_, sab)| 36 + sab.len()).sum();
+    let raw_size = 48 + records_size;
     let seg_size = align16(raw_size);
     let padding = seg_size - raw_size;
 
@@ -938,21 +939,22 @@ fn build_acds_data2_segment(handle_val: u32, sab_data: &[u8]) -> Vec<u8> {
     seg.extend_from_slice(&2u32.to_le_bytes()); // id=2
     seg.extend_from_slice(&0u32.to_le_bytes()); // pad
     seg.extend_from_slice(&(seg_size as u64).to_le_bytes()); // segment size
-    seg.extend_from_slice(&1u64.to_le_bytes()); // record count = 1
+    seg.extend_from_slice(&(entries.len() as u64).to_le_bytes()); // record count
     seg.extend_from_slice(&0u32.to_le_bytes()); // meta field1 = 0
     seg.extend_from_slice(&5u32.to_le_bytes()); // meta field2 = 5 (num columns)
     seg.extend_from_slice(&[0x55; 8]); // fill "UUUUUUUU"
 
-    // Record metadata (36 bytes)
-    seg.extend_from_slice(&0x14u32.to_le_bytes()); // col0 = 20
-    seg.extend_from_slice(&1u32.to_le_bytes());     // col1 = record index (1-based)
-    seg.extend_from_slice(&(handle_val as u64).to_le_bytes()); // col2 = entity handle
-    seg.extend_from_slice(&0u32.to_le_bytes());     // col3 = 0
-    seg.extend_from_slice(&[0x62; 12]);              // col4 fill "bbbbbbbbbbbb"
-    seg.extend_from_slice(&(sab_len as u32).to_le_bytes()); // SAB blob size
-
-    // SAB binary data
-    seg.extend_from_slice(sab_data);
+    for (i, (handle, sab_data)) in entries.iter().enumerate() {
+        let handle_val = handle.value() as u32;
+        // Record metadata (36 bytes)
+        seg.extend_from_slice(&0x14u32.to_le_bytes()); // col0 = 20
+        seg.extend_from_slice(&((i + 1) as u32).to_le_bytes()); // col1 = record index (1-based)
+        seg.extend_from_slice(&(handle_val as u64).to_le_bytes()); // col2 = entity handle
+        seg.extend_from_slice(&0u32.to_le_bytes()); // col3 = 0
+        seg.extend_from_slice(&[0x62; 12]); // col4 fill "bbbbbbbbbbbb"
+        seg.extend_from_slice(&(sab_data.len() as u32).to_le_bytes()); // SAB blob size
+        seg.extend_from_slice(sab_data); // SAB binary data
+    }
 
     // Padding with 0x70 to 16-byte alignment
     seg.extend(std::iter::repeat(0x70u8).take(padding));
@@ -961,78 +963,75 @@ fn build_acds_data2_segment(handle_val: u32, sab_data: &[u8]) -> Vec<u8> {
     seg
 }
 
-/// Build `datidx` segment id=4.
-fn build_acds_datidx() -> Vec<u8> {
-    let mut seg = vec![0x70u8; 128];
+/// Build `datidx` segment id=4 — one index entry per ACIS record.
+fn build_acds_datidx(num_records: usize) -> Vec<u8> {
+    let num = num_records.max(1);
+    // 48-byte header + 20 bytes per index entry, padded to 16-byte alignment.
+    let raw = 48 + num * 20;
+    let seg_size = align16(raw).max(128);
+    let mut seg = vec![0x70u8; seg_size];
 
     // Segment header
     seg[0..8].copy_from_slice(&[0xAC, 0xD5, 0x64, 0x61, 0x74, 0x69, 0x64, 0x78]); // "datidx"
-    seg[8..12].copy_from_slice(&4u32.to_le_bytes());    // id=4
-    seg[12..16].copy_from_slice(&0u32.to_le_bytes());   // pad
-    seg[16..24].copy_from_slice(&128u64.to_le_bytes()); // segment size
-    seg[24..32].copy_from_slice(&1u64.to_le_bytes());   // record count
-    seg[32..40].copy_from_slice(&0u64.to_le_bytes());   // meta
-    seg[40..48].copy_from_slice(&[0x55; 8]);             // fill
+    seg[8..12].copy_from_slice(&4u32.to_le_bytes()); // id=4
+    seg[12..16].copy_from_slice(&0u32.to_le_bytes()); // pad
+    seg[16..24].copy_from_slice(&(seg_size as u64).to_le_bytes()); // segment size
+    seg[24..32].copy_from_slice(&(num as u64).to_le_bytes()); // record count
+    seg[32..40].copy_from_slice(&0u64.to_le_bytes()); // meta
+    seg[40..48].copy_from_slice(&[0x55; 8]); // fill
 
-    // Content: index entries
-    // (row_index=1, schema_id=2, data_count=1)
-    seg[48..52].copy_from_slice(&1u32.to_le_bytes());
-    seg[52..56].copy_from_slice(&0u32.to_le_bytes());
-    seg[56..60].copy_from_slice(&2u32.to_le_bytes());
-    seg[60..64].copy_from_slice(&0u32.to_le_bytes());
-    seg[64..68].copy_from_slice(&1u32.to_le_bytes());
-    // Rest is padding (already 0x70)
+    // Index entries: (row_index, 0, schema_id=2, 0, data_count=1) — 20 bytes each.
+    let mut pos = 48;
+    for i in 0..num {
+        seg[pos..pos + 4].copy_from_slice(&((i + 1) as u32).to_le_bytes());
+        seg[pos + 4..pos + 8].copy_from_slice(&0u32.to_le_bytes());
+        seg[pos + 8..pos + 12].copy_from_slice(&2u32.to_le_bytes());
+        seg[pos + 12..pos + 16].copy_from_slice(&0u32.to_le_bytes());
+        seg[pos + 16..pos + 20].copy_from_slice(&1u32.to_le_bytes());
+        pos += 20;
+    }
 
     seg
 }
 
-/// Build `search` segment id=7 with entity handle reference.
-fn build_acds_search_segment(handle_val: u32) -> Vec<u8> {
-    let mut seg = vec![0x70u8; 192];
+/// Build `search` segment id=7 with one handle→record lookup per ACIS entity.
+fn build_acds_search_segment(handles: &[u32]) -> Vec<u8> {
+    let num = handles.len().max(1);
+    // 48-byte header + a small fixed preamble + 8 bytes per handle entry,
+    // padded to 16-byte alignment (kept at least the reference 192 bytes).
+    let preamble = 36usize;
+    let raw = 48 + preamble + num * 8;
+    let seg_size = align16(raw).max(192);
+    let mut seg = vec![0x70u8; seg_size];
 
     // Segment header
     seg[0..8].copy_from_slice(&[0xAC, 0xD5, 0x73, 0x65, 0x61, 0x72, 0x63, 0x68]); // "search"
-    seg[8..12].copy_from_slice(&7u32.to_le_bytes());    // id=7
-    seg[12..16].copy_from_slice(&0u32.to_le_bytes());   // pad
-    seg[16..24].copy_from_slice(&192u64.to_le_bytes()); // segment size
-    seg[24..32].copy_from_slice(&1u64.to_le_bytes());   // record count
-    seg[32..40].copy_from_slice(&0u64.to_le_bytes());   // meta
-    seg[40..48].copy_from_slice(&[0x55; 8]);             // fill
+    seg[8..12].copy_from_slice(&7u32.to_le_bytes()); // id=7
+    seg[12..16].copy_from_slice(&0u32.to_le_bytes()); // pad
+    seg[16..24].copy_from_slice(&(seg_size as u64).to_le_bytes()); // segment size
+    seg[24..32].copy_from_slice(&(num as u64).to_le_bytes()); // record count
+    seg[32..40].copy_from_slice(&0u64.to_le_bytes()); // meta
+    seg[40..48].copy_from_slice(&[0x55; 8]); // fill
 
-    // Content (matches reference file layout)
-    // Search index entries
+    // Preamble (matches reference file layout for the schema-with-data table).
     let content: &[u8] = &[
         0x02, 0x00, 0x00, 0x00, // num_schemas_with_data = 2
-        0x01, 0x00, 0x00, 0x00, // ?
-        0x01, 0x00, 0x00, 0x00, // ?
+        0x01, 0x00, 0x00, 0x00, //
+        0x01, 0x00, 0x00, 0x00, //
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // zeros
-        0x00, 0x00, 0x00, 0x00, // ?
-        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // ?
-        0x01, 0x00, 0x00, 0x00, // ?
+        0x00, 0x00, 0x00, 0x00, //
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //
+        0x01, 0x00, 0x00, 0x00, //
     ];
     seg[48..48 + content.len()].copy_from_slice(content);
 
-    // Entity handle at offset 0x54 from segment start (= 48 + 36 = 84)
-    // Actually from the dump: handle "2A" is at segment offset +0x54
-    // = content offset 0x54 - 0x30 = 0x24 from content start (48 + 36 = 84)
-    // Let me recalculate: segment starts at 0x19C0 in reference,
-    // handle 0x2A at 0x1A14 = 0x19C0 + 0x54.
-    // So offset within segment is 0x54 = 84.
-    seg[84..88].copy_from_slice(&handle_val.to_le_bytes());
-    seg[88..92].copy_from_slice(&0u32.to_le_bytes()); // pad
-
-    // Remaining fields after handle
-    let tail: &[u8] = &[
-        0x01, 0x00, 0x00, 0x00, // ?
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // zeros
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // zeros
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // zeros
-        0x00, 0x00, 0x00, 0x00, // zeros
-        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // ?
-        0x00, 0x00, 0x00, 0x00, // ?
-    ];
-    seg[92..92 + tail.len()].copy_from_slice(tail);
-    // Rest is padding (already 0x70)
+    // Handle→record entries: (handle u32, record_index u32) at offset 84.
+    let mut pos = 84;
+    for (i, &handle_val) in handles.iter().enumerate() {
+        seg[pos..pos + 4].copy_from_slice(&handle_val.to_le_bytes());
+        seg[pos + 4..pos + 8].copy_from_slice(&((i + 1) as u32).to_le_bytes());
+        pos += 8;
+    }
 
     seg
 }

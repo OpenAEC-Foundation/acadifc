@@ -40,6 +40,11 @@ pub mod tags {
     pub const ENTITY_TYPE: u8 = 0x0D;
     /// Subtype prefix (for compound types like `plane-surface`).
     pub const SUBTYPE: u8 = 0x0E;
+    /// Subtype block start (`{` in SAT) — opens a nested subrecord, e.g. the
+    /// `skin_spl_sur` block inside a lofted spline-surface.
+    pub const SUBTYPE_START: u8 = 0x0F;
+    /// Subtype block end (`}` in SAT) — closes a nested subrecord.
+    pub const SUBTYPE_END: u8 = 0x10;
     /// End of record marker.
     pub const END_OF_RECORD: u8 = 0x11;
     /// Long string literal (4-byte u32 length prefix + bytes).
@@ -783,6 +788,18 @@ impl SabReader {
                 Ok((SatToken::String(s), pos))
             }
             tags::END_OF_RECORD => Ok((SatToken::Terminator, pos)),
+            // Nested subtype block delimiters (`{` / `}`) and the type-name
+            // tags that appear inside them. Lofted/swept spline surfaces embed
+            // a subrecord (e.g. `skin_spl_sur`) between SUBTYPE_START and
+            // SUBTYPE_END. Emit the braces and nested type names as idents so
+            // the flat token stream stays balanced and downstream readers can
+            // locate the block by name.
+            tags::SUBTYPE_START => Ok((SatToken::Ident("{".to_string()), pos)),
+            tags::SUBTYPE_END => Ok((SatToken::Ident("}".to_string()), pos)),
+            tags::ENTITY_TYPE | tags::SUBTYPE => {
+                let (s, new_pos) = read_length_string(data, pos)?;
+                Ok((SatToken::Ident(s), new_pos))
+            }
             _ => Err(SabError::UnknownTag(tag, pos - 1)),
         }
     }

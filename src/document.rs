@@ -2031,6 +2031,7 @@ fn get_common_mut(entity: &mut EntityType) -> &mut EntityCommon {
         EntityType::Solid3D(e) => &mut e.common,
         EntityType::Region(e) => &mut e.common,
         EntityType::Body(e) => &mut e.common,
+        EntityType::Surface(e) => &mut e.common,
         EntityType::Table(e) => &mut e.common,
         EntityType::Tolerance(e) => &mut e.common,
         EntityType::PolyfaceMesh(e) => &mut e.common,

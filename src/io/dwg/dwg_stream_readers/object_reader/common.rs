@@ -104,6 +104,14 @@ pub const OBJ_IMAGE: i16 = -1;
 pub const OBJ_MESH: i16 = -2;
 pub const OBJ_MULTILEADER: i16 = -3;
 pub const OBJ_WIPEOUT: i16 = -4;
+// ACAD_SURFACE family — ACIS-backed graphical entities resolved by class name.
+pub const OBJ_SURFACE: i16 = -5;
+pub const OBJ_PLANESURFACE: i16 = -6;
+pub const OBJ_EXTRUDEDSURFACE: i16 = -7;
+pub const OBJ_LOFTEDSURFACE: i16 = -8;
+pub const OBJ_REVOLVEDSURFACE: i16 = -9;
+pub const OBJ_SWEPTSURFACE: i16 = -10;
+pub const OBJ_NURBSURFACE: i16 = -11;
 
 // Class-based non-entity objects — also resolved via class mapping for
 // portable type codes.  The values here match ACadSharp's ObjectType.
@@ -137,7 +145,7 @@ pub fn is_entity_type(type_code: i16) -> bool {
     // Class-based entity sentinels: -4..-1 (WIPEOUT, MULTILEADER, MESH, IMAGE)
     // Class-based entity types (≥500) are NOT included here; the builder
     // checks the class's is_an_entity flag directly.
-    matches!(type_code, -4..=-1 | 1..=41 | 43..=47 | 74 | 77 | 78)
+    matches!(type_code, -11..=-1 | 1..=41 | 43..=47 | 74 | 77 | 78)
 }
 
 /// Returns true if the type code is a table control or entry.
@@ -159,6 +167,14 @@ pub fn dxf_name_to_type_code(dxf_name: &str) -> Option<i16> {
         "MESH" => Some(OBJ_MESH),
         "MULTILEADER" => Some(OBJ_MULTILEADER),
         "OLE2FRAME" => Some(OBJ_OLE2FRAME),
+        // ACAD_SURFACE family (ACIS-backed graphical entities).
+        "SURFACE" => Some(OBJ_SURFACE),
+        "PLANESURFACE" => Some(OBJ_PLANESURFACE),
+        "EXTRUDEDSURFACE" => Some(OBJ_EXTRUDEDSURFACE),
+        "LOFTEDSURFACE" => Some(OBJ_LOFTEDSURFACE),
+        "REVOLVEDSURFACE" => Some(OBJ_REVOLVEDSURFACE),
+        "SWEPTSURFACE" => Some(OBJ_SWEPTSURFACE),
+        "NURBSURFACE" => Some(OBJ_NURBSURFACE),
         // Non-entity objects
         "ACDBDICTIONARYWDFLT" => Some(OBJ_DICTIONARYWDFLT),
         "DICTIONARYVAR" => Some(OBJ_DICTIONARYVAR),

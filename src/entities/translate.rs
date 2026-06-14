@@ -365,6 +365,14 @@ pub(crate) fn translate_body(e: &mut Body, offset: Vector3) {
     }
 }
 
+pub(crate) fn translate_surface(e: &mut crate::entities::Surface, offset: Vector3) {
+    for wire in &mut e.wires {
+        for pt in &mut wire.points {
+            *pt = *pt + offset;
+        }
+    }
+}
+
 // ── Table ────────────────────────────────────────────────────────────────────
 
 pub(crate) fn translate_table(e: &mut Table, offset: Vector3) {
@@ -471,6 +479,7 @@ impl EntityType {
             EntityType::Solid3D(e) => translate_solid3d(e, offset),
             EntityType::Region(e) => translate_region(e, offset),
             EntityType::Body(e) => translate_body(e, offset),
+            EntityType::Surface(e) => translate_surface(e, offset),
             EntityType::Table(e) => translate_table(e, offset),
             EntityType::Tolerance(e) => translate_tolerance(e, offset),
             EntityType::PolyfaceMesh(e) => translate_polyface_mesh(e, offset),

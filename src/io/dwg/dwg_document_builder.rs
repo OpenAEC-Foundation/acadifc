@@ -1966,6 +1966,41 @@ impl DwgDocumentBuilder {
                     let _ = document.add_entity(EntityType::Body(e));
                 },
 
+                // ── ACAD_SURFACE family (ACIS-backed) ───────────────
+                OBJ_SURFACE | OBJ_PLANESURFACE | OBJ_EXTRUDEDSURFACE
+                | OBJ_LOFTEDSURFACE | OBJ_REVOLVEDSURFACE | OBJ_SWEPTSURFACE
+                | OBJ_NURBSURFACE => {
+                    let kind = match type_code {
+                        OBJ_PLANESURFACE => crate::entities::SurfaceKind::Plane,
+                        OBJ_EXTRUDEDSURFACE => crate::entities::SurfaceKind::Extruded,
+                        OBJ_LOFTEDSURFACE => crate::entities::SurfaceKind::Lofted,
+                        OBJ_REVOLVEDSURFACE => crate::entities::SurfaceKind::Revolved,
+                        OBJ_SWEPTSURFACE => crate::entities::SurfaceKind::Swept,
+                        OBJ_NURBSURFACE => crate::entities::SurfaceKind::Nurb,
+                        _ => crate::entities::SurfaceKind::Generic,
+                    };
+                    let data = entities::read_acis_entity(
+                        &mut reader, self.obj_reader.version(),
+                    );
+                    let mut e = Surface::new(kind);
+                    e.common = entity_common;
+                    e.acis_data.version = if data.is_binary {
+                        crate::entities::solid3d::AcisVersion::Version2
+                    } else {
+                        crate::entities::solid3d::AcisVersion::Version1
+                    };
+                    e.acis_data.sat_data = data.sat_data;
+                    e.acis_data.sab_data = data.sab_data;
+                    e.acis_data.is_binary = data.is_binary;
+                    e.wires = data.wires;
+                    e.silhouettes = data.silhouettes;
+                    // Preserve the raw object verbatim so DWG write-back keeps
+                    // the original surface type (no native surface encoder yet).
+                    e.dwg_handle_bits = reader.get_handle_bits();
+                    e.raw_dwg_data = Some(reader.raw_merged_data());
+                    let _ = document.add_entity(EntityType::Surface(e));
+                },
+
                 // ── Catch-all ──────────────────────────────────────
                 _ => {
                     let mut e = UnknownEntity::new(format!("DWG_TYPE_{}", type_code));
