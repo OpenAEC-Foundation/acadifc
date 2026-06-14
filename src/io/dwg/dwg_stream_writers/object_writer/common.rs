@@ -113,6 +113,7 @@ pub const OBJ_SORTENTSTABLE: i16 = 0x7F;    // 127
 pub const OBJ_RASTERVARIABLES: i16 = 0x80;  // 128
 pub const OBJ_DBCOLOR: i16 = 0x81;          // 129
 pub const OBJ_WIPEOUTVARIABLES: i16 = 0x82; // 130
+pub const OBJ_SPATIALFILTER: i16 = 0x86;    // 134 (class-based; sentinel fallback)
 
 // ── Methods on DwgObjectWriter ──────────────────────────────────────
 impl<'a> DwgObjectWriter<'a> {

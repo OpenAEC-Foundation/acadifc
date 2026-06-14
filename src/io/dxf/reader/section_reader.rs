@@ -10,6 +10,20 @@ use crate::tables::linetype::LineTypeElement;
 use crate::types::*;
 use crate::xdata::{ExtendedData, ExtendedDataRecord, XDataValue};
 
+/// Build a [`Matrix4`] from 12 doubles holding a 4×3 transform in DXF
+/// column-major order (4 columns of 3 rows each). The implied bottom row is
+/// `[0, 0, 0, 1]`.
+fn matrix_from_column_major(v: &[f64]) -> Matrix4 {
+    Matrix4 {
+        m: [
+            [v[0], v[3], v[6], v[9]],
+            [v[1], v[4], v[7], v[10]],
+            [v[2], v[5], v[8], v[11]],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+    }
+}
+
 /// States for the mesh reading state machine
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MeshReadState {
@@ -1140,8 +1154,9 @@ impl<'a> SectionReader<'a> {
                         document.objects.insert(obj.handle, ObjectType::GeoData(obj));
                     }
                     "SPATIALFILTER" => {
-                        let obj = self.read_stub_object::<SpatialFilter>()?;
-                        document.objects.insert(obj.handle, ObjectType::SpatialFilter(obj));
+                        if let Some(obj) = self.read_spatial_filter()? {
+                            document.objects.insert(obj.handle, ObjectType::SpatialFilter(obj));
+                        }
                     }
                     "RASTERVARIABLES" => {
                         if let Some(obj) = self.read_raster_variables()? {
@@ -1436,6 +1451,71 @@ impl<'a> SectionReader<'a> {
                 330 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { obj.owner = Handle::new(h); } }
                 _ => {}
             }
+        }
+        Ok(Some(obj))
+    }
+
+    /// Read a SPATIAL_FILTER object (block reference / XCLIP clip boundary).
+    ///
+    /// Group code layout (AcDbSpatialFilter):
+    ///   70  number of boundary points
+    ///   10/20  boundary point (2D), repeated `count` times
+    ///   210/220/230  boundary plane normal
+    ///   11/21/31  clip boundary local origin
+    ///   71  display enabled flag
+    ///   72  front clip flag, 40 front clip distance (only when 72 set)
+    ///   73  back clip flag, 41 back clip distance (only when 73 set)
+    ///   40 ×12  inverse block transform (column-major 4×3)
+    ///   40 ×12  clip bound transform (column-major 4×3)
+    ///
+    /// The front clip distance reuses code 40, so the first code-40 value is
+    /// treated as the front distance only while the front flag is set and no
+    /// matrix values have been read yet; all later code-40 values feed the two
+    /// transformation matrices.
+    fn read_spatial_filter(&mut self) -> Result<Option<SpatialFilter>> {
+        let mut obj = SpatialFilter::new();
+        let mut front_flag = false;
+        let mut pending_x: Option<f64> = None;
+        let mut mat: Vec<f64> = Vec::new();
+        while let Some(pair) = self.reader.read_pair()? {
+            if pair.code == 0 { self.reader.push_back(pair); break; }
+            match pair.code {
+                5 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { obj.handle = Handle::new(h); } }
+                330 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { obj.owner = Handle::new(h); } }
+                70 => {} // point count is implied by the 10/20 pairs we read
+                10 => { if let Some(v) = pair.as_double() { pending_x = Some(v); } }
+                20 => {
+                    if let (Some(x), Some(y)) = (pending_x.take(), pair.as_double()) {
+                        obj.boundary_points.push(Vector2::new(x, y));
+                    }
+                }
+                210 => { if let Some(v) = pair.as_double() { obj.normal.x = v; } }
+                220 => { if let Some(v) = pair.as_double() { obj.normal.y = v; } }
+                230 => { if let Some(v) = pair.as_double() { obj.normal.z = v; } }
+                11 => { if let Some(v) = pair.as_double() { obj.origin.x = v; } }
+                21 => { if let Some(v) = pair.as_double() { obj.origin.y = v; } }
+                31 => { if let Some(v) = pair.as_double() { obj.origin.z = v; } }
+                71 => { obj.display_enabled = pair.as_i16().map(|v| v != 0).unwrap_or(true); }
+                72 => { front_flag = pair.as_i16().map(|v| v != 0).unwrap_or(false); }
+                73 => {} // back clip distance arrives as code 41 below
+                40 => {
+                    if let Some(v) = pair.as_double() {
+                        if front_flag && obj.front_clip.is_none() && mat.is_empty() {
+                            obj.front_clip = Some(v);
+                        } else {
+                            mat.push(v);
+                        }
+                    }
+                }
+                41 => { if let Some(v) = pair.as_double() { obj.back_clip = Some(v); } }
+                _ => {}
+            }
+        }
+        if mat.len() >= 12 {
+            obj.inverse_block_transform = matrix_from_column_major(&mat[0..12]);
+        }
+        if mat.len() >= 24 {
+            obj.clip_bound_transform = matrix_from_column_major(&mat[12..24]);
         }
         Ok(Some(obj))
     }

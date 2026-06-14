@@ -2425,6 +2425,26 @@ impl DwgDocumentBuilder {
                         crate::objects::ObjectType::GeoData(obj),
                     );
                 },
+                OBJ_SPATIALFILTER => {
+                    let data = objects::read_spatial_filter(&mut reader);
+                    let mut obj = crate::objects::SpatialFilter::new();
+                    obj.handle = Handle::from(handle);
+                    obj.owner = owner_handle;
+                    obj.boundary_points = data.points;
+                    obj.normal = data.extrusion;
+                    obj.origin = data.clip_bound_origin;
+                    obj.display_enabled = data.display_enabled;
+                    obj.front_clip = data.front_clip;
+                    obj.back_clip = data.back_clip;
+                    obj.inverse_block_transform =
+                        matrix_from_column_major(&data.inverse_block_transform);
+                    obj.clip_bound_transform =
+                        matrix_from_column_major(&data.clip_bound_transform);
+                    document.objects.insert(
+                        Handle::from(handle),
+                        crate::objects::ObjectType::SpatialFilter(obj),
+                    );
+                },
                 OBJ_BLOCKVISIBILITYPARAMETER => {
                     // Parse the visibility states into the side map, then still
                     // store the object verbatim as Unknown so DWG round-trip is
@@ -2522,6 +2542,19 @@ impl DwgDocumentBuilder {
         } else {
             raw
         }
+    }
+}
+
+/// Build a [`Matrix4`](crate::types::Matrix4) from 12 doubles holding a 4×3
+/// transform in column-major order (4 columns of 3 rows); bottom row implied.
+fn matrix_from_column_major(v: &[f64; 12]) -> crate::types::Matrix4 {
+    crate::types::Matrix4 {
+        m: [
+            [v[0], v[3], v[6], v[9]],
+            [v[1], v[4], v[7], v[10]],
+            [v[2], v[5], v[8], v[11]],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
     }
 }
 

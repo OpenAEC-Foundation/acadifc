@@ -3,7 +3,7 @@
 //! These are minimal representations of DXF objects that ACadSharp supports
 //! but that don't require full rich data models for typical usage.
 
-use crate::types::{Handle, Vector2, Vector3};
+use crate::types::{Handle, Matrix4, Vector2, Vector3};
 
 /// Trait for minimal stub objects that only need handle + owner fields.
 /// Used by the generic `read_stub_object` reader.
@@ -190,7 +190,12 @@ impl Default for GeoData {
     fn default() -> Self { Self::new() }
 }
 
-/// SpatialFilter — clip boundary for external references
+/// SpatialFilter — the clip boundary (XCLIP) attached to a block reference.
+///
+/// Stored under the INSERT's extension dictionary as the `SPATIAL` entry of
+/// the `ACAD_FILTER` sub-dictionary. The boundary points are 2D coordinates in
+/// the clip boundary's local coordinate system; two transforms relate that
+/// system to the block reference and to the world.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SpatialFilter {
@@ -198,6 +203,28 @@ pub struct SpatialFilter {
     pub handle: Handle,
     /// Owner handle
     pub owner: Handle,
+    /// Clip boundary definition points (code 10/20), in the boundary's local
+    /// 2D coordinate system. Two points = rectangular clip (min/max corners);
+    /// three or more = polygonal clip.
+    pub boundary_points: Vec<Vector2>,
+    /// Normal to the plane of the clip boundary (code 210/220/230).
+    pub normal: Vector3,
+    /// Origin of the clip boundary local coordinate system (code 11/21/31).
+    pub origin: Vector3,
+    /// Clip boundary display enabled flag (code 71).
+    pub display_enabled: bool,
+    /// Front clipping plane distance (code 40), `Some` when the front clip
+    /// flag (code 72) is set.
+    pub front_clip: Option<f64>,
+    /// Back clipping plane distance (code 41), `Some` when the back clip
+    /// flag (code 73) is set.
+    pub back_clip: Option<f64>,
+    /// 4×3 matrix (column-major in DXF) transforming WCS points into the
+    /// block-definition coordinate system — the inverse block transform.
+    pub inverse_block_transform: Matrix4,
+    /// 4×3 matrix transforming clip boundary points into the block reference
+    /// coordinate system.
+    pub clip_bound_transform: Matrix4,
 }
 
 impl SpatialFilter {
@@ -206,6 +233,14 @@ impl SpatialFilter {
         SpatialFilter {
             handle: Handle::NULL,
             owner: Handle::NULL,
+            boundary_points: Vec::new(),
+            normal: Vector3::new(0.0, 0.0, 1.0),
+            origin: Vector3::new(0.0, 0.0, 0.0),
+            display_enabled: true,
+            front_clip: None,
+            back_clip: None,
+            inverse_block_transform: Matrix4::identity(),
+            clip_bound_transform: Matrix4::identity(),
         }
     }
 }
@@ -381,5 +416,4 @@ macro_rules! impl_stub_object {
 }
 
 impl_stub_object!(GeoData);
-impl_stub_object!(SpatialFilter);
 impl_stub_object!(PlaceHolder);

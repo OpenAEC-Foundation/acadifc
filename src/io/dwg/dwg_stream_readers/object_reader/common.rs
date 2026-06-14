@@ -137,6 +137,9 @@ pub const OBJ_BLOCKVISIBILITYPARAMETER: i16 = 0x84; // 132
 // AcDbBlockRepresentationData — links an anonymous evaluated block back to its
 // dynamic block definition. 0x85 is a free internal sentinel.
 pub const OBJ_BLOCKREPRESENTATIONDATA: i16 = 0x85; // 133
+// AcDbSpatialFilter (XCLIP clip boundary) is always class-based; 0x86 is a free
+// internal sentinel for the class-number map + builder dispatch.
+pub const OBJ_SPATIALFILTER: i16 = 0x86; // 134
 
 /// Returns true if the type code is a graphical entity (not a table / object).
 pub fn is_entity_type(type_code: i16) -> bool {
@@ -193,6 +196,7 @@ pub fn dxf_name_to_type_code(dxf_name: &str) -> Option<i16> {
         "TABLECONTENT" => Some(OBJ_TABLECONTENT),
         "TABLESTYLE" => Some(OBJ_TABLESTYLE),
         "GEODATA" | "ACDBGEODATA" => Some(OBJ_GEODATA),
+        "SPATIAL_FILTER" | "SPATIALFILTER" => Some(OBJ_SPATIALFILTER),
         "BLOCKVISIBILITYPARAMETER" => Some(OBJ_BLOCKVISIBILITYPARAMETER),
         "ACDB_BLOCKREPRESENTATION_DATA" | "BLOCKREPRESENTATION" => {
             Some(OBJ_BLOCKREPRESENTATIONDATA)

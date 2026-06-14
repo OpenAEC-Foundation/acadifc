@@ -811,6 +811,54 @@ pub fn read_geodata(reader: &mut DwgMergedReader) -> GeoDataData {
     d
 }
 
+/// SpatialFilter (AcDbSpatialFilter) object-specific fields — the XCLIP clip
+/// boundary attached to a block reference.
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct SpatialFilterData {
+    pub points: Vec<Vector2>,
+    pub extrusion: Vector3,
+    pub clip_bound_origin: Vector3,
+    pub display_enabled: bool,
+    pub front_clip: Option<f64>,
+    pub back_clip: Option<f64>,
+    /// 12 doubles, column-major 4×3 inverse block transform.
+    pub inverse_block_transform: [f64; 12],
+    /// 12 doubles, column-major 4×3 clip bound transform.
+    pub clip_bound_transform: [f64; 12],
+}
+
+/// Read the AcDbSpatialFilter object body (after common non-entity data).
+///
+/// Field order (ODA spec): point count (BS), `count` boundary points (2RD),
+/// boundary plane normal (3BD), clip bound origin (3BD), display-enabled bit,
+/// front-clip bit + optional distance (BD), back-clip bit + optional distance
+/// (BD), then the inverse-block and clip-bound transforms as 12 doubles each
+/// (BD). The two transforms use the same column-major layout as DXF code 40.
+pub fn read_spatial_filter(reader: &mut DwgMergedReader) -> SpatialFilterData {
+    let mut d = SpatialFilterData::default();
+    let num = safe_count(reader.read_bit_short() as i32);
+    for _ in 0..num {
+        d.points.push(reader.read_2raw_double());
+    }
+    d.extrusion = reader.read_3bit_double();
+    d.clip_bound_origin = reader.read_3bit_double();
+    d.display_enabled = reader.read_bit();
+    if reader.read_bit() {
+        d.front_clip = Some(reader.read_bit_double());
+    }
+    if reader.read_bit() {
+        d.back_clip = Some(reader.read_bit_double());
+    }
+    for i in 0..12 {
+        d.inverse_block_transform[i] = reader.read_bit_double();
+    }
+    for i in 0..12 {
+        d.clip_bound_transform[i] = reader.read_bit_double();
+    }
+    d
+}
+
 // ════════════════════════════════════════════════════════════════════════
 //  Tests
 // ════════════════════════════════════════════════════════════════════════
@@ -901,6 +949,35 @@ mod tests {
         assert_eq!(g.coordinate_system_definition, csd);
         assert_eq!(g.geo_rss_tag, "georss-tag");
         assert_eq!(g.observation_coverage_tag, "cov");
+    }
+
+    #[test]
+    fn test_spatial_filter_roundtrip() {
+        let v = DwgVersion::AC15;
+        let d = DxfVersion::AC1015;
+        let mut r = make_reader(v, d, |w| {
+            w.write_bit_short(2); // num boundary points (rectangular clip)
+            w.write_2raw_double(Vector2::new(-5.0, -5.0));
+            w.write_2raw_double(Vector2::new(5.0, 5.0));
+            w.write_3bit_double(Vector3::new(0.0, 0.0, 1.0)); // extrusion
+            w.write_3bit_double(Vector3::new(0.0, 0.0, 0.0)); // clip bound origin
+            w.write_bit(true); // display enabled
+            w.write_bit(true); // front clip on
+            w.write_bit_double(2.5); // front clip dist
+            w.write_bit(false); // back clip off
+            for i in 0..12 { w.write_bit_double(i as f64); } // inverse block transform
+            for i in 0..12 { w.write_bit_double((i + 100) as f64); } // clip bound transform
+        });
+        let sf = read_spatial_filter(&mut r);
+        assert_eq!(sf.points.len(), 2);
+        assert_eq!(sf.points[0], Vector2::new(-5.0, -5.0));
+        assert_eq!(sf.points[1], Vector2::new(5.0, 5.0));
+        assert_eq!(sf.extrusion, Vector3::new(0.0, 0.0, 1.0));
+        assert!(sf.display_enabled);
+        assert_eq!(sf.front_clip, Some(2.5));
+        assert_eq!(sf.back_clip, None);
+        assert_eq!(sf.inverse_block_transform[11], 11.0);
+        assert_eq!(sf.clip_bound_transform[0], 100.0);
     }
 
     #[test]

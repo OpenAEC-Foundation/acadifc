@@ -17,6 +17,20 @@ use crate::types::{DxfVersion, Handle};
 use super::common;
 use super::DwgObjectWriter;
 
+/// Flatten a [`Matrix4`](crate::types::Matrix4) into 12 doubles holding its 4×3
+/// part in column-major order (4 columns of 3 rows); the bottom row is dropped.
+fn matrix_to_column_major(m: &crate::types::Matrix4) -> [f64; 12] {
+    let mut out = [0.0; 12];
+    let mut i = 0;
+    for col in 0..4 {
+        for row in 0..3 {
+            out[i] = m.m[row][col];
+            i += 1;
+        }
+    }
+    out
+}
+
 impl<'a> DwgObjectWriter<'a> {
     // ── Object dispatch ─────────────────────────────────────────────
 
@@ -40,9 +54,9 @@ impl<'a> DwgObjectWriter<'a> {
             ObjectType::PlaceHolder(p) => self.write_placeholder(p),
             ObjectType::BookColor(b) => self.write_book_color(b),
             ObjectType::WipeoutVariables(w) => self.write_wipeout_variables(w),
+            ObjectType::SpatialFilter(s) => self.write_spatial_filter(s),
             // Stub / unsupported objects — skip
             ObjectType::GeoData(_)
-            | ObjectType::SpatialFilter(_)
             | ObjectType::VisualStyle(_)
             | ObjectType::Material(_)
             | ObjectType::TableStyle(_) => {}
@@ -66,7 +80,6 @@ impl<'a> DwgObjectWriter<'a> {
             None => false,
             Some(obj) => match obj {
                 ObjectType::GeoData(_)
-                | ObjectType::SpatialFilter(_)
                 | ObjectType::VisualStyle(_)
                 | ObjectType::Material(_)
                 | ObjectType::TableStyle(_) => false,
@@ -884,6 +897,44 @@ impl<'a> DwgObjectWriter<'a> {
         self.writer.write_bit_short(rv.units);
 
         self.register_object(rv.handle);
+    }
+
+    // ── Spatial Filter (XCLIP clip boundary) ────────────────────────
+
+    fn write_spatial_filter(&mut self, sf: &SpatialFilter) {
+        // UNLISTED type — always use DXF class number (500+)
+        let type_code = self.class_type_code("SPATIAL_FILTER", common::OBJ_SPATIALFILTER);
+        self.write_common_non_entity_data(
+            type_code,
+            sf.handle,
+            sf.owner,
+            &[],
+            &None,
+        );
+
+        self.writer.write_bit_short(sf.boundary_points.len() as i16);
+        for p in &sf.boundary_points {
+            self.writer.write_2raw_double(*p);
+        }
+        self.writer.write_3bit_double(sf.normal);
+        self.writer.write_3bit_double(sf.origin);
+        self.writer.write_bit(sf.display_enabled);
+        self.writer.write_bit(sf.front_clip.is_some());
+        if let Some(d) = sf.front_clip {
+            self.writer.write_bit_double(d);
+        }
+        self.writer.write_bit(sf.back_clip.is_some());
+        if let Some(d) = sf.back_clip {
+            self.writer.write_bit_double(d);
+        }
+        for v in matrix_to_column_major(&sf.inverse_block_transform) {
+            self.writer.write_bit_double(v);
+        }
+        for v in matrix_to_column_major(&sf.clip_bound_transform) {
+            self.writer.write_bit_double(v);
+        }
+
+        self.register_object(sf.handle);
     }
 
     // ── PlaceHolder ─────────────────────────────────────────────────
