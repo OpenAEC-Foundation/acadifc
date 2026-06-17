@@ -22,6 +22,7 @@ pub mod polyline3d;
 pub mod lwpolyline;
 pub mod text;
 pub mod mtext;
+pub mod mtext_format;
 pub mod spline;
 pub mod dimension;
 pub mod hatch;
