@@ -1310,6 +1310,69 @@ impl SatDocument {
         SatWriter::write(self)
     }
 
+    /// Read the body placement as `(matrix_rowmajor, translation, scale)` in
+    /// the SAT convention `world = scale·(p·M) + T`. Returns identity when the
+    /// document has no `transform` record. The first 13 numeric tokens of the
+    /// transform record carry the 3×3, translation and scale; the leading
+    /// book-keeping pointer and trailing rotate/reflect/shear flags are
+    /// skipped by reading float-valued tokens only.
+    pub fn placement(&self) -> ([[f64; 3]; 3], [f64; 3], f64) {
+        const IDENTITY: ([[f64; 3]; 3], [f64; 3], f64) =
+            ([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], [0.0; 3], 1.0);
+        let Some(rec) = self.records.iter().find(|r| r.entity_type == "transform") else {
+            return IDENTITY;
+        };
+        let v: Vec<f64> = rec.tokens.iter().filter_map(|t| t.as_float()).take(13).collect();
+        if v.len() < 13 {
+            return IDENTITY;
+        }
+        (
+            [[v[0], v[1], v[2]], [v[3], v[4], v[5]], [v[6], v[7], v[8]]],
+            [v[9], v[10], v[11]],
+            v[12],
+        )
+    }
+
+    /// Set the body placement, creating the `transform` record (and wiring the
+    /// body's transform pointer) when absent. Encodes the 3×3, translation and
+    /// scale in the layout `placement()` reads back.
+    pub fn set_placement(&mut self, matrix: [[f64; 3]; 3], translation: [f64; 3], scale: f64) {
+        let mut tokens = Vec::with_capacity(17);
+        tokens.push(SatToken::Pointer(SatPointer::NULL)); // v700 book-keeping
+        for row in &matrix {
+            for &x in row {
+                tokens.push(SatToken::Float(x));
+            }
+        }
+        for &x in &translation {
+            tokens.push(SatToken::Float(x));
+        }
+        tokens.push(SatToken::Float(scale));
+        // rotate / reflect / shear — a composed matrix may be non-orthogonal,
+        // so flag it as a general (shear) placement.
+        tokens.push(SatToken::Integer(0));
+        tokens.push(SatToken::Integer(0));
+        tokens.push(SatToken::Integer(1));
+
+        if let Some(rec) = self.records.iter_mut().find(|r| r.entity_type == "transform") {
+            rec.tokens = tokens;
+            return;
+        }
+        let index = self.records.len() as i32;
+        let mut rec = SatRecord::new(index, "transform");
+        rec.attribute = SatPointer::NULL;
+        rec.tokens = tokens;
+        self.records.push(rec);
+        self.header.num_records = self.records.len();
+        // Wire the first body's transform pointer (4th pointer token:
+        // next_body, lump, wire, transform).
+        if let Some(body) = self.records.iter_mut().find(|r| r.entity_type == "body") {
+            if body.tokens.len() >= 4 {
+                body.tokens[3] = SatToken::Pointer(SatPointer::new(index));
+            }
+        }
+    }
+
     /// Returns the number of entity records.
     pub fn record_count(&self) -> usize {
         self.records.len()

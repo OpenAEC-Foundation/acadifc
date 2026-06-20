@@ -219,7 +219,12 @@ pub(crate) fn translate_face3d(e: &mut Face3D, offset: Vector3) {
 // ── Insert ───────────────────────────────────────────────────────────────────
 
 pub(crate) fn translate_insert(e: &mut Insert, offset: Vector3) {
-    e.insert_point = e.insert_point + offset;
+    // `insert_point` lives in the OCS defined by `normal`, so a world-space
+    // offset can't be added to it directly — convert to world, add, convert
+    // back. For a +Z normal the OCS is the identity and this is a plain add.
+    let ocs = Matrix3::arbitrary_axis(e.normal);
+    let world = ocs * e.insert_point + offset;
+    e.insert_point = ocs.transpose() * world;
 }
 
 // ── Block ────────────────────────────────────────────────────────────────────

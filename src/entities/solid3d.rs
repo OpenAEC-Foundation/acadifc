@@ -342,6 +342,37 @@ impl AcisData {
     pub fn from_sat_document(doc: &crate::entities::acis::SatDocument) -> Self {
         Self::from_sat(&doc.to_sat_string())
     }
+
+    /// Parse the ACIS payload into a [`SatDocument`], decoding binary SAB via
+    /// the SAB reader. `None` when the data is empty or cannot be parsed.
+    /// Unlike [`parse_sat`](Self::parse_sat), this also handles binary data.
+    pub fn parse(&self) -> Option<crate::entities::acis::SatDocument> {
+        if self.is_binary {
+            if self.sab_data.is_empty() {
+                return None;
+            }
+            crate::entities::acis::SabReader::read(&self.sab_data).ok()
+        } else {
+            if self.sat_data.is_empty() {
+                return None;
+            }
+            crate::entities::acis::SatDocument::parse(&self.sat_data).ok()
+        }
+    }
+
+    /// The body's placement origin in world space: the translation of the
+    /// ACIS `transform` record. `None` when the data has no transform record
+    /// (geometry baked at world coordinates) or can't be parsed. A 3D solid
+    /// carries no insertion point of its own, so this placement is its natural
+    /// reference point.
+    pub fn placement_origin(&self) -> Option<Vector3> {
+        let doc = self.parse()?;
+        if !doc.records.iter().any(|r| r.entity_type == "transform") {
+            return None;
+        }
+        let (_m, t, _s) = doc.placement();
+        Some(Vector3::new(t[0], t[1], t[2]))
+    }
 }
 
 impl AcisData {

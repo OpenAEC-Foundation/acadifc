@@ -1904,7 +1904,6 @@ impl DwgDocumentBuilder {
                     );
                     let mut e = Solid3D::new();
                     e.common = entity_common;
-                    e.point_of_reference = data.point;
                     e.acis_data.version = if data.is_binary {
                         crate::entities::solid3d::AcisVersion::Version2
                     } else {
@@ -1913,6 +1912,11 @@ impl DwgDocumentBuilder {
                     e.acis_data.sat_data = data.sat_data;
                     e.acis_data.sab_data = data.sab_data;
                     e.acis_data.is_binary = data.is_binary;
+                    // A 3D solid has no insertion point of its own; the file's
+                    // point field is usually zero. Prefer the ACIS placement
+                    // origin so the reference reflects where the body sits.
+                    e.point_of_reference =
+                        e.acis_data.placement_origin().unwrap_or(data.point);
                     e.wires = data.wires;
                     e.silhouettes = data.silhouettes;
 
@@ -1933,7 +1937,6 @@ impl DwgDocumentBuilder {
                     );
                     let mut e = Region::new();
                     e.common = entity_common;
-                    e.point_of_reference = data.point;
                     e.acis_data.version = if data.is_binary {
                         crate::entities::solid3d::AcisVersion::Version2
                     } else {
@@ -1942,6 +1945,8 @@ impl DwgDocumentBuilder {
                     e.acis_data.sat_data = data.sat_data;
                     e.acis_data.sab_data = data.sab_data;
                     e.acis_data.is_binary = data.is_binary;
+                    e.point_of_reference =
+                        e.acis_data.placement_origin().unwrap_or(data.point);
                     e.wires = data.wires;
                     e.silhouettes = data.silhouettes;
                     let _ = document.add_entity(EntityType::Region(e));
@@ -1952,7 +1957,6 @@ impl DwgDocumentBuilder {
                     );
                     let mut e = Body::new();
                     e.common = entity_common;
-                    e.point_of_reference = data.point;
                     e.acis_data.version = if data.is_binary {
                         crate::entities::solid3d::AcisVersion::Version2
                     } else {
@@ -1961,6 +1965,8 @@ impl DwgDocumentBuilder {
                     e.acis_data.sat_data = data.sat_data;
                     e.acis_data.sab_data = data.sab_data;
                     e.acis_data.is_binary = data.is_binary;
+                    e.point_of_reference =
+                        e.acis_data.placement_origin().unwrap_or(data.point);
                     e.wires = data.wires;
                     e.silhouettes = data.silhouettes;
                     let _ = document.add_entity(EntityType::Body(e));
