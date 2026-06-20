@@ -677,7 +677,14 @@ impl<'a> SatFace<'a> {
 
 /// Accessor for a `loop` entity record.
 ///
-/// Loop record layout: `loop $<attrib> <id> $<next_loop> $<unknown> $<coedge> $<face>`
+/// Loop record layout: `loop $<attrib> <id> $<pattern> $<next_loop> $<coedge> $<face>`
+///
+/// The leading `$<pattern>` pointer is the ACIS pattern-feature reference
+/// (present from the PATTERN save version on, NULL in practice). There is no
+/// outer-vs-hole / loop-type field: ACIS does not record which loop is the
+/// outer boundary and which are holes — the kernel classifies them at runtime
+/// from geometry (coedge winding vs the face's outward normal). Consumers must
+/// derive the distinction themselves.
 #[derive(Debug, Clone)]
 pub struct SatLoop<'a> {
     record: &'a SatRecord,
@@ -693,9 +700,10 @@ impl<'a> SatLoop<'a> {
         }
     }
 
-    /// Pointer to the next loop in the face's loop list (the inner/hole loops
-    /// follow the outer boundary here). The first token is a leading pointer
-    /// (loop kind / unused); the next-loop link is the second.
+    /// Pointer to the next loop in the face's loop list. The first token is the
+    /// ACIS pattern-feature pointer (NULL in practice); the next-loop link is
+    /// the second. Loop order is not significant — the outer boundary is not
+    /// guaranteed to come first.
     pub fn next_loop(&self) -> SatPointer {
         self.record.token_pointer(1).unwrap_or(SatPointer::NULL)
     }
