@@ -4,7 +4,62 @@
 //! function, and [`EntityType`] exposes a convenience dispatch method.
 
 use super::*;
+use crate::entities::solid3d::AcisData;
 use crate::types::{Matrix3, Transform, Vector2, Vector3};
+
+/// Compose `transform` into an ACIS body's placement (the SAT `transform`
+/// record) so the solid's actual geometry moves/rotates/scales, instead of
+/// only nudging a reference point. ACIS keeps geometry in body-local space
+/// and a `transform` record places it into the world as `world = scale·(p·M)
+/// + T`; we fold the incoming world transform into that placement and bake
+/// the result into a single 3×3 (scale = 1), which the tessellator applies
+/// verbatim. Binary SAB is decoded, composed, and rewritten as text SAT
+/// (the SAB writer is not lossless for this edit). A parse failure leaves
+/// the data unchanged.
+pub(crate) fn compose_acis_placement(acis: &mut AcisData, transform: &Transform) {
+    let Some(mut doc) = acis.parse() else {
+        return;
+    };
+    let (m, t, s) = doc.placement();
+    // Existing placement as a column-vector linear map L (world = L·p + T):
+    //   world = s·(p·M) + T  ⇒  L[i][j] = s·M[j][i].
+    let mut l = [[0.0f64; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            l[i][j] = s * m[j][i];
+        }
+    }
+    // Incoming transform: rotation/scale R and translation tr (column form).
+    let mm = &transform.matrix.m;
+    let r = [
+        [mm[0][0], mm[0][1], mm[0][2]],
+        [mm[1][0], mm[1][1], mm[1][2]],
+        [mm[2][0], mm[2][1], mm[2][2]],
+    ];
+    let tr_in = [mm[0][3], mm[1][3], mm[2][3]];
+    // L' = R·L
+    let mut lp = [[0.0f64; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            lp[i][j] = r[i][0] * l[0][j] + r[i][1] * l[1][j] + r[i][2] * l[2][j];
+        }
+    }
+    // T' = R·T + tr_in
+    let tp = [
+        r[0][0] * t[0] + r[0][1] * t[1] + r[0][2] * t[2] + tr_in[0],
+        r[1][0] * t[0] + r[1][1] * t[1] + r[1][2] * t[2] + tr_in[1],
+        r[2][0] * t[0] + r[2][1] * t[1] + r[2][2] * t[2] + tr_in[2],
+    ];
+    // Re-encode with scale = 1 and M_out[r][c] = L'[c][r], so that
+    // `p·M_out` reproduces `L'·p`.
+    let m_out = [
+        [lp[0][0], lp[1][0], lp[2][0]],
+        [lp[0][1], lp[1][1], lp[2][1]],
+        [lp[0][2], lp[1][2], lp[2][2]],
+    ];
+    doc.set_placement(m_out, tp, 1.0);
+    *acis = AcisData::from_sat(&doc.to_sat_string());
+}
 
 
 /// True when `transform` reverses orientation (negative upper-3×3
@@ -52,14 +107,41 @@ pub(crate) fn transform_circle(e: &mut Circle, transform: &Transform) {
 // ── Arc ──────────────────────────────────────────────────────────────────────
 
 pub(crate) fn transform_arc(e: &mut Arc, transform: &Transform) {
-    e.center = transform.apply(e.center);
+    // The start/end angles are measured in the arc's plane, so a rotation or
+    // reflection must move them too — transform the actual endpoints and
+    // recompute the angles in the new plane. (Translating alone leaves the
+    // angles unchanged, as before.)
+    let ocs = Matrix3::arbitrary_axis(e.normal);
+    let endpoint = |ang: f64| {
+        let local = Vector3::new(e.radius * ang.cos(), e.radius * ang.sin(), 0.0);
+        e.center + ocs * local
+    };
+    let ws = transform.apply(endpoint(e.start_angle));
+    let we = transform.apply(endpoint(e.end_angle));
 
-    let unit_x = Vector3::new(1.0, 0.0, 0.0);
-    let transformed_unit = transform.apply_rotation(unit_x);
-    let scale_factor = transformed_unit.length();
+    let new_center = transform.apply(e.center);
+    let scale_factor = transform.apply_rotation(Vector3::new(1.0, 0.0, 0.0)).length();
+    let new_normal = transform.apply_rotation(e.normal).normalize();
+
+    let new_ocs_t = Matrix3::arbitrary_axis(new_normal).transpose();
+    let angle_of = |w: Vector3| {
+        let l = new_ocs_t * (w - new_center);
+        l.y.atan2(l.x)
+    };
+    let (a_start, a_end) = (angle_of(ws), angle_of(we));
+
+    // An arc is stored CCW from start→end. A reflection reverses orientation,
+    // so the reflected CCW arc traces CW — swap the endpoints to keep it CCW.
+    if is_reflecting(transform) {
+        e.start_angle = a_end;
+        e.end_angle = a_start;
+    } else {
+        e.start_angle = a_start;
+        e.end_angle = a_end;
+    }
+    e.center = new_center;
     e.radius *= scale_factor;
-
-    e.normal = transform.apply_rotation(e.normal).normalize();
+    e.normal = new_normal;
 }
 
 // ── Ellipse ──────────────────────────────────────────────────────────────────
@@ -498,8 +580,18 @@ pub(crate) fn transform_normal(transform: &Transform, normal: Vector3) -> Vector
 }
 
 pub(crate) fn transform_insert(e: &mut Insert, transform: &Transform) {
-    let new_position = transform.apply(e.insert_point);
     let new_normal = transform_normal(transform, e.normal);
+
+    // `insert_point` is stored in the OCS defined by `normal`, not in world
+    // space. Convert it to world, apply the transform there, then map it back
+    // into the (possibly new) OCS — otherwise a world-space move/rotate of a
+    // block whose extrusion direction isn't +Z lands on the wrong axes.
+    // For a +Z normal the OCS is the identity, so this is a no-op.
+    let ocs_old = Matrix3::arbitrary_axis(e.normal);
+    let world_pos = ocs_old * e.insert_point;
+    let new_world_pos = transform.apply(world_pos);
+    let ocs_new = Matrix3::arbitrary_axis(new_normal);
+    let new_position = ocs_new.transpose() * new_world_pos;
 
     let trans_ow =
         Matrix3::arbitrary_axis(e.normal) * Matrix3::rotation_z(e.rotation);
@@ -707,6 +799,7 @@ pub(crate) fn transform_raster_image(e: &mut RasterImage, transform: &Transform)
 
 pub(crate) fn transform_solid3d(e: &mut Solid3D, transform: &Transform) {
     e.point_of_reference = transform.apply(e.point_of_reference);
+    compose_acis_placement(&mut e.acis_data, transform);
     for wire in &mut e.wires {
         for pt in &mut wire.points {
             *pt = transform.apply(*pt);
@@ -730,6 +823,7 @@ pub(crate) fn transform_solid3d(e: &mut Solid3D, transform: &Transform) {
 
 pub(crate) fn transform_region(e: &mut Region, transform: &Transform) {
     e.point_of_reference = transform.apply(e.point_of_reference);
+    compose_acis_placement(&mut e.acis_data, transform);
     for wire in &mut e.wires {
         for pt in &mut wire.points {
             *pt = transform.apply(*pt);
@@ -741,6 +835,7 @@ pub(crate) fn transform_region(e: &mut Region, transform: &Transform) {
 
 pub(crate) fn transform_body(e: &mut Body, transform: &Transform) {
     e.point_of_reference = transform.apply(e.point_of_reference);
+    compose_acis_placement(&mut e.acis_data, transform);
     for wire in &mut e.wires {
         for pt in &mut wire.points {
             *pt = transform.apply(*pt);
@@ -749,6 +844,7 @@ pub(crate) fn transform_body(e: &mut Body, transform: &Transform) {
 }
 
 pub(crate) fn transform_surface(e: &mut crate::entities::Surface, transform: &Transform) {
+    compose_acis_placement(&mut e.acis_data, transform);
     for wire in &mut e.wires {
         for pt in &mut wire.points {
             *pt = transform.apply(*pt);

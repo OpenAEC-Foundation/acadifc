@@ -1941,7 +1941,6 @@ impl DwgDocumentBuilder {
                     );
                     let mut e = Solid3D::new();
                     e.common = entity_common;
-                    e.point_of_reference = data.point;
                     e.acis_data.version = if data.is_binary {
                         crate::entities::solid3d::AcisVersion::Version2
                     } else {
@@ -1950,6 +1949,11 @@ impl DwgDocumentBuilder {
                     e.acis_data.sat_data = data.sat_data;
                     e.acis_data.sab_data = data.sab_data;
                     e.acis_data.is_binary = data.is_binary;
+                    // A 3D solid has no insertion point of its own; the file's
+                    // point field is usually zero. Prefer the ACIS placement
+                    // origin so the reference reflects where the body sits.
+                    e.point_of_reference =
+                        e.acis_data.placement_origin().unwrap_or(data.point);
                     e.wires = data.wires;
                     e.silhouettes = data.silhouettes;
 
@@ -1970,7 +1974,6 @@ impl DwgDocumentBuilder {
                     );
                     let mut e = Region::new();
                     e.common = entity_common;
-                    e.point_of_reference = data.point;
                     e.acis_data.version = if data.is_binary {
                         crate::entities::solid3d::AcisVersion::Version2
                     } else {
@@ -1979,6 +1982,8 @@ impl DwgDocumentBuilder {
                     e.acis_data.sat_data = data.sat_data;
                     e.acis_data.sab_data = data.sab_data;
                     e.acis_data.is_binary = data.is_binary;
+                    e.point_of_reference =
+                        e.acis_data.placement_origin().unwrap_or(data.point);
                     e.wires = data.wires;
                     e.silhouettes = data.silhouettes;
                     let _ = document.add_entity(EntityType::Region(e));
@@ -1989,7 +1994,6 @@ impl DwgDocumentBuilder {
                     );
                     let mut e = Body::new();
                     e.common = entity_common;
-                    e.point_of_reference = data.point;
                     e.acis_data.version = if data.is_binary {
                         crate::entities::solid3d::AcisVersion::Version2
                     } else {
@@ -1998,6 +2002,8 @@ impl DwgDocumentBuilder {
                     e.acis_data.sat_data = data.sat_data;
                     e.acis_data.sab_data = data.sab_data;
                     e.acis_data.is_binary = data.is_binary;
+                    e.point_of_reference =
+                        e.acis_data.placement_origin().unwrap_or(data.point);
                     e.wires = data.wires;
                     e.silhouettes = data.silhouettes;
                     let _ = document.add_entity(EntityType::Body(e));
@@ -2163,6 +2169,33 @@ impl DwgDocumentBuilder {
                     obj.paper_width   = data.plot_settings.paper_width;
                     obj.paper_height  = data.plot_settings.paper_height;
                     obj.plot_rotation = data.plot_settings.rotation;
+                    let ps = &data.plot_settings;
+                    obj.plot_page_name = ps.page_name.clone();
+                    obj.plot_printer_name = ps.printer_name.clone();
+                    obj.paper_size = ps.paper_size.clone();
+                    obj.plot_view_name = ps.plot_view_name.clone();
+                    obj.plot_style_sheet = ps.current_style_sheet.clone();
+                    obj.plot_margin_left = ps.left_margin;
+                    obj.plot_margin_bottom = ps.bottom_margin;
+                    obj.plot_margin_right = ps.right_margin;
+                    obj.plot_margin_top = ps.top_margin;
+                    obj.plot_origin_x = ps.origin_x;
+                    obj.plot_origin_y = ps.origin_y;
+                    obj.plot_window_min_x = ps.window_min_x;
+                    obj.plot_window_min_y = ps.window_min_y;
+                    obj.plot_window_max_x = ps.window_max_x;
+                    obj.plot_window_max_y = ps.window_max_y;
+                    obj.plot_paper_units = ps.paper_units;
+                    obj.plot_type = ps.plot_type;
+                    obj.plot_scale_numerator = ps.scale_numerator;
+                    obj.plot_scale_denominator = ps.scale_denominator;
+                    obj.plot_scale_type = ps.scale_type;
+                    obj.plot_scale_factor = ps.scale_factor;
+                    obj.paper_image_origin_x = ps.paper_image_x;
+                    obj.paper_image_origin_y = ps.paper_image_y;
+                    obj.shade_plot_mode = ps.shade_plot_mode;
+                    obj.shade_plot_resolution = ps.shade_plot_resolution;
+                    obj.shade_plot_dpi = ps.shade_plot_dpi;
                     document.objects.insert(
                         Handle::from(handle),
                         crate::objects::ObjectType::Layout(obj),

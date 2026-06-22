@@ -677,7 +677,14 @@ impl<'a> SatFace<'a> {
 
 /// Accessor for a `loop` entity record.
 ///
-/// Loop record layout: `loop $<attrib> <id> $<next_loop> $<unknown> $<coedge> $<face>`
+/// Loop record layout: `loop $<attrib> <id> $<pattern> $<next_loop> $<coedge> $<face>`
+///
+/// The leading `$<pattern>` pointer is the ACIS pattern-feature reference
+/// (present from the PATTERN save version on, NULL in practice). There is no
+/// outer-vs-hole / loop-type field: ACIS does not record which loop is the
+/// outer boundary and which are holes — the kernel classifies them at runtime
+/// from geometry (coedge winding vs the face's outward normal). Consumers must
+/// derive the distinction themselves.
 #[derive(Debug, Clone)]
 pub struct SatLoop<'a> {
     record: &'a SatRecord,
@@ -693,9 +700,12 @@ impl<'a> SatLoop<'a> {
         }
     }
 
-    /// Pointer to the next loop.
+    /// Pointer to the next loop in the face's loop list. The first token is the
+    /// ACIS pattern-feature pointer (NULL in practice); the next-loop link is
+    /// the second. Loop order is not significant — the outer boundary is not
+    /// guaranteed to come first.
     pub fn next_loop(&self) -> SatPointer {
-        self.record.token_pointer(0).unwrap_or(SatPointer::NULL)
+        self.record.token_pointer(1).unwrap_or(SatPointer::NULL)
     }
 
     /// Pointer to the first coedge.
@@ -1298,6 +1308,83 @@ impl SatDocument {
     /// Writes the document back to SAT text format.
     pub fn to_sat_string(&self) -> String {
         SatWriter::write(self)
+    }
+
+    /// Read the body placement as `(matrix_rowmajor, translation, scale)` in
+    /// the SAT convention `world = scale·(p·M) + T`. Returns identity when the
+    /// document has no `transform` record. The first 13 numeric tokens of the
+    /// transform record carry the 3×3, translation and scale; the leading
+    /// book-keeping pointer and trailing rotate/reflect/shear flags are
+    /// skipped by reading float-valued tokens only.
+    pub fn placement(&self) -> ([[f64; 3]; 3], [f64; 3], f64) {
+        const IDENTITY: ([[f64; 3]; 3], [f64; 3], f64) =
+            ([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], [0.0; 3], 1.0);
+        let Some(rec) = self.records.iter().find(|r| r.entity_type == "transform") else {
+            return IDENTITY;
+        };
+        let v: Vec<f64> = rec.tokens.iter().filter_map(|t| t.as_float()).take(13).collect();
+        if v.len() < 13 {
+            return IDENTITY;
+        }
+        (
+            [[v[0], v[1], v[2]], [v[3], v[4], v[5]], [v[6], v[7], v[8]]],
+            [v[9], v[10], v[11]],
+            v[12],
+        )
+    }
+
+    /// Set the body placement, creating the `transform` record (and wiring the
+    /// body's transform pointer) when absent. Encodes the 3×3, translation and
+    /// scale in the layout `placement()` reads back.
+    pub fn set_placement(&mut self, matrix: [[f64; 3]; 3], translation: [f64; 3], scale: f64) {
+        let mut tokens = Vec::with_capacity(17);
+        tokens.push(SatToken::Pointer(SatPointer::NULL)); // v700 book-keeping
+        for row in &matrix {
+            for &x in row {
+                tokens.push(SatToken::Float(x));
+            }
+        }
+        for &x in &translation {
+            tokens.push(SatToken::Float(x));
+        }
+        tokens.push(SatToken::Float(scale));
+        // rotate / reflect / shear — a composed matrix may be non-orthogonal,
+        // so flag it as a general (shear) placement.
+        tokens.push(SatToken::Integer(0));
+        tokens.push(SatToken::Integer(0));
+        tokens.push(SatToken::Integer(1));
+
+        if let Some(rec) = self.records.iter_mut().find(|r| r.entity_type == "transform") {
+            rec.tokens = tokens;
+            return;
+        }
+        // No transform record yet — append one. Records are position-indexed,
+        // and the `End-of-ACIS-data` / `End-of-ASM-data` terminator must stay
+        // last (the parser stops there). Lift any terminator off, push the
+        // transform, then restore the terminator so it remains final;
+        // otherwise the new record sits past the terminator and is dropped on
+        // the next parse.
+        let terminator = self
+            .records
+            .iter()
+            .position(|r| r.entity_type.starts_with("End-of"))
+            .map(|p| self.records.remove(p));
+        let index = self.records.len() as i32;
+        let mut rec = SatRecord::new(index, "transform");
+        rec.attribute = SatPointer::NULL;
+        rec.tokens = tokens;
+        self.records.push(rec);
+        // Wire the first body's transform pointer (4th pointer token:
+        // next_body, lump, wire, transform).
+        if let Some(body) = self.records.iter_mut().find(|r| r.entity_type == "body") {
+            if body.tokens.len() >= 4 {
+                body.tokens[3] = SatToken::Pointer(SatPointer::new(index));
+            }
+        }
+        if let Some(term) = terminator {
+            self.records.push(term);
+        }
+        self.header.num_records = self.records.len();
     }
 
     /// Returns the number of entity records.

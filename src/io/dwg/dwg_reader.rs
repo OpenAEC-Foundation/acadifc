@@ -223,23 +223,49 @@ fn attach_acds_sab_blobs(document: &mut crate::document::CadDocument, blobs: Vec
 
     let mut it = blobs.into_iter();
     let mut attached = 0usize;
+    // Fill an AcisData from the next blob; returns false when the iterator is
+    // exhausted (so the caller breaks).
+    fn fill(acis: &mut crate::entities::solid3d::AcisData, blob: Vec<u8>) {
+        acis.sab_data = blob;
+        acis.sat_data = String::new();
+        acis.is_binary = true;
+        acis.version = AcisVersion::Version2;
+    }
     for entity in document.entities_mut() {
-        let acis = match entity {
-            EntityType::Solid3D(s) => &mut s.acis_data,
-            EntityType::Region(r) => &mut r.acis_data,
-            EntityType::Body(b) => &mut b.acis_data,
-            EntityType::Surface(s) => &mut s.acis_data,
-            _ => continue,
-        };
-        match it.next() {
-            Some(blob) => {
-                acis.sab_data = blob;
-                acis.sat_data = String::new();
-                acis.is_binary = true;
-                acis.version = AcisVersion::Version2;
+        // Only consume a blob for ACIS-backed entities, in document order.
+        match entity {
+            EntityType::Solid3D(s) => {
+                let Some(blob) = it.next() else { break };
+                fill(&mut s.acis_data, blob);
+                // The SAB geometry — and with it the body's placement — only
+                // becomes available now, so derive the reference point here.
+                if let Some(p) = s.acis_data.placement_origin() {
+                    s.point_of_reference = p;
+                }
                 attached += 1;
             }
-            None => break,
+            EntityType::Region(r) => {
+                let Some(blob) = it.next() else { break };
+                fill(&mut r.acis_data, blob);
+                if let Some(p) = r.acis_data.placement_origin() {
+                    r.point_of_reference = p;
+                }
+                attached += 1;
+            }
+            EntityType::Body(b) => {
+                let Some(blob) = it.next() else { break };
+                fill(&mut b.acis_data, blob);
+                if let Some(p) = b.acis_data.placement_origin() {
+                    b.point_of_reference = p;
+                }
+                attached += 1;
+            }
+            EntityType::Surface(s) => {
+                let Some(blob) = it.next() else { break };
+                fill(&mut s.acis_data, blob);
+                attached += 1;
+            }
+            _ => continue,
         }
     }
     attached

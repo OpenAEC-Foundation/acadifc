@@ -1526,13 +1526,31 @@ impl<'a> DwgObjectWriter<'a> {
             .collect();
 
         for br in &block_records {
-            // Use original entity_handles from the DWG binary when available
-            // (preserves sub-entity handles exactly). Fall back to expanding
-            // from the document model for programmatically created blocks.
-            let entity_handles_for_header = self.document.block_entity_handles
-                .get(&br.handle)
-                .cloned()
-                .unwrap_or_else(|| self.expand_entity_handles(&br.entity_handles));
+            // The block header's owned-handle list MUST match the objects the
+            // entity loop below actually writes (br.entity_handles + their
+            // sub-entities). Compute that set first.
+            let expanded = self.expand_entity_handles(&br.entity_handles);
+            // Prefer the original DWG-binary order/handles when available, but
+            // only when they describe exactly the same set — otherwise the file
+            // had entities added or removed since it was read and the stored
+            // list is stale, leaving the header pointing at handles that are
+            // never written. AutoCAD stops reading a block's contents at the
+            // first such dangling owned handle, silently dropping every entity
+            // after it. Drop stale entries and fall back to the live set.
+            let entity_handles_for_header = match self.document.block_entity_handles.get(&br.handle) {
+                Some(orig) => {
+                    use std::collections::HashSet;
+                    let valid: HashSet<u64> = expanded.iter().map(|h| h.value()).collect();
+                    let filtered: Vec<Handle> =
+                        orig.iter().copied().filter(|h| valid.contains(&h.value())).collect();
+                    if filtered.len() == expanded.len() {
+                        filtered
+                    } else {
+                        expanded
+                    }
+                }
+                None => expanded,
+            };
             self.write_block_header_with_handles(br, &entity_handles_for_header);
             self.write_block_begin(br);
 

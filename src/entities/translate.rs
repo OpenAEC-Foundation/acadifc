@@ -4,7 +4,7 @@
 //! and [`EntityType`] exposes a convenience dispatch method.
 
 use super::*;
-use crate::types::{Matrix3, Vector3};
+use crate::types::{Matrix3, Transform, Vector3};
 
 // ── Point ────────────────────────────────────────────────────────────────────
 
@@ -219,7 +219,12 @@ pub(crate) fn translate_face3d(e: &mut Face3D, offset: Vector3) {
 // ── Insert ───────────────────────────────────────────────────────────────────
 
 pub(crate) fn translate_insert(e: &mut Insert, offset: Vector3) {
-    e.insert_point = e.insert_point + offset;
+    // `insert_point` lives in the OCS defined by `normal`, so a world-space
+    // offset can't be added to it directly — convert to world, add, convert
+    // back. For a +Z normal the OCS is the identity and this is a plain add.
+    let ocs = Matrix3::arbitrary_axis(e.normal);
+    let world = ocs * e.insert_point + offset;
+    e.insert_point = ocs.transpose() * world;
 }
 
 // ── Block ────────────────────────────────────────────────────────────────────
@@ -325,6 +330,9 @@ pub(crate) fn translate_raster_image(e: &mut RasterImage, offset: Vector3) {
 
 pub(crate) fn translate_solid3d(e: &mut Solid3D, offset: Vector3) {
     e.point_of_reference = e.point_of_reference + offset;
+    // The body geometry lives in the ACIS placement, so move it there too —
+    // otherwise the solid keeps rendering at its original location.
+    super::transform::compose_acis_placement(&mut e.acis_data, &Transform::from_translation(offset));
 
     for wire in &mut e.wires {
         for pt in &mut wire.points {
@@ -347,6 +355,7 @@ pub(crate) fn translate_solid3d(e: &mut Solid3D, offset: Vector3) {
 
 pub(crate) fn translate_region(e: &mut Region, offset: Vector3) {
     e.point_of_reference = e.point_of_reference + offset;
+    super::transform::compose_acis_placement(&mut e.acis_data, &Transform::from_translation(offset));
     for wire in &mut e.wires {
         for pt in &mut wire.points {
             *pt = *pt + offset;
@@ -358,6 +367,7 @@ pub(crate) fn translate_region(e: &mut Region, offset: Vector3) {
 
 pub(crate) fn translate_body(e: &mut Body, offset: Vector3) {
     e.point_of_reference = e.point_of_reference + offset;
+    super::transform::compose_acis_placement(&mut e.acis_data, &Transform::from_translation(offset));
     for wire in &mut e.wires {
         for pt in &mut wire.points {
             *pt = *pt + offset;
@@ -366,6 +376,7 @@ pub(crate) fn translate_body(e: &mut Body, offset: Vector3) {
 }
 
 pub(crate) fn translate_surface(e: &mut crate::entities::Surface, offset: Vector3) {
+    super::transform::compose_acis_placement(&mut e.acis_data, &Transform::from_translation(offset));
     for wire in &mut e.wires {
         for pt in &mut wire.points {
             *pt = *pt + offset;
