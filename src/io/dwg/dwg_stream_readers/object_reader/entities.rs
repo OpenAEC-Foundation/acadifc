@@ -444,9 +444,14 @@ pub fn read_lwpolyline(reader: &mut DwgMergedReader, version: DwgVersion) -> LwP
 
     let constant_width = if has_constant_width { reader.read_bit_double() } else { 0.0 };
     let elevation = if has_elevation { reader.read_bit_double() } else { 0.0 };
-    // BT / BE types: self-compressing, but still flag-gated
-    let thickness = if has_thickness { reader.read_bit_thickness() } else { 0.0 };
-    let normal = if has_normal { reader.read_bit_extrusion() } else { Vector3::UNIT_Z };
+    // LWPOLYLINE stores its own thickness/extrusion as plain BD / 3BD — NOT the
+    // self-compressing BT / BE forms used in the common entity data. Reading BT
+    // (1 bit) where a BD (2-bit selector) lives, or BE (1 bit) where a 3BD lives,
+    // under-reads and desyncs every field after it (garbage normal, garbage
+    // point count) for any polyline that carries a thickness or extrusion flag,
+    // while flag-free polylines still parse. Matches ACadSharp's readLwPolyline.
+    let thickness = if has_thickness { reader.read_bit_double() } else { 0.0 };
+    let normal = if has_normal { reader.read_3bit_double() } else { Vector3::UNIT_Z };
 
     let num_pts = safe_count(reader.read_bit_long());
     let num_bulges = if has_bulges { safe_count(reader.read_bit_long()) } else { 0 };

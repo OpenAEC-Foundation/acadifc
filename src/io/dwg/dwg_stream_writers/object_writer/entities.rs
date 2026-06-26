@@ -757,12 +757,14 @@ impl<'a> DwgObjectWriter<'a> {
         if has_elevation {
             self.writer.write_bit_double(e.elevation);
         }
-        // BT / BE types: self-compressing, but still flag-gated
+        // LWPOLYLINE stores its own thickness/extrusion as plain BD / 3BD, NOT
+        // the self-compressing BT / BE forms (which would desync every reader).
+        // Matches ACadSharp's writeLwPolyline and read_lwpolyline above.
         if has_thickness {
-            self.writer.write_bit_thickness(e.thickness);
+            self.writer.write_bit_double(e.thickness);
         }
         if has_normal {
-            self.writer.write_bit_extrusion(e.normal);
+            self.writer.write_3bit_double(e.normal);
         }
 
         self.writer.write_bit_long(num_pts);
