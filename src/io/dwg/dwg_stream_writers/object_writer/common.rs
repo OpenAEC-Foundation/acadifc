@@ -458,19 +458,6 @@ impl<'a> DwgObjectWriter<'a> {
                 .write_handle(DwgReferenceType::HardPointer, lt_handle.value());
         }
 
-        // ── R2000+: Plotstyle flags ──
-        // Spec field/handle order is ltype → plotstyle → material → shadow, so
-        // plotstyle is written before the material/shadow block (matches the
-        // reader).
-        self.writer.write_2bits(plotstyle_flags);
-        if plotstyle_flags == 0b11 {
-            if let Some(ph) = plotstyle_handle {
-                self.writer.write_handle(DwgReferenceType::HardPointer, ph.value());
-            } else {
-                self.writer.write_handle(DwgReferenceType::HardPointer, 0);
-            }
-        }
-
         // ── R2007+: material flags + shadow flags ──
         if self.version.r2007_plus() {
             // Material flags BB
@@ -484,6 +471,16 @@ impl<'a> DwgObjectWriter<'a> {
             }
             // Shadow flags RC
             self.writer.write_byte(shadow_flags);
+        }
+
+        // ── R2000+: Plotstyle flags ──
+        self.writer.write_2bits(plotstyle_flags);
+        if plotstyle_flags == 0b11 {
+            if let Some(ph) = plotstyle_handle {
+                self.writer.write_handle(DwgReferenceType::HardPointer, ph.value());
+            } else {
+                self.writer.write_handle(DwgReferenceType::HardPointer, 0);
+            }
         }
 
         // ── R2007+ (>AC1021): visual style bits ──

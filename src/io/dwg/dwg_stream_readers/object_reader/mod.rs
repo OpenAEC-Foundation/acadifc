@@ -497,21 +497,6 @@ impl DwgObjectReader {
             linetype_handle = reader.read_handle();
         }
 
-        // R2000+: Plotstyle flags (00=bylayer, 01=byblock, 11=handle present).
-        // Per the DWG spec the field/handle order is ltype → plotstyle →
-        // material → shadow. Reading material before plotstyle (as before)
-        // mis-assigned both flag values and swapped their handle-stream reads
-        // on any entity that carried a real plotstyle/material handle.
-        let mut plotstyle_flags = 0u8;
-        let mut plotstyle_handle: Option<u64> = None;
-        if self.version.r2000_plus() {
-            plotstyle_flags = reader.main_mut().read_2bits();
-            if plotstyle_flags == 0b11 {
-                // Plotstyle handle (hard pointer)
-                plotstyle_handle = Some(reader.read_handle());
-            }
-        }
-
         // R2007+: material flags + shadow flags
         let mut material_flags = 0u8;
         let mut material_handle: Option<u64> = None;
@@ -523,6 +508,17 @@ impl DwgObjectReader {
                 material_handle = Some(reader.read_handle());
             }
             shadow_flags = reader.read_byte();
+        }
+
+        // R2000+: Plotstyle flags (00=bylayer, 01=byblock, 11=handle present)
+        let mut plotstyle_flags = 0u8;
+        let mut plotstyle_handle: Option<u64> = None;
+        if self.version.r2000_plus() {
+            plotstyle_flags = reader.main_mut().read_2bits();
+            if plotstyle_flags == 0b11 {
+                // Plotstyle handle (hard pointer)
+                plotstyle_handle = Some(reader.read_handle());
+            }
         }
 
         // R2010+: visual style bits — each bit conditionally followed by a handle
