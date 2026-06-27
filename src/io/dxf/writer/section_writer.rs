@@ -1614,7 +1614,8 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             type_flags
         };
         self.writer.write_i16(70, type_flags)?;
-        self.writer.write_double(53, base.text_rotation)?;
+        // DXF angles are in degrees; internal representation is radians.
+        self.writer.write_double(53, base.text_rotation.to_degrees())?;
         self.writer.write_string(3, &base.style_name)?;
         if !base.text.is_empty() {
             self.writer.write_string(1, &base.text)?;
@@ -1638,6 +1639,10 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_subclass("AcDbAlignedDimension")?;
         self.writer.write_point3d(13, dim.first_point)?;
         self.writer.write_point3d(14, dim.second_point)?;
+        if dim.ext_line_rotation.abs() > 1e-12 {
+            self.writer
+                .write_double(52, dim.ext_line_rotation.to_degrees())?;
+        }
         Ok(())
     }
 
@@ -1647,7 +1652,12 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_subclass("AcDbAlignedDimension")?;
         self.writer.write_point3d(13, dim.first_point)?;
         self.writer.write_point3d(14, dim.second_point)?;
-        self.writer.write_double(50, dim.rotation)?;
+        // DXF dimension-line rotation is in degrees.
+        self.writer.write_double(50, dim.rotation.to_degrees())?;
+        if dim.ext_line_rotation.abs() > 1e-12 {
+            self.writer
+                .write_double(52, dim.ext_line_rotation.to_degrees())?;
+        }
         self.writer.write_subclass("AcDbRotatedDimension")?;
         Ok(())
     }
@@ -1693,7 +1703,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
     fn write_dimension_ordinate(&mut self, dim: &DimensionOrdinate, owner: Handle) -> Result<()> {
         self.writer.write_entity_type("DIMENSION")?;
-        let type_flags = if dim.is_ordinate_type_x { 64 } else { 128 }; // Ordinate with X/Y flag
+        // Bit 0x40 marks the X datum; clear = Y. (0x80 is reserved for the
+        // text-user-positioned flag and must not be reused here.)
+        let type_flags = if dim.is_ordinate_type_x { 0x40 } else { 0 };
         self.write_dimension_base(&dim.base, 6 | type_flags, owner)?;
         self.writer.write_subclass("AcDbOrdinateDimension")?;
         self.writer.write_point3d(13, dim.feature_location)?;

@@ -3393,6 +3393,9 @@ impl<'a> SectionReader<'a> {
         let mut color = Color::ByLayer;
         let mut line_weight = LineWeight::ByLayer;
         let mut rotation = 0.0;
+        let mut text_rotation = 0.0f64;
+        let mut ext_line_rotation = 0.0f64;
+        let mut ordinate_is_x = true;
         let mut actual_measurement = 0.0;
         let mut leader_length = 0.0;
         let mut line_spacing_factor = 1.0f64;
@@ -3432,6 +3435,9 @@ impl<'a> SectionReader<'a> {
                         // Bit 0x80: text was positioned at a user-defined
                         // location rather than the style default.
                         text_user_positioned = (type_val & 0x80) != 0;
+                        // Bit 0x40: ordinate dimension measures the X datum
+                        // (cleared = Y). Independent of the 0x80 text bit.
+                        ordinate_is_x = (type_val & 0x40) != 0;
                     }
                 }
                 1 => text = pair.value_string.clone(),
@@ -3444,8 +3450,22 @@ impl<'a> SectionReader<'a> {
                 15 | 25 | 35 => { third_point.add_coordinate(&pair); }
                 16 | 26 | 36 => { fourth_point.add_coordinate(&pair); }
                 50 => {
+                    // DXF stores dimension-line rotation in degrees; internal
+                    // representation is radians.
                     if let Some(rot) = pair.as_double() {
-                        rotation = rot;
+                        rotation = rot.to_radians();
+                    }
+                }
+                52 => {
+                    // Extension-line (oblique) angle, degrees -> radians.
+                    if let Some(v) = pair.as_double() {
+                        ext_line_rotation = v.to_radians();
+                    }
+                }
+                53 => {
+                    // Text rotation, degrees -> radians.
+                    if let Some(v) = pair.as_double() {
+                        text_rotation = v.to_radians();
                     }
                 }
                 44 => {
@@ -3487,6 +3507,7 @@ impl<'a> SectionReader<'a> {
                 dim.base.text = text;
                 dim.base.style_name = style_name;
                 dim.base.actual_measurement = actual_measurement;
+                dim.ext_line_rotation = ext_line_rotation;
                 if let Some(def_pt) = definition_point.get_point() {
                     dim.definition_point = def_pt;
                 }
@@ -3500,14 +3521,17 @@ impl<'a> SectionReader<'a> {
                 dim.base.text = text;
                 dim.base.style_name = style_name;
                 dim.base.actual_measurement = actual_measurement;
+                dim.ext_line_rotation = ext_line_rotation;
                 if let Some(def_pt) = definition_point.get_point() {
                     dim.definition_point = def_pt;
                 }
                 Dimension::Linear(dim)
             }
             DimensionType::Radius => {
-                let center = pt1;
-                let chord_point = pt2;
+                // Writer emits the centre as code 15 (angle_vertex) and the
+                // point on the arc as the base definition point (code 10).
+                let center = pt3;
+                let chord_point = definition_point.get_point().unwrap_or(Vector3::zero());
                 let mut dim = DimensionRadius::new(center, chord_point);
                 dim.base.common.layer = layer;
                 dim.base.common.color = color;
@@ -3519,8 +3543,8 @@ impl<'a> SectionReader<'a> {
                 Dimension::Radius(dim)
             }
             DimensionType::Diameter => {
-                let center = pt1;
-                let point_on_arc = pt2;
+                let center = pt3;
+                let point_on_arc = definition_point.get_point().unwrap_or(Vector3::zero());
                 let mut dim = DimensionDiameter::new(center, point_on_arc);
                 dim.base.common.layer = layer;
                 dim.base.common.color = color;
@@ -3531,8 +3555,14 @@ impl<'a> SectionReader<'a> {
                 Dimension::Diameter(dim)
             }
             DimensionType::Angular => {
-                // Angular2Ln: vertex, first_point, second_point
-                let mut dim = DimensionAngular2Ln::new(pt1, pt2, pt3);
+                // Assign by DXF code, not through new() (whose argument order is
+                // vertex,first,second and would scramble the points): 13=first,
+                // 14=second, 15=angle_vertex, 16=arc location.
+                let mut dim = DimensionAngular2Ln::default();
+                dim.first_point = pt1;
+                dim.second_point = pt2;
+                dim.angle_vertex = pt3;
+                dim.dimension_arc = _pt4;
                 dim.base.common.layer = layer;
                 dim.base.common.color = color;
                 dim.base.common.line_weight = line_weight;
@@ -3542,8 +3572,15 @@ impl<'a> SectionReader<'a> {
                 Dimension::Angular2Ln(dim)
             }
             DimensionType::Angular3Point => {
-                // Angular3Pt: center, first_point, second_point
-                let mut dim = DimensionAngular3Pt::new(pt1, pt2, pt3);
+                // 13=first, 14=second, 15=angle_vertex; the arc location is the
+                // base definition point (code 10).
+                let mut dim = DimensionAngular3Pt::default();
+                dim.first_point = pt1;
+                dim.second_point = pt2;
+                dim.angle_vertex = pt3;
+                if let Some(arc) = definition_point.get_point() {
+                    dim.definition_point = arc;
+                }
                 dim.base.common.layer = layer;
                 dim.base.common.color = color;
                 dim.base.common.line_weight = line_weight;
@@ -3553,9 +3590,12 @@ impl<'a> SectionReader<'a> {
                 Dimension::Angular3Pt(dim)
             }
             DimensionType::Ordinate => {
-                // Ordinate: feature_location, leader_endpoint
-                // Use x_ordinate by default (could be determined from flags in real implementation)
-                let mut dim = DimensionOrdinate::x_ordinate(pt1, pt2);
+                // 13=feature_location, 14=leader_endpoint; X vs Y datum from the
+                // group-70 0x40 bit; the leader elbow is the base def point (10).
+                let mut dim = DimensionOrdinate::new(pt1, pt2, ordinate_is_x);
+                if let Some(elbow) = definition_point.get_point() {
+                    dim.definition_point = elbow;
+                }
                 dim.base.common.layer = layer;
                 dim.base.common.color = color;
                 dim.base.common.line_weight = line_weight;
@@ -3579,6 +3619,7 @@ impl<'a> SectionReader<'a> {
             if let Some(pt) = text_middle_point.get_point() {
                 dc.text_middle_point = pt;
             }
+            dc.text_rotation = text_rotation;
             dc.text_user_positioned = text_user_positioned;
             if let Some(pt) = definition_point.get_point() {
                 dc.definition_point = pt;
