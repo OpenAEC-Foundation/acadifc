@@ -343,11 +343,13 @@ impl<'a> DwgObjectWriter<'a> {
                 .write_handle(DwgReferenceType::SoftPointer, r.value());
         }
 
-        // Filter entity xdic handle: only keep it if the referenced
-        // dictionary object actually exists in document.objects, otherwise
-        // BricsCAD reports "Object was erased" for the dangling reference.
+        // Filter entity xdic handle: only keep it if the referenced dictionary
+        // is actually WRITTEN. `contains_key` is not enough — a dictionary that
+        // is present in the document but dropped on this save (e.g. an AEC/
+        // version-locked object) would leave a dangling handle that AutoCAD's
+        // reader rejects (the object reads as improperly read / erased).
         let effective_entity_xdic = xdictionary_handle
-            .filter(|xdic| !xdic.is_null() && self.document.objects.contains_key(xdic));
+            .filter(|xdic| !xdic.is_null() && self.is_writable_object(xdic));
 
         // R2004+: no-xdic flag (MAIN) + conditional xdic handle (HANDLE)
         // Pre-R2004: always write xdic handle (0 if none)
@@ -675,8 +677,11 @@ impl<'a> DwgObjectWriter<'a> {
     /// 64-group "xref dependant" flag with explicit value.
     pub fn write_xref_dependant_bit_value(&mut self, xref_dep: bool) {
         if self.version.r2007_plus() {
-            // R2007+: xrefindex+1 BS 70 (combined flags)
-            let combined: i16 = if xref_dep { 0x10 } else { 0 };
+            // R2007+: is_xref_resolved BS — only 0 (not xref-dependent) or
+            // 256 (0x100, xref-resolved) are valid; the reader derives
+            // is_xref_dep from `== 256`. Writing 0x10 makes AutoCAD reject the
+            // record (eDwgObjectImproperlyRead) on xref-dependent table entries.
+            let combined: i16 = if xref_dep { 0x100 } else { 0 };
             self.writer.write_bit_short(combined);
         } else {
             // Pre-R2007: 64-flag B (Referenced), xrefindex+1 BS, Xdep B (XrefDependent)

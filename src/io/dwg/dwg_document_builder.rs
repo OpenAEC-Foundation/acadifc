@@ -1700,7 +1700,9 @@ impl DwgDocumentBuilder {
                     e.common = entity_common;
                     e.context = data.context;
                     e.style_handle = if data.style_handle != 0 { Some(Handle::from(data.style_handle)) } else { None };
-                    e.property_override_flags = MultiLeaderPropertyOverrideFlags::from_bits_truncate(data.property_override_flags);
+                    // Retain (not truncate) so flag bits the enum doesn't name
+                    // are preserved for a lossless re-write.
+                    e.property_override_flags = MultiLeaderPropertyOverrideFlags::from_bits_retain(data.property_override_flags);
                     e.path_type = MultiLeaderPathType::from(data.path_type);
                     e.line_color = data.line_color;
                     e.line_type_handle = if data.line_type_handle != 0 { Some(Handle::from(data.line_type_handle)) } else { None };
@@ -1769,6 +1771,37 @@ impl DwgDocumentBuilder {
                     e.insertion_point = data.text_data.insertion_point;
                     e.height = data.text_data.height;
                     e.rotation = data.text_data.rotation;
+                    // Carry the full text geometry the reader parsed. Without
+                    // these the attribute reverts to left/baseline with no
+                    // alignment point (DataFlags 0x02|0x40), discarding the
+                    // real placement — AutoCAD's R2018 reader rejects it.
+                    e.horizontal_alignment = match data.text_data.horizontal_alignment {
+                        1 => HorizontalAlignment::Center,
+                        2 => HorizontalAlignment::Right,
+                        3 => HorizontalAlignment::Aligned,
+                        4 => HorizontalAlignment::Middle,
+                        5 => HorizontalAlignment::Fit,
+                        _ => HorizontalAlignment::Left,
+                    };
+                    e.vertical_alignment = match data.text_data.vertical_alignment {
+                        1 => VerticalAlignment::Bottom,
+                        2 => VerticalAlignment::Middle,
+                        3 => VerticalAlignment::Top,
+                        _ => VerticalAlignment::Baseline,
+                    };
+                    // Match the writer/reader convention: an alignment point is
+                    // only meaningful when the text is not left/baseline.
+                    e.alignment_point = if data.text_data.horizontal_alignment != 0
+                        || data.text_data.vertical_alignment != 0
+                    {
+                        data.text_data.alignment_point
+                    } else {
+                        crate::types::Vector3::ZERO
+                    };
+                    e.width_factor = data.text_data.width_factor;
+                    e.oblique_angle = data.text_data.oblique_angle;
+                    e.normal = data.text_data.normal;
+                    e.text_style = maps.style_name(data.text_data.style_handle);
                     // Collect pending — will be attached to parent INSERT
                     // after Pass 2 (owner_handle = INSERT handle).
                     pending_attributes

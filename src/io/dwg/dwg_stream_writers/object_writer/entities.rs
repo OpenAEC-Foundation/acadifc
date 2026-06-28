@@ -731,6 +731,12 @@ impl<'a> DwgObjectWriter<'a> {
         if self.version.r2007_plus() {
             self.writer.write_bit(false);
         }
+        // R2010–R2013: keep_duplicate_records (RC). AutoCAD does NOT emit this
+        // byte for R2018 ATTRIBs (verified against an AutoCAD-authored R2018
+        // file) — writing it there overruns the record and AutoCAD discards it.
+        if self.version.r2010_plus() && !self.version.r2018_plus(self.dxf_version) {
+            self.writer.write_byte(0);
+        }
 
         self.register_object(handle);
     }
@@ -2348,9 +2354,9 @@ impl<'a> DwgObjectWriter<'a> {
     // â”€â”€ MultiLeader â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_multileader(&mut self, e: &MultiLeader) {
-        // Prefer verbatim raw bytes (lossless) when the target matches the
-        // source encoding family — the native MLEADER context encoder is not
-        // yet byte-exact and AutoCAD rejects the re-encoded form.
+        // Same encoding family: emit the captured bytes verbatim (guaranteed
+        // lossless). Cross-version falls through to the native encoder below,
+        // which re-encodes the parsed entity in the target version's layout.
         if let Some(ref raw) = e.raw_dwg_data {
             if self.raw_passthrough_compatible(e.dwg_source_version) {
                 self.register_raw_object(e.common.handle, raw, e.dwg_handle_bits);
@@ -2451,40 +2457,46 @@ impl<'a> DwgObjectWriter<'a> {
         // 293 Enable Annotation Scale / Is annotative (B)
         self.writer.write_bit(e.enable_annotation_scale);
 
-        // Block Attributes
-        self.writer.write_bit_long(e.block_attributes.len() as i32);
-        for ba in &e.block_attributes {
-            // 330 Block Attribute definition handle (hard pointer)
-            let def = ba.attribute_definition_handle.unwrap_or(Handle::NULL);
-            self.writer.write_handle(DwgReferenceType::HardPointer, def.value());
-            // 302 Block Attribute Text String
-            self.writer.write_variable_text(&ba.text);
-            // 177 Block Attribute Index
-            self.writer.write_bit_short(ba.index);
-            // 44 Block Attribute Width
-            self.writer.write_bit_double(ba.width);
+        // R14–R2007 tail: override arrowheads, block labels, and the
+        // text-direction / alignment / justification / scale fields. R2010+
+        // moves all of these into the annotation context, so they must NOT
+        // appear here — writing them at R2010+ overruns the record.
+        if !self.version.r2010_plus() {
+            // num_arrowheads (BL) — override-arrowhead list (typically empty).
+            self.writer.write_bit_long(0);
+
+            // num_blocklabels (BL) + the block labels.
+            self.writer.write_bit_long(e.block_attributes.len() as i32);
+            for ba in &e.block_attributes {
+                // 330 Block Attribute definition handle (hard pointer)
+                let def = ba.attribute_definition_handle.unwrap_or(Handle::NULL);
+                self.writer.write_handle(DwgReferenceType::HardPointer, def.value());
+                // 302 Block Attribute Text String
+                self.writer.write_variable_text(&ba.text);
+                // 177 Block Attribute Index
+                self.writer.write_bit_short(ba.index);
+                // 44 Block Attribute Width
+                self.writer.write_bit_double(ba.width);
+            }
+
+            // 294 Text Direction Negative (B)
+            self.writer.write_bit(e.text_direction_negative);
+            // 178 Text Align in IPE (BS)
+            self.writer.write_bit_short(e.text_align_in_ipe);
+            // 179 Text Attachment Point (BS)
+            self.writer.write_bit_short(e.text_attachment_point as i16);
+            // 45 ScaleFactor (BD)
+            self.writer.write_bit_double(e.scale_factor);
         }
 
-        // 294 Text Direction Negative (B)
-        self.writer.write_bit(e.text_direction_negative);
-        
-        // 178 Text Align in IPE (BS)
-        self.writer.write_bit_short(e.text_align_in_ipe);
-        
-        // 179 Text Attachment Point (BS)
-        self.writer.write_bit_short(e.text_attachment_point as i16);
-        
-        // 45 ScaleFactor (BD)
-        self.writer.write_bit_double(e.scale_factor);
-
-        // R2010+ fields
+        // R2010+: attachment directions — order is dir(271), top(273), bottom(272).
         if self.version.r2010_plus() {
             // 271 Text attachment direction (BS)
             self.writer.write_bit_short(e.text_attachment_direction as i16);
-            // 272 Bottom text attachment direction (BS)
-            self.writer.write_bit_short(e.text_bottom_attachment as i16);
             // 273 Top text attachment direction (BS)
             self.writer.write_bit_short(e.text_top_attachment as i16);
+            // 272 Bottom text attachment direction (BS)
+            self.writer.write_bit_short(e.text_bottom_attachment as i16);
         }
 
         // R2013+ field
@@ -2841,6 +2853,10 @@ impl<'a> DwgObjectWriter<'a> {
         // R2007+: lock position
         if self.version.r2007_plus() {
             self.writer.write_bit(false);
+        }
+        // R2010–R2013: keep_duplicate_records (RC). Not emitted for R2018.
+        if self.version.r2010_plus() && !self.version.r2018_plus(self.dxf_version) {
+            self.writer.write_byte(0);
         }
 
         // Style handle (already written above in writeTextEntity)

@@ -653,8 +653,8 @@ impl DwgBitWriter {
                     0xC0u32 << 24
                 }
                 Color::ByBlock => {
-                    // By block: index 0
-                    0xC3u32 << 24
+                    // ByBlock method is 0xC1 (0xC3 is the ACI-index method).
+                    0xC1u32 << 24
                 }
                 Color::Index(idx) => {
                     // [index, 0, 0, 0xC3] — ACI index flag

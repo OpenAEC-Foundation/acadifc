@@ -1117,12 +1117,12 @@ impl<'a> DwgObjectWriter<'a> {
 
         // R2007+
         if self.version.r2007_plus() {
-            // Background handle H 332 soft pointer
+            // Background handle H 332 soft pointer (code 4)
             self.writer.write_handle(DwgReferenceType::SoftPointer, 0);
-            // Visual Style handle H 348 soft pointer
-            self.writer.write_handle(DwgReferenceType::SoftPointer, 0);
-            // Sun handle H 361 soft pointer
-            self.writer.write_handle(DwgReferenceType::SoftPointer, 0);
+            // Visual Style handle H 348 hard pointer (code 5)
+            self.writer.write_handle(DwgReferenceType::HardPointer, 0);
+            // Sun handle H 361 hard owner (code 3)
+            self.writer.write_handle(DwgReferenceType::HardOwnership, 0);
         }
 
         // R2000+
