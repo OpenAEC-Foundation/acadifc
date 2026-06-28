@@ -1787,53 +1787,46 @@ pub fn read_multileader(
     let block_connection_type = reader.read_bit_short();
     let enable_annotation_scale = reader.read_bit();
 
-    // R14–R2007 tail: override arrowheads, block labels, and the
-    // text-direction / alignment / justification / scale fields. R2010+
-    // moves all of these into the annotation context, so they are absent
-    // from the entity record there.
-    let mut block_attributes = Vec::new();
-    let mut text_direction_negative = false;
-    let mut text_align_in_ipe: i16 = 0;
-    let mut text_attachment_point: i16 = 0;
-    let mut scale_factor = 1.0;
-    if !version.r2010_plus() {
-        // num_arrowheads (BL) + override-arrowhead list (is_default B, handle).
+    // Pre-R2007 only: num_arrowheads (BL) + override-arrowhead list.
+    if !version.r2007_plus() {
         let ah_count = safe_count(reader.read_bit_long());
         for _ in 0..ah_count {
             let _is_default = reader.read_bit();
             let _arrowhead = reader.read_handle();
         }
-
-        // num_blocklabels (BL) + the block labels.
-        let ba_count = safe_count(reader.read_bit_long());
-        block_attributes = Vec::with_capacity(ba_count as usize);
-        for _ in 0..ba_count {
-            let def_handle = reader.read_handle();
-            let text = reader.read_variable_text();
-            let index = reader.read_bit_short();
-            let width = reader.read_bit_double();
-            block_attributes.push(BlockAttribute {
-                attribute_definition_handle: if def_handle != 0 { Some(Handle::from(def_handle)) } else { None },
-                text,
-                index,
-                width,
-            });
-        }
-
-        text_direction_negative = reader.read_bit();
-        text_align_in_ipe = reader.read_bit_short();
-        text_attachment_point = reader.read_bit_short();
-        scale_factor = reader.read_bit_double();
     }
+
+    // num_blocklabels (BL) + block labels, then text-direction / alignment /
+    // attachment-point / scale — written for ALL versions (NOT R2010+-gated;
+    // matches AutoCAD / AcadSharp). Gating these at R2010+ dropped them from
+    // the R2018 record and AutoCAD discarded the entity.
+    let ba_count = safe_count(reader.read_bit_long());
+    let mut block_attributes = Vec::with_capacity(ba_count as usize);
+    for _ in 0..ba_count {
+        let def_handle = reader.read_handle();
+        let text = reader.read_variable_text();
+        let index = reader.read_bit_short();
+        let width = reader.read_bit_double();
+        block_attributes.push(BlockAttribute {
+            attribute_definition_handle: if def_handle != 0 { Some(Handle::from(def_handle)) } else { None },
+            text,
+            index,
+            width,
+        });
+    }
+    let text_direction_negative = reader.read_bit();
+    let text_align_in_ipe = reader.read_bit_short();
+    let text_attachment_point = reader.read_bit_short();
+    let scale_factor = reader.read_bit_double();
 
     let mut text_attachment_direction: i16 = 0;
     let mut text_bottom_attachment: i16 = 9; // CenterOfText — matches MultiLeader::new() default
     let mut text_top_attachment: i16 = 9; // CenterOfText — matches MultiLeader::new() default
     if version.r2010_plus() {
-        // Order: dir (271), top (273), bottom (272).
+        // Order: dir (271), bottom (272), top (273) — per AutoCAD/AcadSharp.
         text_attachment_direction = reader.read_bit_short();
-        text_top_attachment = reader.read_bit_short();
         text_bottom_attachment = reader.read_bit_short();
+        text_top_attachment = reader.read_bit_short();
     }
 
     let mut extend_leader_to_text = false;
