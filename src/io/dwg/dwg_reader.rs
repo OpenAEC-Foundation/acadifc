@@ -180,6 +180,27 @@ fn find_subsequence(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize
     (from..=haystack.len() - needle.len()).find(|&i| &haystack[i..i + needle.len()] == needle)
 }
 
+/// First index `>= from` where a SAB blob header magic begins — either
+/// `"ACIS BinaryFile"` or `"ASM BinaryFile"`, whichever comes first. A single
+/// forward scan over `buf` (both magics start with `b'A'`, used as a cheap
+/// first-byte gate), so callers that advance `from` past each match walk the
+/// buffer once in total rather than re-scanning for each magic separately.
+fn find_acds_magic(buf: &[u8], from: usize) -> Option<usize> {
+    const ACIS_MAGIC: &[u8] = b"ACIS BinaryFile";
+    const ASM_MAGIC: &[u8] = b"ASM BinaryFile";
+    let mut i = from;
+    while i < buf.len() {
+        if buf[i] == b'A' {
+            let rest = &buf[i..];
+            if rest.starts_with(ACIS_MAGIC) || rest.starts_with(ASM_MAGIC) {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Extract every SAB (ACIS/ASM binary) blob from a decompressed AcDs section.
 ///
 /// Each blob runs from its header magic — `"ACIS BinaryFile"` (classic ACIS) or
@@ -189,20 +210,14 @@ fn find_subsequence(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize
 fn extract_acds_sab_blobs(buf: &[u8]) -> Vec<Vec<u8>> {
     // 0E 03 "End" 0E 02 "of" 0E 03 "ASM" 0D 04 "data"
     const END_MARKER: &[u8] = b"\x0E\x03End\x0E\x02of\x0E\x03ASM\x0D\x04data";
-    const ACIS_MAGIC: &[u8] = b"ACIS BinaryFile";
-    const ASM_MAGIC: &[u8] = b"ASM BinaryFile";
 
     let mut blobs = Vec::new();
     let mut pos = 0usize;
-    while pos < buf.len() {
-        let acis = find_subsequence(buf, ACIS_MAGIC, pos);
-        let asm = find_subsequence(buf, ASM_MAGIC, pos);
-        let start = match (acis, asm) {
-            (Some(a), Some(b)) => a.min(b),
-            (Some(a), None) => a,
-            (None, Some(b)) => b,
-            (None, None) => break,
-        };
+    // A single forward walk: each `find_acds_magic` resumes from `pos`, and the
+    // end-marker search and `pos = stop` advance past the blob just taken, so
+    // the buffer is scanned once overall — not once per blob per magic, which
+    // was quadratic on 3D-heavy files with many SAB bodies (issue #203).
+    while let Some(start) = find_acds_magic(buf, pos) {
         match find_subsequence(buf, END_MARKER, start) {
             Some(end) => {
                 let stop = end + END_MARKER.len();
