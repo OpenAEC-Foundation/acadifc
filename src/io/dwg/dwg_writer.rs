@@ -461,8 +461,17 @@ fn write_ac18<W: Write + Seek>(
     document: &CadDocument,
     version: DxfVersion,
 ) -> Result<()> {
+    // The maintenance-release version must match the value the AuxHeader
+    // writes AND the file-header metadata byte, because readers gate the
+    // R2010+ per-section "extra RL" (which locates the header/classes string
+    // stream) on `maintenance_version > 3`. A fresh document defaults to 0,
+    // which for R2013 (AC1027) omits that RL and makes the header string
+    // stream unreadable in AutoCAD/TrueView. Use the canonical per-version
+    // value so R2013 files are always well-formed.
+    let maint = aux_header_writer::dwg_maintenance_version(version) as u8;
+
     // AC18 writer reserves 0x100 bytes at file start for metadata
-    let mut fhw = DwgFileHeaderWriterAC18::new(version, document.maintenance_version, output)?;
+    let mut fhw = DwgFileHeaderWriterAC18::new(version, maint, output)?;
 
     // R2004+ default page size for most sections
     const PAGE_SIZE: usize = 0x7400;
@@ -477,7 +486,6 @@ fn write_ac18<W: Write + Seek>(
     let corrected_header = prepare_header(document, &handle_map_u32, &extents);
 
     // ── Section: Header (uses synced + corrected header) ──
-    let maint = document.maintenance_version;
     let header_data = header_writer::write_header(version, &corrected_header, maint);
     fhw.add_section(output, section_names::HEADER, &header_data, true, PAGE_SIZE)?;
 

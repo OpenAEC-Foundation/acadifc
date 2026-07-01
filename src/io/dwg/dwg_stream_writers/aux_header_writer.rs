@@ -32,7 +32,7 @@ fn dwg_internal_version(version: DxfVersion) -> i16 {
 /// Map DxfVersion to the maintenance release version used in AuxHeader.
 ///
 /// Must match the file header metadata maintenance byte (0x0B, 0x12).
-fn dwg_maintenance_version(version: DxfVersion) -> i16 {
+pub fn dwg_maintenance_version(version: DxfVersion) -> i16 {
     match version {
         DxfVersion::AC1021 => 25,  // 0x19
         DxfVersion::AC1024 => 30,  // 0x1E
