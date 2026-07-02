@@ -4254,6 +4254,13 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             self.writer.write_handle(330, mesh.common.handle)?;
             self.writer.write_subclass("AcDbEntity")?;
             self.writer.write_string(8, &face.common.layer)?;
+            if let Some(c) = face.color {
+                if let Some(tc) = c.to_true_color_value() {
+                    self.writer.write_i32(420, tc)?;
+                } else if let Some(idx) = c.index() {
+                    self.writer.write_i16(62, idx as i16)?;
+                }
+            }
             self.writer.write_subclass("AcDbFaceRecord")?;
 
             // Dummy position

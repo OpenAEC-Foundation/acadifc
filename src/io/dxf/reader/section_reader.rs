@@ -2889,6 +2889,7 @@ impl<'a> SectionReader<'a> {
                     let mut vi2: i16 = 0;
                     let mut vi3: i16 = 0;
                     let mut vi4: i16 = 0;
+                    let mut vcolor: Option<Color> = None;
                     while let Some(vpair) = self.reader.read_pair()? {
                         if vpair.code == 0 {
                             self.reader.push_back(vpair);
@@ -2902,6 +2903,8 @@ impl<'a> SectionReader<'a> {
                             41 => { if let Some(v) = vpair.as_double() { ew = v; } }
                             42 => { if let Some(v) = vpair.as_double() { bulge = v; } }
                             50 => { if let Some(v) = vpair.as_double() { tangent = v; } }
+                            62 => { if let Some(ci) = vpair.as_i16() { vcolor = Some(Color::from_index(ci)); } }
+                            420 => { if let Some(tc) = vpair.as_i32() { vcolor = Some(Color::from_true_color_value(tc)); } }
                             70 => { if let Some(v) = vpair.as_i16() { vflags = v; } }
                             71 => { if let Some(v) = vpair.as_i16() { vi1 = v; } }
                             72 => { if let Some(v) = vpair.as_i16() { vi2 = v; } }
@@ -2936,7 +2939,7 @@ impl<'a> SectionReader<'a> {
                             index2: vi2,
                             index3: vi3,
                             index4: vi4,
-                            color: None,
+                            color: vcolor,
                         });
                     } else {
                         // Plain polyline / polygon-mesh vertex — keep every field
