@@ -3145,6 +3145,16 @@ impl<'a> SectionReader<'a> {
                         text.oblique_angle = oblique.to_radians();
                     }
                 }
+                39 => {
+                    if let Some(t) = pair.as_double() {
+                        text.thickness = t;
+                    }
+                }
+                71 => {
+                    if let Some(g) = pair.as_i16() {
+                        text.generation_flags = g;
+                    }
+                }
                 72 => {
                     if let Some(h) = pair.as_i16() {
                         text.horizontal_alignment = match h {

@@ -63,6 +63,11 @@ pub struct Text {
     pub vertical_alignment: TextVerticalAlignment,
     /// Normal vector
     pub normal: Vector3,
+    /// Thickness / extrusion depth (DXF 39).
+    pub thickness: f64,
+    /// Text generation flags (DXF 71): bit 2 = backward (mirrored in X),
+    /// bit 4 = upside-down (mirrored in Y).
+    pub generation_flags: i16,
 }
 
 impl Text {
@@ -81,6 +86,8 @@ impl Text {
             horizontal_alignment: TextHorizontalAlignment::Left,
             vertical_alignment: TextVerticalAlignment::Baseline,
             normal: Vector3::UNIT_Z,
+            thickness: 0.0,
+            generation_flags: 0,
         }
     }
 

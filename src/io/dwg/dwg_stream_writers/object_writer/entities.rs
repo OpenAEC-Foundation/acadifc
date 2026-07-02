@@ -217,7 +217,7 @@ impl<'a> DwgObjectWriter<'a> {
             // Extrusion 3BD 210
             self.writer.write_3bit_double(e.normal);
             // Thickness BD 39
-            self.writer.write_bit_double(0.0);
+            self.writer.write_bit_double(e.thickness);
             // Oblique ang BD 51
             self.writer.write_bit_double(e.oblique_angle);
             // Rotation ang BD 50
@@ -229,7 +229,7 @@ impl<'a> DwgObjectWriter<'a> {
             // Text value TV 1
             self.writer.write_variable_text(&e.value);
             // Generation BS 71
-            self.writer.write_bit_short(0); // mirror = None
+            self.writer.write_bit_short(e.generation_flags);
             // Horiz align BS 72
             self.writer.write_bit_short(e.horizontal_alignment as i16);
             // Vert align BS 73
@@ -260,8 +260,10 @@ impl<'a> DwgObjectWriter<'a> {
             if e.width_factor == 1.0 {
                 data_flags |= 0x10;
             }
-            // 0x20 = mirror flag is None (0)
-            data_flags |= 0x20; // always None, no mirror field in struct
+            // 0x20 = generation (mirror) flag is None (0)
+            if e.generation_flags == 0 {
+                data_flags |= 0x20;
+            }
             // 0x40 = horizontal alignment is Left (0)
             if e.horizontal_alignment as u8 == 0 {
                 data_flags |= 0x40;
@@ -290,7 +292,7 @@ impl<'a> DwgObjectWriter<'a> {
             // Extrusion BE 210
             self.writer.write_bit_extrusion(e.normal);
             // Thickness BT 39
-            self.writer.write_bit_thickness(0.0);
+            self.writer.write_bit_thickness(e.thickness);
             // Oblique ang RD 51 â€” present if !(DataFlags & 0x04)
             if (data_flags & 0x04) == 0 {
                 self.writer.write_raw_double(e.oblique_angle);
@@ -309,7 +311,7 @@ impl<'a> DwgObjectWriter<'a> {
             self.writer.write_variable_text(&e.value);
             // Generation BS 71 â€” present if !(DataFlags & 0x20)
             if (data_flags & 0x20) == 0 {
-                self.writer.write_bit_short(0); // mirror = None
+                self.writer.write_bit_short(e.generation_flags);
             }
             // Horiz align BS 72 â€” present if !(DataFlags & 0x40)
             if (data_flags & 0x40) == 0 {

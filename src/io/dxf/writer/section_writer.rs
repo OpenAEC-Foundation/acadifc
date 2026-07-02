@@ -1454,6 +1454,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_entity_type("TEXT")?;
         self.write_common_entity_data(&text.common, owner)?;
         self.writer.write_subclass("AcDbText")?;
+        if text.thickness != 0.0 {
+            self.writer.write_double(39, text.thickness)?;
+        }
         self.writer.write_point3d(10, text.insertion_point)?;
         self.writer.write_double(40, text.height)?;
         self.writer.write_string(1, &text.value)?;
@@ -1467,6 +1470,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             self.writer.write_double(51, text.oblique_angle)?;
         }
         self.writer.write_string(7, &text.style)?;
+        if text.generation_flags != 0 {
+            self.writer.write_i16(71, text.generation_flags)?;
+        }
         self.writer.write_i16(72, text.horizontal_alignment as i16)?;
         if let Some(align_pt) = text.alignment_point {
             self.writer.write_point3d(11, align_pt)?;

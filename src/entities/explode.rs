@@ -383,6 +383,8 @@ fn explode_mtext(mtext: &MText) -> Vec<EntityType> {
         horizontal_alignment: TextHorizontalAlignment::Left,
         vertical_alignment: TextVerticalAlignment::Baseline,
         normal: mtext.normal,
+        thickness: 0.0,
+        generation_flags: 0,
     };
     vec![EntityType::Text(text)]
 }
@@ -544,6 +546,8 @@ fn explode_dimension(dim: &Dimension) -> Vec<EntityType> {
         horizontal_alignment: TextHorizontalAlignment::Center,
         vertical_alignment: TextVerticalAlignment::Middle,
         normal: base.normal,
+        thickness: 0.0,
+        generation_flags: 0,
     };
     result.push(EntityType::Text(text));
 

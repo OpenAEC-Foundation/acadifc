@@ -1350,6 +1350,8 @@ impl DwgDocumentBuilder {
                     e.width_factor = data.width_factor;
                     e.normal = data.normal;
                     e.style = maps.style_name(data.style_handle);
+                    e.thickness = data.thickness;
+                    e.generation_flags = data.generation;
                     let _ = document.add_entity(EntityType::Text(e));
                 },
                 OBJ_MTEXT => {
