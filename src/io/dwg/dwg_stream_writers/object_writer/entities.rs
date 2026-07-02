@@ -126,7 +126,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.writer.write_3bit_double(e.location);
         self.writer.write_bit_thickness(e.thickness);
         self.writer.write_bit_extrusion(e.normal);
-        self.writer.write_bit_double(0.0); // x-axis angle
+        self.writer.write_bit_double(e.x_axis_angle);
         self.register_object(e.common.handle);
     }
 
@@ -3390,6 +3390,7 @@ mod tests {
             location: Vector3::new(1.0, 2.0, 3.0),
             thickness: 0.0,
             normal: Vector3::UNIT_Z,
+            x_axis_angle: 0.0,
         };
         let doc = make_doc_with_entity(EntityType::Point(pt));
         let writer = DwgObjectWriter::new(&doc).unwrap();

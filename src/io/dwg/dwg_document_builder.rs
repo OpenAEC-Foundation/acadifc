@@ -1059,6 +1059,53 @@ impl DwgDocumentBuilder {
             }
         }
 
+        // ── Decode entity EED blobs into structured records ──────────────────
+        // The object reader keeps every EED block as verbatim `raw_dwg_eed`
+        // bytes (preserved for a byte-exact re-save). Additionally decode each
+        // block whose application is known into `records`, so callers — plugins
+        // reading XDATA via `read_record`, the DXF writer — see the same values
+        // a DXF read would surface. The raw blob is kept, so a plain round-trip
+        // still emits it verbatim; the writer prefers raw over records per app.
+        {
+            let wide = self.obj_reader.version().r2007_plus();
+            let app_name_by_handle: std::collections::HashMap<u64, String> = document
+                .app_ids
+                .iter()
+                .map(|a| (a.handle.value(), a.name.clone()))
+                .collect();
+            let layer_name_by_handle: std::collections::HashMap<u64, String> = document
+                .layers
+                .iter()
+                .map(|l| (l.handle.value(), l.name.clone()))
+                .collect();
+            if !app_name_by_handle.is_empty() {
+                for entity in document.entities.iter_mut() {
+                    let xd = &mut entity.common_mut().extended_data;
+                    if xd.raw_dwg_eed.is_empty() {
+                        continue;
+                    }
+                    let blocks = xd.raw_dwg_eed.clone();
+                    for (app_handle, bytes) in &blocks {
+                        let Some(name) = app_name_by_handle.get(app_handle) else {
+                            continue;
+                        };
+                        if xd.get_record(name).is_some() {
+                            continue;
+                        }
+                        if let Some(values) = crate::io::dwg::eed_codec::decode_values(
+                            bytes,
+                            wide,
+                            |h| layer_name_by_handle.get(&h).cloned(),
+                        ) {
+                            let mut rec = crate::xdata::ExtendedDataRecord::new(name.clone());
+                            rec.values = values;
+                            xd.add_record(rec);
+                        }
+                    }
+                }
+            }
+        }
+
         self.notifications
     }
 
@@ -1110,6 +1157,7 @@ impl DwgDocumentBuilder {
                     e.location = data.location;
                     e.thickness = data.thickness;
                     e.normal = data.normal;
+                    e.x_axis_angle = data.x_axis_angle;
                     let _ = document.add_entity(EntityType::Point(e));
                 },
                 OBJ_CIRCLE => {
@@ -1179,6 +1227,12 @@ impl DwgDocumentBuilder {
                         data.second_corner,
                         data.third_corner,
                         data.fourth_corner,
+                    );
+                    // The reader already decoded the invisible-edge flags; the
+                    // DXF path applies them but the DWG builder used to drop
+                    // them, so file-hidden 3DFACE edges rendered visible.
+                    e.invisible_edges = crate::entities::face3d::InvisibleEdgeFlags::from_bits(
+                        data.invisible_edges as u8,
                     );
                     e.common = entity_common;
                     let _ = document.add_entity(EntityType::Face3D(e));
@@ -1571,6 +1625,12 @@ impl DwgDocumentBuilder {
                     let mut e = Polyline3D::new();
                     e.common = entity_common;
                     e.flags.closed = (data.closed_flag & 1) != 0;
+                    // smooth_type was decoded by the reader but the builder used
+                    // to drop it (spline/curve-fit 3D polylines lost their fit).
+                    e.smooth_type = crate::entities::polyline3d::SmoothSurfaceType::from_value(
+                        data.smooth_type as i16,
+                    );
+                    e.flags.spline_fit = data.smooth_type != 0;
                     let h = e.common.handle.value();
                     pending.polylines.push((h, EntityType::Polyline3D(e)));
                 },

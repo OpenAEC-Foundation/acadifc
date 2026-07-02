@@ -68,6 +68,7 @@ fn arc_from_bulge(
             location: Vector3::new(p1x, p1y, elevation),
             thickness,
             normal,
+            x_axis_angle: 0.0,
         });
     }
 

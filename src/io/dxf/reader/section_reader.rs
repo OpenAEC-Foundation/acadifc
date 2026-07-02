@@ -2592,6 +2592,11 @@ impl<'a> SectionReader<'a> {
                         point.thickness = thickness;
                     }
                 }
+                50 => {
+                    if let Some(a) = pair.as_double() {
+                        point.x_axis_angle = a;
+                    }
+                }
                 210 | 220 | 230 => { normal.add_coordinate(&pair); }
                 _ => { self.try_read_common_entity_code(&pair, &mut point.common)?; }
             }
@@ -4532,6 +4537,7 @@ impl<'a> SectionReader<'a> {
     fn read_shape(&mut self) -> Result<Option<Shape>> {
         let mut shape = Shape::new();
         let mut insertion_point = PointReader::new();
+        let mut normal = PointReader::new();
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 {
@@ -4558,11 +4564,32 @@ impl<'a> SectionReader<'a> {
                         shape.rotation = r;
                     }
                 }
+                // Previously dropped: thickness, relative X scale, oblique
+                // angle, extrusion — all present on the struct + DWG path.
+                39 => {
+                    if let Some(t) = pair.as_double() {
+                        shape.thickness = t;
+                    }
+                }
+                41 => {
+                    if let Some(s) = pair.as_double() {
+                        shape.relative_x_scale = s;
+                    }
+                }
+                51 => {
+                    if let Some(o) = pair.as_double() {
+                        shape.oblique_angle = o;
+                    }
+                }
+                210 | 220 | 230 => { normal.add_coordinate(&pair); }
                 _ => { self.try_read_common_entity_code(&pair, &mut shape.common)?; }
             }
         }
 
         shape.insertion_point = insertion_point.get_point().unwrap_or(Vector3::zero());
+        if let Some(n) = normal.get_point() {
+            shape.normal = n;
+        }
 
         Ok(Some(shape))
     }

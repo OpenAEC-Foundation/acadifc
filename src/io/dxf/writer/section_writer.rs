@@ -1228,6 +1228,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             self.writer.write_double(39, point.thickness)?;
         }
         self.write_normal(point.normal)?;
+        if point.x_axis_angle != 0.0 {
+            self.writer.write_double(50, point.x_axis_angle)?;
+        }
         Ok(())
     }
 

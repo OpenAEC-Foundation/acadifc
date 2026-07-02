@@ -15,6 +15,9 @@ pub struct Point {
     pub thickness: f64,
     /// Normal vector
     pub normal: Vector3,
+    /// UCS X-axis angle for point display (DXF 50, radians) — orients the
+    /// point marker (PDMODE glyph) within the plane.
+    pub x_axis_angle: f64,
 }
 
 impl Point {
@@ -25,6 +28,7 @@ impl Point {
             location: Vector3::ZERO,
             thickness: 0.0,
             normal: Vector3::UNIT_Z,
+            x_axis_angle: 0.0,
         }
     }
 
