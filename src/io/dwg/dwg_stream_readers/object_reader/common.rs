@@ -112,6 +112,12 @@ pub const OBJ_LOFTEDSURFACE: i16 = -8;
 pub const OBJ_REVOLVEDSURFACE: i16 = -9;
 pub const OBJ_SWEPTSURFACE: i16 = -10;
 pub const OBJ_NURBSURFACE: i16 = -11;
+// Underlay references (PDF/DWF/DGN) — always class-based graphical entities.
+// One sentinel each so the builder can recover the underlay flavour from the
+// resolved type code; the bitstream layout is identical for all three.
+pub const OBJ_PDFUNDERLAY: i16 = -12;
+pub const OBJ_DWFUNDERLAY: i16 = -13;
+pub const OBJ_DGNUNDERLAY: i16 = -14;
 
 // Class-based non-entity objects — also resolved via class mapping for
 // portable type codes.  The values here match ACadSharp's ObjectType.
@@ -145,10 +151,11 @@ pub const OBJ_SPATIALFILTER: i16 = 0x86; // 134
 pub fn is_entity_type(type_code: i16) -> bool {
     // Fixed entity types: 1–47, 74 (OLE2FRAME), 77 (LWPOLYLINE), 78 (HATCH)
     // EXCEPT: 42 (OBJ_DICTIONARY) is a non-graphical object, not an entity.
-    // Class-based entity sentinels: -4..-1 (WIPEOUT, MULTILEADER, MESH, IMAGE)
+    // Class-based entity sentinels: -14..-1 (underlays, surfaces, WIPEOUT,
+    // MULTILEADER, MESH, IMAGE).
     // Class-based entity types (≥500) are NOT included here; the builder
     // checks the class's is_an_entity flag directly.
-    matches!(type_code, -11..=-1 | 1..=41 | 43..=47 | 74 | 77 | 78)
+    matches!(type_code, -14..=-1 | 1..=41 | 43..=47 | 74 | 77 | 78)
 }
 
 /// Returns true if the type code is a table control or entry.
@@ -178,6 +185,10 @@ pub fn dxf_name_to_type_code(dxf_name: &str) -> Option<i16> {
         "REVOLVEDSURFACE" => Some(OBJ_REVOLVEDSURFACE),
         "SWEPTSURFACE" => Some(OBJ_SWEPTSURFACE),
         "NURBSURFACE" => Some(OBJ_NURBSURFACE),
+        // Underlay references (PDF/DWF/DGN).
+        "PDFUNDERLAY" => Some(OBJ_PDFUNDERLAY),
+        "DWFUNDERLAY" => Some(OBJ_DWFUNDERLAY),
+        "DGNUNDERLAY" => Some(OBJ_DGNUNDERLAY),
         // Non-entity objects
         "ACDBDICTIONARYWDFLT" => Some(OBJ_DICTIONARYWDFLT),
         "DICTIONARYVAR" => Some(OBJ_DICTIONARYVAR),

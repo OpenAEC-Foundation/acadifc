@@ -1983,6 +1983,38 @@ impl DwgDocumentBuilder {
                         .push(PendingVertex::PfaceFace(data, entity_common));
                 },
 
+                // ── Underlay reference (PDF / DWF / DGN) ───────────
+                code @ (OBJ_PDFUNDERLAY | OBJ_DWFUNDERLAY | OBJ_DGNUNDERLAY) => {
+                    use crate::entities::underlay::{Underlay, UnderlayDisplayFlags, UnderlayType};
+                    let utype = if code == OBJ_DWFUNDERLAY {
+                        UnderlayType::Dwf
+                    } else if code == OBJ_DGNUNDERLAY {
+                        UnderlayType::Dgn
+                    } else {
+                        UnderlayType::Pdf
+                    };
+                    let data = entities::read_underlay(&mut reader);
+                    let mut e = Underlay::new(utype);
+                    e.common = entity_common;
+                    e.normal = data.normal;
+                    e.insertion_point = data.insertion_point;
+                    e.rotation = data.rotation;
+                    e.x_scale = data.x_scale;
+                    e.y_scale = data.y_scale;
+                    e.z_scale = data.z_scale;
+                    let eflags = UnderlayDisplayFlags::from_bits_truncate(data.flags);
+                    e.flags = eflags;
+                    // The "clip inside" bit doubles as the clip-inversion flag.
+                    e.clip_inverted = eflags.contains(UnderlayDisplayFlags::CLIP_INSIDE);
+                    e.contrast = data.contrast;
+                    e.fade = data.fade;
+                    if data.definition_handle != 0 {
+                        e.definition_handle = Handle::from(data.definition_handle);
+                    }
+                    e.clip_boundary_vertices = data.clip_boundary_vertices;
+                    let _ = document.add_entity(EntityType::Underlay(e));
+                },
+
                 // ── Raster image / Wipeout ─────────────────────────
                 OBJ_IMAGE => {
                     let data = entities::read_raster_image(

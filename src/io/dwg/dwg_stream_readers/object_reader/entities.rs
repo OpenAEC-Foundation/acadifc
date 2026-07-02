@@ -1706,6 +1706,63 @@ pub fn read_mesh(reader: &mut DwgMergedReader) -> MeshData {
     MeshData { version, blend_crease, subdivision_level, vertices, faces, edges, crease_values }
 }
 
+/// Decoded fields of an UNDERLAY reference (PDF / DWF / DGN).
+///
+/// Which of the three underlay flavours this is comes from the object's DXF
+/// class name, resolved by the builder — the bitstream layout is identical for
+/// all three (AcDbUnderlayReference).
+pub struct UnderlayData {
+    pub normal: Vector3,
+    pub insertion_point: Vector3,
+    pub rotation: f64,
+    pub x_scale: f64,
+    pub y_scale: f64,
+    pub z_scale: f64,
+    pub flags: u8,
+    pub contrast: u8,
+    pub fade: u8,
+    pub definition_handle: u64,
+    pub clip_boundary_vertices: Vec<Vector2>,
+}
+
+/// Read an UNDERLAY reference (AcDbUnderlayReference: PDF/DWF/DGN underlay).
+///
+/// The definition handle sits in the middle of the object data in the encoder's
+/// ordering, but it is drawn from the separate handle stream, so reading it here
+/// does not disturb the object-stream cursor used by the trailing clip vertices.
+pub fn read_underlay(reader: &mut DwgMergedReader) -> UnderlayData {
+    let normal = reader.read_3bit_double();
+    let insertion_point = reader.read_3bit_double();
+    let rotation = reader.read_bit_double();
+    let x_scale = reader.read_bit_double();
+    let y_scale = reader.read_bit_double();
+    let z_scale = reader.read_bit_double();
+    let flags = reader.read_byte();
+    let contrast = reader.read_byte();
+    let fade = reader.read_byte();
+    let definition_handle = reader.read_handle();
+
+    let n = safe_count(reader.read_bit_long()) as usize;
+    let mut clip_boundary_vertices: Vec<Vector2> = Vec::with_capacity(n);
+    for _ in 0..n {
+        clip_boundary_vertices.push(reader.read_2raw_double());
+    }
+
+    UnderlayData {
+        normal,
+        insertion_point,
+        rotation,
+        x_scale,
+        y_scale,
+        z_scale,
+        flags,
+        contrast,
+        fade,
+        definition_handle,
+        clip_boundary_vertices,
+    }
+}
+
 pub fn read_raster_image(reader: &mut DwgMergedReader, version: DwgVersion) -> RasterImageData {
     let class_version = reader.read_bit_long();
     let insertion_point = reader.read_3bit_double();
