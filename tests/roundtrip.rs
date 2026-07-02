@@ -2494,3 +2494,66 @@ fn dwg_roundtrip_complex_linetype_shape() {
     assert!(c0.is_shape());
     assert_eq!(c0.shape_number(), Some(10));
 }
+
+// ── DWG: structured XDATA (records) round-trip (issue 249) ─────────────
+// A plugin attaches XDATA to an entity via `write_record`, which lands in
+// `ExtendedData::records`. The DWG writer used to serialize only verbatim
+// `raw_dwg_eed` and drop `records`, so the data vanished on the first save.
+// These assert the values survive a full write → read cycle in both the
+// R2007+ UTF-16 string branch and the pre-R2007 codepage branch.
+fn xdata_record_survives_dwg_roundtrip(version: DxfVersion) {
+    use acadrust::tables::AppId;
+    use acadrust::xdata::{ExtendedDataRecord, XDataValue};
+
+    let mut doc = CadDocument::with_version(version);
+    let mut app = AppId::new("DEMO_SURVEY");
+    app.handle = doc.allocate_handle();
+    let _ = doc.app_ids.add(app);
+    let h = doc
+        .add_entity(EntityType::Point(Point::from_coords(5.0, 6.0, 0.0)))
+        .expect("add point");
+
+    let mut rec = ExtendedDataRecord::new("DEMO_SURVEY");
+    rec.add_value(XDataValue::String("PNT-1".to_string()));
+    rec.add_value(XDataValue::Integer16(7));
+    rec.add_value(XDataValue::Integer32(123456));
+    rec.add_value(XDataValue::Real(1.25));
+    rec.add_value(XDataValue::Point3D(Vector3::new(9.0, 8.0, 7.0)));
+    doc.get_entity_mut(h)
+        .expect("entity")
+        .common_mut()
+        .extended_data
+        .add_record(rec);
+
+    let rt = dwg_roundtrip(&doc);
+    let got = rt
+        .entities()
+        .find_map(|e| match e {
+            EntityType::Point(_) => e.common().extended_data.get_record("DEMO_SURVEY"),
+            _ => None,
+        })
+        .expect("record survived save+reopen");
+    assert_eq!(
+        got.values,
+        vec![
+            XDataValue::String("PNT-1".to_string()),
+            XDataValue::Integer16(7),
+            XDataValue::Integer32(123456),
+            XDataValue::Real(1.25),
+            XDataValue::Point3D(Vector3::new(9.0, 8.0, 7.0)),
+        ],
+        "XDATA values changed across DWG roundtrip ({version:?})"
+    );
+    // The application must stay registered so other CAD apps accept the EED.
+    assert!(rt.app_ids.get("DEMO_SURVEY").is_some(), "APPID lost");
+}
+
+#[test]
+fn xdata_record_survives_dwg_roundtrip_r2018() {
+    xdata_record_survives_dwg_roundtrip(DxfVersion::AC1032);
+}
+
+#[test]
+fn xdata_record_survives_dwg_roundtrip_r2004() {
+    xdata_record_survives_dwg_roundtrip(DxfVersion::AC1018);
+}

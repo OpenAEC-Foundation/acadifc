@@ -694,9 +694,12 @@ impl<'a> DwgObjectWriter<'a> {
     // ── write_extended_data ─────────────────────────────────────────
     /// Write registered-application extended data (XDATA) blocks.
     ///
-    /// If `xdata.raw_dwg_eed` is populated (from a DWG read), the raw
-    /// bytes are written back verbatim to preserve round-trip fidelity.
-    /// Otherwise a BS 0 terminator is written (no EED).
+    /// `xdata.raw_dwg_eed` blocks (captured verbatim on a DWG read) are written
+    /// back byte-for-byte to preserve round-trip fidelity. Structured
+    /// `xdata.records()` — e.g. XDATA a plugin attaches via `write_record` —
+    /// are encoded into EED bytes and appended for any application not already
+    /// carried verbatim, so they survive a save instead of being dropped.
+    /// When neither is present a lone BS 0 terminator is written (no EED).
     pub fn write_extended_data(&mut self, xdata: &crate::xdata::ExtendedData) {
         // EED string entries (code 0) are code-page encoded pre-R2007 and
         // UTF-16 in R2007+, so verbatim `raw_dwg_eed` bytes captured from a
@@ -709,12 +712,53 @@ impl<'a> DwgObjectWriter<'a> {
                     == (self.dxf_version >= crate::types::DxfVersion::AC1021)
             }
         };
-        if xdata.raw_dwg_eed.is_empty() || !eed_compatible {
+
+        // Verbatim blobs captured on read. Dropped on a cross-version save whose
+        // string encoding family differs (they'd garble); freshly-encoded
+        // records below are always emitted in the target version's encoding.
+        let raw_blocks: &[(u64, Vec<u8>)] = if eed_compatible {
+            &xdata.raw_dwg_eed
+        } else {
+            &[]
+        };
+
+        // Encode structured records (e.g. plugin XDATA via write_record) into
+        // EED bytes. Only records whose application is registered in the APPID
+        // table can be written (the reference below is a handle into it); an
+        // unregistered app is skipped rather than emitting a dangling handle.
+        // An app already present verbatim in `raw_blocks` wins, so a clean DWG
+        // round-trip stays byte-for-byte and we never double-write one app.
+        let wide = self.version.r2007_plus();
+        let mut record_blocks: Vec<(u64, Vec<u8>)> = Vec::new();
+        for rec in xdata.records() {
+            let Some(app) = self.document.app_ids.get(&rec.application_name) else {
+                continue;
+            };
+            let app_handle = app.handle.value();
+            if raw_blocks.iter().any(|(a, _)| *a == app_handle) {
+                continue;
+            }
+            let bytes = crate::io::dwg::eed_codec::encode_values(wide, &rec.values, |name| {
+                self.document
+                    .layers
+                    .get(name)
+                    .map(|l| l.handle.value())
+                    .unwrap_or(0)
+            });
+            // The block length is framed as a BS (i16); skip a pathologically
+            // large record rather than overflow and desync the object stream.
+            if bytes.len() > i16::MAX as usize {
+                continue;
+            }
+            record_blocks.push((app_handle, bytes));
+        }
+
+        if raw_blocks.is_empty() && record_blocks.is_empty() {
             // No EED: write BS 0 terminator
             self.writer.write_bit_short(0);
             return;
         }
-        for (app_handle, raw_bytes) in &xdata.raw_dwg_eed {
+        for (app_handle, raw_bytes) in raw_blocks.iter().chain(record_blocks.iter()) {
             // BS size of this application's data block
             self.writer.write_bit_short(raw_bytes.len() as i16);
             // Application handle — always in main stream (HardPointer reference type)

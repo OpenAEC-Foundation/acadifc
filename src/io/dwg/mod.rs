@@ -48,6 +48,7 @@ pub mod dwg_stream_readers;
 pub mod dwg_stream_writers;
 pub mod dwg_version;
 pub mod dwg_writer;
+pub mod eed_codec;
 pub mod file_headers;
 pub mod reed_solomon;
 
