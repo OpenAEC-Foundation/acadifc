@@ -1282,6 +1282,23 @@ impl DwgDocumentBuilder {
                     e.row_spacing = data.row_spacing;
                     let _ = document.add_entity(EntityType::Insert(e));
                 },
+                OBJ_TABLE => {
+                    // ACAD_TABLE is INSERT-derived: reading the shared insert
+                    // base (transform + block reference) positions the table and
+                    // links it to the anonymous block that renders its cells. The
+                    // per-cell content (huge, version-dependent) is not parsed;
+                    // because the object reader seeks to each object by offset,
+                    // this partial read is safe and never desyncs the stream.
+                    let data = entities::read_insert(&mut reader, self.obj_reader.version());
+                    let mut e = crate::entities::Table::default();
+                    e.common = entity_common;
+                    e.insertion_point = data.insert_point;
+                    e.normal = data.normal;
+                    if data.block_handle != 0 {
+                        e.block_record_handle = Some(Handle::from(data.block_handle));
+                    }
+                    let _ = document.add_entity(EntityType::Table(e));
+                },
                 OBJ_LWPOLYLINE => {
                     let data = entities::read_lwpolyline(&mut reader, self.obj_reader.version());
                     let mut e = LwPolyline::new();
