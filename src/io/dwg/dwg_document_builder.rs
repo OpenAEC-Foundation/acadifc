@@ -2564,6 +2564,26 @@ impl DwgDocumentBuilder {
                         crate::objects::ObjectType::ImageDefinition(obj),
                     );
                 },
+                code @ (OBJ_PDFDEFINITION | OBJ_DWFDEFINITION | OBJ_DGNDEFINITION) => {
+                    use crate::entities::underlay::UnderlayType;
+                    let utype = if code == OBJ_DWFDEFINITION {
+                        UnderlayType::Dwf
+                    } else if code == OBJ_DGNDEFINITION {
+                        UnderlayType::Dgn
+                    } else {
+                        UnderlayType::Pdf
+                    };
+                    let data = objects::read_underlay_definition(&mut reader);
+                    let mut obj = crate::objects::UnderlayDefinition::new(utype);
+                    obj.handle = Handle::from(handle);
+                    obj.owner_handle = owner_handle;
+                    obj.file_path = data.file_path;
+                    obj.page_name = data.page_name;
+                    document.objects.insert(
+                        Handle::from(handle),
+                        crate::objects::ObjectType::UnderlayDefinition(obj),
+                    );
+                },
                 OBJ_IMAGEDEFREACTOR => {
                     let _data = objects::read_image_definition_reactor(&mut reader);
                     document.objects.insert(

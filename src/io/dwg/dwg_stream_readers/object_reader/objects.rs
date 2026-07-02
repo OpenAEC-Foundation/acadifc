@@ -661,6 +661,21 @@ pub fn read_image_definition(reader: &mut DwgMergedReader) -> ImageDefinitionDat
     ImageDefinitionData { class_version, size_in_pixels, file_name, is_loaded, resolution_unit, pixel_size }
 }
 
+/// Decoded body of an underlay definition object (AcDbUnderlayDefinition).
+/// The three flavours (PDF/DWF/DGN) share this identical two-string layout.
+pub struct UnderlayDefinitionData {
+    pub file_path: String,
+    pub page_name: String,
+}
+
+/// Read an underlay definition (PDF/DWF/DGN): file path then page/sheet name,
+/// both variable text. The common non-entity header is consumed by the caller.
+pub fn read_underlay_definition(reader: &mut DwgMergedReader) -> UnderlayDefinitionData {
+    let file_path = reader.read_variable_text();
+    let page_name = reader.read_variable_text();
+    UnderlayDefinitionData { file_path, page_name }
+}
+
 pub fn read_image_definition_reactor(reader: &mut DwgMergedReader) -> ImageDefinitionReactorData {
     let class_version = reader.read_bit_long();
     ImageDefinitionReactorData { class_version }

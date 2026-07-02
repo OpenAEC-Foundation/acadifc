@@ -11,14 +11,23 @@ use std::io::Cursor;
 
 use acadrust::entities::underlay::{Underlay, UnderlayDisplayFlags, UnderlayType};
 use acadrust::entities::EntityType;
+use acadrust::objects::{ObjectType, UnderlayDefinition};
 use acadrust::types::{DxfVersion, Handle, Vector2, Vector3};
-use acadrust::{CadDocument, DwgReader, DwgWriter};
+use acadrust::{CadDocument, DwgReader, DwgWriter, DxfReader, DxfWriter};
 
 fn dwg_roundtrip(doc: &CadDocument) -> CadDocument {
     let bytes = DwgWriter::write_to_vec(doc).expect("DWG write failed");
     DwgReader::from_stream(Cursor::new(bytes))
         .read()
         .expect("DWG read failed")
+}
+
+fn dxf_roundtrip(doc: &CadDocument) -> CadDocument {
+    let bytes = DxfWriter::new(doc).write_to_vec().expect("DXF write failed");
+    DxfReader::from_reader(Cursor::new(bytes))
+        .expect("DXF reader init failed")
+        .read()
+        .expect("DXF read failed")
 }
 
 /// Build a fully-populated underlay of the given flavour.
@@ -96,6 +105,54 @@ fn underlay_pdf_dwg_roundtrip_all_versions() {
     ] {
         let u = roundtrip_underlay(version, UnderlayType::Pdf);
         assert_fields(&u, UnderlayType::Pdf, &format!("PDF {version:?}"));
+    }
+}
+
+/// Build a document carrying a single underlay definition object.
+fn definition_document(version: DxfVersion, kind: UnderlayType) -> CadDocument {
+    let mut doc = CadDocument::with_version(version);
+    let mut def = UnderlayDefinition::new(kind);
+    def.handle = Handle::new(0x400);
+    def.owner_handle = Handle::new(0x0C); // named-object dictionary
+    def.file_path = "C:/refs/site-plan.pdf".to_string();
+    def.page_name = "Sheet1".to_string();
+    doc.objects
+        .insert(def.handle, ObjectType::UnderlayDefinition(def));
+    doc
+}
+
+fn extract_definition(doc: &CadDocument) -> UnderlayDefinition {
+    doc.objects
+        .values()
+        .find_map(|o| match o {
+            ObjectType::UnderlayDefinition(d) => Some(d.clone()),
+            _ => None,
+        })
+        .expect("underlay definition missing after roundtrip")
+}
+
+fn assert_def(d: &UnderlayDefinition, kind: UnderlayType, label: &str) {
+    assert_eq!(d.underlay_type, kind, "{label}: def underlay type");
+    assert_eq!(d.file_path, "C:/refs/site-plan.pdf", "{label}: def file path");
+    assert_eq!(d.page_name, "Sheet1", "{label}: def page name");
+    assert_eq!(d.handle, Handle::new(0x400), "{label}: def handle");
+}
+
+#[test]
+fn underlay_definition_dwg_roundtrip() {
+    for kind in [UnderlayType::Pdf, UnderlayType::Dwf, UnderlayType::Dgn] {
+        let doc = definition_document(DxfVersion::AC1032, kind);
+        let d = extract_definition(&dwg_roundtrip(&doc));
+        assert_def(&d, kind, &format!("DWG {kind:?}"));
+    }
+}
+
+#[test]
+fn underlay_definition_dxf_roundtrip() {
+    for kind in [UnderlayType::Pdf, UnderlayType::Dwf, UnderlayType::Dgn] {
+        let doc = definition_document(DxfVersion::AC1032, kind);
+        let d = extract_definition(&dxf_roundtrip(&doc));
+        assert_def(&d, kind, &format!("DXF {kind:?}"));
     }
 }
 

@@ -1104,6 +1104,19 @@ impl<'a> SectionReader<'a> {
                             document.objects.insert(obj.handle, ObjectType::ImageDefinition(obj));
                         }
                     }
+                    "PDFDEFINITION" | "DWFDEFINITION" | "DGNDEFINITION" => {
+                        use crate::entities::underlay::UnderlayType;
+                        let utype = match pair.value_string.as_str() {
+                            "DWFDEFINITION" => UnderlayType::Dwf,
+                            "DGNDEFINITION" => UnderlayType::Dgn,
+                            _ => UnderlayType::Pdf,
+                        };
+                        if let Some(obj) = self.read_underlay_definition(utype)? {
+                            document
+                                .objects
+                                .insert(obj.handle, ObjectType::UnderlayDefinition(obj));
+                        }
+                    }
                     "MLEADERSTYLE" => {
                         if let Some(obj) = self.read_multileader_style()? {
                             document.objects.insert(obj.handle, ObjectType::MultiLeaderStyle(obj));
@@ -5821,6 +5834,27 @@ impl<'a> SectionReader<'a> {
                 11 => { if let Some(v) = pair.as_double() { def.pixel_size.0 = v; } }
                 21 => { if let Some(v) = pair.as_double() { def.pixel_size.1 = v; } }
                 280 => { if let Some(v) = pair.as_i16() { def.is_loaded = v != 0; } }
+                _ => {}
+            }
+        }
+
+        Ok(Some(def))
+    }
+
+    /// Read a PDF/DWF/DGN underlay definition object.
+    fn read_underlay_definition(
+        &mut self,
+        utype: crate::entities::underlay::UnderlayType,
+    ) -> Result<Option<crate::objects::UnderlayDefinition>> {
+        let mut def = crate::objects::UnderlayDefinition::new(utype);
+
+        while let Some(pair) = self.reader.read_pair()? {
+            if pair.code == 0 { self.reader.push_back(pair); break; }
+            match pair.code {
+                5 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { def.handle = Handle::new(h); } }
+                330 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { def.owner_handle = Handle::new(h); } }
+                1 => def.file_path = pair.value_string.clone(),
+                2 => def.page_name = pair.value_string.clone(),
                 _ => {}
             }
         }

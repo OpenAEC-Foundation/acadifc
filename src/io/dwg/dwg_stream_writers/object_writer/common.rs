@@ -117,6 +117,9 @@ pub const OBJ_RASTERVARIABLES: i16 = 0x80;  // 128
 pub const OBJ_DBCOLOR: i16 = 0x81;          // 129
 pub const OBJ_WIPEOUTVARIABLES: i16 = 0x82; // 130
 pub const OBJ_SPATIALFILTER: i16 = 0x86;    // 134 (class-based; sentinel fallback)
+pub const OBJ_PDFDEFINITION: i16 = 0x87;    // 135 (class-based; sentinel fallback)
+pub const OBJ_DWFDEFINITION: i16 = 0x88;    // 136 (class-based; sentinel fallback)
+pub const OBJ_DGNDEFINITION: i16 = 0x89;    // 137 (class-based; sentinel fallback)
 
 // ── Methods on DwgObjectWriter ──────────────────────────────────────
 impl<'a> DwgObjectWriter<'a> {

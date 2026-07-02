@@ -199,6 +199,7 @@ impl<'a> DwgObjectWriter<'a> {
             ObjectType::MLineStyle(m) => self.write_mlinestyle(m),
             ObjectType::MultiLeaderStyle(m) => self.write_multileader_style(m),
             ObjectType::ImageDefinition(d) => self.write_image_definition(d),
+            ObjectType::UnderlayDefinition(d) => self.write_underlay_definition(d),
             ObjectType::ImageDefinitionReactor(r) => self.write_image_definition_reactor(r),
             ObjectType::PlotSettings(p) => self.write_plot_settings_obj(p),
             ObjectType::Scale(s) => self.write_scale(s),
@@ -962,6 +963,28 @@ impl<'a> DwgObjectWriter<'a> {
                 def.pixel_size.0,
                 def.pixel_size.1,
             ));
+
+        self.register_object(def.handle);
+    }
+
+    // ── Underlay Definition (PDF / DWF / DGN) ───────────────────────
+
+    /// Write an underlay definition object (AcDbUnderlayDefinition): the file
+    /// path and page/sheet name, both variable text, after the common
+    /// non-entity header.
+    fn write_underlay_definition(&mut self, def: &UnderlayDefinition) {
+        use crate::entities::underlay::UnderlayType;
+        // UNLISTED type — resolve to the registered DXF class number (500+).
+        let fallback = match def.underlay_type {
+            UnderlayType::Dwf => common::OBJ_DWFDEFINITION,
+            UnderlayType::Dgn => common::OBJ_DGNDEFINITION,
+            UnderlayType::Pdf => common::OBJ_PDFDEFINITION,
+        };
+        let type_code = self.class_type_code(def.entity_name(), fallback);
+        self.write_common_non_entity_data(type_code, def.handle, def.owner_handle, &[], &None);
+
+        self.writer.write_variable_text(&def.file_path);
+        self.writer.write_variable_text(&def.page_name);
 
         self.register_object(def.handle);
     }

@@ -2471,6 +2471,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 ObjectType::Group(group) => self.write_group(group)?,
                 ObjectType::MLineStyle(mlinestyle) => self.write_mlinestyle(mlinestyle)?,
                 ObjectType::ImageDefinition(imagedef) => self.write_image_definition(imagedef)?,
+                ObjectType::UnderlayDefinition(def) => self.write_underlay_definition(def)?,
                 ObjectType::PlotSettings(plotsettings) => self.write_plot_settings(plotsettings)?,
                 ObjectType::MultiLeaderStyle(style) => self.write_multileader_style(style)?,
                 ObjectType::TableStyle(style) => self.write_table_style(style)?,
@@ -2816,6 +2817,20 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer
             .write_byte(281, imagedef.resolution_unit.to_code() as u8)?;
 
+        Ok(())
+    }
+
+    /// Write a PDF/DWF/DGN underlay definition object.
+    fn write_underlay_definition(
+        &mut self,
+        def: &crate::objects::UnderlayDefinition,
+    ) -> Result<()> {
+        self.writer.write_string(0, def.entity_name())?;
+        self.writer.write_handle(5, def.handle)?;
+        self.writer.write_handle(330, def.owner_handle)?;
+        self.writer.write_subclass("AcDbUnderlayDefinition")?;
+        self.writer.write_string(1, &def.file_path)?;
+        self.writer.write_string(2, &def.page_name)?;
         Ok(())
     }
 

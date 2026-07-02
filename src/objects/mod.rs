@@ -20,6 +20,10 @@ pub use block_visibility::{BlockVisibilityParameter, BlockVisibilityState};
 pub use dictionary_variable::DictionaryVariable;
 pub use group::Group;
 pub use image_definition::{ImageDefinition, ImageDefinitionReactor, ResolutionUnit};
+// UnderlayDefinition is a non-graphical object, defined alongside the underlay
+// entity; re-exported here so it can back an ObjectType variant like its raster
+// analogue ImageDefinition.
+pub use crate::entities::underlay::UnderlayDefinition;
 pub use mlinestyle::{MLineStyle, MLineStyleElement, MLineStyleFlags};
 pub use multileader_style::{
     BlockContentConnectionType, LeaderContentType, LeaderDrawOrderType,
@@ -276,6 +280,8 @@ pub enum ObjectType {
     MLineStyle(MLineStyle),
     /// ImageDefinition object - raster image definition
     ImageDefinition(ImageDefinition),
+    /// UnderlayDefinition object - PDF/DWF/DGN underlay file reference
+    UnderlayDefinition(UnderlayDefinition),
     /// PlotSettings object - plot configuration
     PlotSettings(PlotSettings),
     /// MultiLeaderStyle object - multileader style definition
