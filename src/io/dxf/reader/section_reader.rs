@@ -3326,6 +3326,7 @@ impl<'a> SectionReader<'a> {
         let mut mtext = MText::new();
         let mut insertion = PointReader::new();
         let mut normal = PointReader::new();
+        let mut x_direction = PointReader::new();
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 {
@@ -3395,6 +3396,41 @@ impl<'a> SectionReader<'a> {
                     }
                 }
                 7 => mtext.style = pair.value_string.clone(),
+                // X-axis direction vector (takes priority over rotation 50).
+                11 | 21 | 31 => { x_direction.add_coordinate(&pair); }
+                // Defined rectangle height (0 = auto).
+                46 => {
+                    if let Some(h) = pair.as_double() {
+                        mtext.rectangle_height = if h != 0.0 { Some(h) } else { None };
+                    }
+                }
+                // Background fill: flags / scale / colour (ACI or true colour) /
+                // transparency.
+                90 => {
+                    if let Some(f) = pair.as_i32() {
+                        mtext.background_fill_flags = f;
+                    }
+                }
+                45 => {
+                    if let Some(s) = pair.as_double() {
+                        mtext.background_scale = s;
+                    }
+                }
+                63 => {
+                    if let Some(ci) = pair.as_i16() {
+                        mtext.background_color = Color::from_index(ci);
+                    }
+                }
+                421 => {
+                    if let Some(v) = pair.as_i32() {
+                        mtext.background_color = Color::from_true_color_value(v);
+                    }
+                }
+                441 => {
+                    if let Some(t) = pair.as_i32() {
+                        mtext.background_transparency = t;
+                    }
+                }
                 210 | 220 | 230 => { normal.add_coordinate(&pair); }
                 _ => { self.try_read_common_entity_code(&pair, &mut mtext.common)?; }
             }
@@ -3405,6 +3441,13 @@ impl<'a> SectionReader<'a> {
         }
         if let Some(n) = normal.get_point() {
             mtext.normal = n;
+        }
+        // When an explicit X-axis direction is given it defines the rotation
+        // (DXF prefers 11/21/31 over the rotation angle in code 50).
+        if let Some(xd) = x_direction.get_point() {
+            if xd.x != 0.0 || xd.y != 0.0 {
+                mtext.rotation = xd.y.atan2(xd.x);
+            }
         }
 
         Ok(Some(mtext))

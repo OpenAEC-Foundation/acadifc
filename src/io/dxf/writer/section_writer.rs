@@ -1530,6 +1530,22 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             self.writer.write_double(50, mtext.rotation.to_degrees())?;
         }
         self.writer.write_double(44, mtext.line_spacing_factor)?;
+        if let Some(h) = mtext.rectangle_height {
+            self.writer.write_double(46, h)?;
+        }
+        // Background fill — only when enabled by the flags.
+        if mtext.background_fill_flags != 0 {
+            self.writer.write_i32(90, mtext.background_fill_flags)?;
+            self.writer.write_double(45, mtext.background_scale)?;
+            if let Some(tc) = mtext.background_color.to_true_color_value() {
+                self.writer.write_i32(421, tc)?;
+            } else if let Some(idx) = mtext.background_color.index() {
+                self.writer.write_i16(63, idx as i16)?;
+            }
+            if mtext.background_transparency != 0 {
+                self.writer.write_i32(441, mtext.background_transparency)?;
+            }
+        }
         self.write_normal(mtext.normal)?;
         Ok(())
     }
