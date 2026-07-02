@@ -3293,6 +3293,8 @@ impl<'a> SectionReader<'a> {
         let mut normal = PointReader::new();
         let mut current_control_point = PointReader::new();
         let mut current_fit_point = PointReader::new();
+        let mut begin_tangent = PointReader::new();
+        let mut end_tangent = PointReader::new();
         let mut reading_control = false;
         let mut reading_fit = false;
 
@@ -3319,6 +3321,8 @@ impl<'a> SectionReader<'a> {
                         spline.flags.closed = (flags_val & 1) != 0;
                         spline.flags.periodic = (flags_val & 2) != 0;
                         spline.flags.rational = (flags_val & 4) != 0;
+                        spline.flags.planar = (flags_val & 8) != 0;
+                        spline.flags.linear = (flags_val & 16) != 0;
                     }
                 }
                 71 => {
@@ -3336,6 +3340,23 @@ impl<'a> SectionReader<'a> {
                         spline.weights.push(weight);
                     }
                 }
+                42 => {
+                    if let Some(t) = pair.as_double() {
+                        spline.knot_tolerance = t;
+                    }
+                }
+                43 => {
+                    if let Some(t) = pair.as_double() {
+                        spline.control_tolerance = t;
+                    }
+                }
+                44 => {
+                    if let Some(t) = pair.as_double() {
+                        spline.fit_tolerance = t;
+                    }
+                }
+                12 | 22 | 32 => { begin_tangent.add_coordinate(&pair); }
+                13 | 23 | 33 => { end_tangent.add_coordinate(&pair); }
                 10 | 20 | 30 => {
                     // Control point coordinates
                     if pair.code == 10 {
@@ -3385,6 +3406,12 @@ impl<'a> SectionReader<'a> {
 
         if let Some(n) = normal.get_point() {
             spline.normal = n;
+        }
+        if let Some(t) = begin_tangent.get_point() {
+            spline.begin_tangent = t;
+        }
+        if let Some(t) = end_tangent.get_point() {
+            spline.end_tangent = t;
         }
 
         Ok(Some(spline))

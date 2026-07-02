@@ -965,9 +965,9 @@ impl<'a> DwgObjectWriter<'a> {
                 self.writer.write_bit(e.flags.periodic);
 
                 // Knot tol BD 42
-                self.writer.write_bit_double(1e-10);
+                self.writer.write_bit_double(e.knot_tolerance);
                 // Ctrl tol BD 43
-                self.writer.write_bit_double(1e-10);
+                self.writer.write_bit_double(e.control_tolerance);
 
                 // Generate clamped uniform knot vector if not provided
                 let knots: Vec<f64> = if e.knots.is_empty() && !e.control_points.is_empty() {
@@ -1001,11 +1001,11 @@ impl<'a> DwgObjectWriter<'a> {
             _ => {
                 // Scenario 2: fit-point spline
                 // Fit Tol BD 44
-                self.writer.write_bit_double(0.0);
+                self.writer.write_bit_double(e.fit_tolerance);
                 // Beg tan vec 3BD 12
-                self.writer.write_3bit_double(Vector3::ZERO);
+                self.writer.write_3bit_double(e.begin_tangent);
                 // End tan vec 3BD 13
-                self.writer.write_3bit_double(Vector3::ZERO);
+                self.writer.write_3bit_double(e.end_tangent);
                 // num fit pts BL 74
                 self.writer.write_bit_long(e.fit_points.len() as i32);
                 // Fit points

@@ -1554,6 +1554,12 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         if spline.flags.rational {
             flags |= 4;
         }
+        if spline.flags.planar {
+            flags |= 8;
+        }
+        if spline.flags.linear {
+            flags |= 16;
+        }
         self.writer.write_i16(70, flags)?;
 
         self.writer.write_i16(71, spline.degree as i16)?;
@@ -1562,10 +1568,18 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             .write_i16(73, spline.control_points.len() as i16)?;
         self.writer.write_i16(74, spline.fit_points.len() as i16)?;
 
-        // Knot tolerance, control point tolerance, fit tolerance
-        self.writer.write_double(42, 0.0000001)?;
-        self.writer.write_double(43, 0.0000001)?;
-        self.writer.write_double(44, 0.0000001)?;
+        // Knot / control-point / fit tolerances (round-trip the stored values).
+        self.writer.write_double(42, spline.knot_tolerance)?;
+        self.writer.write_double(43, spline.control_tolerance)?;
+        self.writer.write_double(44, spline.fit_tolerance)?;
+
+        // Start / end tangents (only when set).
+        if spline.begin_tangent != Vector3::ZERO {
+            self.writer.write_point3d(12, spline.begin_tangent)?;
+        }
+        if spline.end_tangent != Vector3::ZERO {
+            self.writer.write_point3d(13, spline.end_tangent)?;
+        }
 
         // Knots
         for knot in &spline.knots {

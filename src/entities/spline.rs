@@ -58,6 +58,16 @@ pub struct Spline {
     pub fit_points: Vec<Vector3>,
     /// Normal vector
     pub normal: Vector3,
+    /// Knot tolerance (DXF 42).
+    pub knot_tolerance: f64,
+    /// Control-point tolerance (DXF 43).
+    pub control_tolerance: f64,
+    /// Fit tolerance (DXF 44).
+    pub fit_tolerance: f64,
+    /// Start tangent vector (DXF 12/22/32); zero when unset.
+    pub begin_tangent: Vector3,
+    /// End tangent vector (DXF 13/23/33); zero when unset.
+    pub end_tangent: Vector3,
 }
 
 impl Spline {
@@ -72,6 +82,11 @@ impl Spline {
             weights: Vec::new(),
             fit_points: Vec::new(),
             normal: Vector3::UNIT_Z,
+            knot_tolerance: 0.0,
+            control_tolerance: 0.0,
+            fit_tolerance: 0.0,
+            begin_tangent: Vector3::ZERO,
+            end_tangent: Vector3::ZERO,
         }
     }
 

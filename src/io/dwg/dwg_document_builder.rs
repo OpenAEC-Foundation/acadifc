@@ -1316,6 +1316,11 @@ impl DwgDocumentBuilder {
                     e.control_points = data.control_points;
                     e.weights = data.weights;
                     e.fit_points = data.fit_points;
+                    e.knot_tolerance = data.knot_tolerance;
+                    e.control_tolerance = data.control_tolerance;
+                    e.fit_tolerance = data.fit_tolerance;
+                    e.begin_tangent = data.begin_tangent;
+                    e.end_tangent = data.end_tangent;
                     let _ = document.add_entity(EntityType::Spline(e));
                 },
                 OBJ_TEXT => {
