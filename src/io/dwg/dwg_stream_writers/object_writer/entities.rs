@@ -78,9 +78,7 @@ impl<'a> DwgObjectWriter<'a> {
                 }
             }
             EntityType::Underlay(e) => self.write_underlay(e),
-            EntityType::Table(_) => {
-                // Not yet supported â€” silently skip
-            }
+            EntityType::Table(e) => self.write_table(e),
             EntityType::Unknown(e) => {
                 // Write raw DWG data verbatim only when the target matches the
                 // source encoding family; otherwise drop rather than corrupt.
@@ -2333,6 +2331,219 @@ impl<'a> DwgObjectWriter<'a> {
 
     /// Write an UNDERLAY reference (AcDbUnderlayReference).
     ///
+    // ── Table (ACAD_TABLE) ──────────────────────────────────────────
+    //
+    // Inverse of the table reader. Cell styles / borders acadrust does not
+    // model are written as empty presence-flag stubs (the anonymous block
+    // renders the visual), and the retained data — dimensions, cell contents
+    // (text/number) — is written in full so it round-trips.
+
+    fn write_table_string_value(&mut self, s: &str) {
+        if self.version.r2007_plus() {
+            let mut bytes: Vec<u8> = s.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+            bytes.push(0);
+            bytes.push(0); // trailing UTF-16 NUL
+            self.writer.write_bit_long(bytes.len() as i32);
+            self.writer.write_bytes(&bytes);
+        } else {
+            let bytes = s.as_bytes();
+            self.writer.write_bit_long(bytes.len() as i32);
+            self.writer.write_bytes(bytes);
+        }
+    }
+
+    fn write_table_cad_value(&mut self, v: &CellValue) {
+        if self.version.r2007_plus() {
+            self.writer.write_bit_long(v.flags);
+        }
+        let code: i32 = match v.value_type {
+            CellValueType::Long => 1,
+            CellValueType::Double => 2,
+            CellValueType::String => 4,
+            CellValueType::General => 0x200,
+            CellValueType::Handle => 0x40,
+            _ => 0, // Unknown / unmodelled — decoded as a bit-long
+        };
+        self.writer.write_bit_long(code);
+        match code {
+            2 => self.writer.write_bit_double(v.numeric_value),
+            4 | 0x200 => self.write_table_string_value(&v.text),
+            0x40 => self.writer.write_handle(
+                DwgReferenceType::HardPointer,
+                v.handle_value.map(|h| h.value()).unwrap_or(0),
+            ),
+            _ => self.writer.write_bit_long(v.numeric_value as i32),
+        }
+        if self.version.r2007_plus() {
+            self.writer.write_bit_long(0); // units
+            self.writer.write_variable_text(&v.format);
+            self.writer.write_variable_text(&v.formatted_value);
+        }
+    }
+
+    /// An empty cell-style block: type + "no data" presence flag.
+    fn write_table_cell_style_empty(&mut self) {
+        self.writer.write_bit_long(0); // type
+        self.writer.write_bit_short(0); // has data = false
+    }
+
+    fn write_table_cell_content(&mut self, content: &CellContent) {
+        let ct: i32 = match content.content_type {
+            TableCellContentType::Value => 1,
+            TableCellContentType::Field => 2,
+            TableCellContentType::Block => 4,
+            _ => 0,
+        };
+        self.writer.write_bit_long(ct);
+        match content.content_type {
+            TableCellContentType::Value => self.write_table_cad_value(&content.value),
+            TableCellContentType::Field => {
+                self.writer.write_handle(DwgReferenceType::HardPointer, 0)
+            }
+            TableCellContentType::Block => self.writer.write_handle(
+                DwgReferenceType::HardPointer,
+                content.block_handle.map(|h| h.value()).unwrap_or(0),
+            ),
+            _ => {}
+        }
+        self.writer.write_bit_long(0); // attribute count
+        self.writer.write_bit_short(0); // has content format = false
+    }
+
+    /// R2010+ inline cell.
+    fn write_table_cell_r2010(&mut self, cell: &TableCell) {
+        self.writer.write_bit_long(cell.state.bits() as i32);
+        self.writer.write_variable_text(&cell.tooltip);
+        self.writer.write_bit_long(cell.custom_data);
+        self.writer.write_bit_long(0); // custom data items
+        self.writer.write_bit_long(0); // has linked data = false
+        self.writer.write_bit_long(cell.contents.len() as i32);
+        for content in &cell.contents {
+            self.write_table_cell_content(content);
+        }
+        self.write_table_cell_style_empty();
+        self.writer.write_bit_long(0); // style id
+        self.writer.write_bit_long(0); // unknown flag (no geometry)
+    }
+
+    /// R2010+ AcDbLinkedTableData body.
+    fn write_table_content(&mut self, e: &table::Table) {
+        self.writer.write_variable_text(""); // name
+        self.writer.write_variable_text(""); // description
+        self.writer.write_bit_long(e.columns.len() as i32);
+        for col in &e.columns {
+            self.writer.write_variable_text(&col.name);
+            self.writer.write_bit_long(col.custom_data);
+            self.writer.write_bit_long(0); // custom data items
+            self.write_table_cell_style_empty();
+            self.writer.write_bit_long(0); // style id
+            self.writer.write_bit_double(col.width);
+        }
+        self.writer.write_bit_long(e.rows.len() as i32);
+        for row in &e.rows {
+            self.writer.write_bit_long(row.cells.len() as i32);
+            for cell in &row.cells {
+                self.write_table_cell_r2010(cell);
+            }
+            self.writer.write_bit_long(row.custom_data);
+            self.writer.write_bit_long(0); // custom data items
+            self.write_table_cell_style_empty();
+            self.writer.write_bit_long(0); // style id
+            self.writer.write_bit_double(row.height);
+        }
+        self.writer.write_bit_long(0); // field count
+        self.write_table_cell_style_empty(); // table base cell style
+        self.writer.write_bit_long(0); // merged range count
+        self.writer.write_handle(
+            DwgReferenceType::HardPointer,
+            e.table_style_handle.map(|h| h.value()).unwrap_or(0),
+        );
+    }
+
+    /// Pre-R2010 flat-format cell.
+    fn write_table_cell_data(&mut self, cell: &TableCell) {
+        self.writer.write_bit_short(cell.cell_type as i16);
+        self.writer.write_byte(0); // edge flags
+        self.writer.write_bit(false); // merged
+        self.writer.write_bit(cell.auto_fit);
+        self.writer.write_bit_long(cell.merge_width);
+        self.writer.write_bit_long(cell.merge_height);
+        self.writer.write_bit_double(cell.rotation);
+        self.writer.write_handle(DwgReferenceType::HardPointer, 0); // value handle
+        if cell.cell_type == CellType::Block {
+            self.writer.write_bit_double(1.0); // block scale
+            self.writer.write_bit(false); // no attributes
+        }
+        self.writer.write_bit(false); // has override = false
+        if self.version.r2007_plus() {
+            self.writer.write_bit_long(0); // unknown
+            let empty = CellValue::new();
+            let value = cell.contents.first().map(|c| &c.value).unwrap_or(&empty);
+            self.write_table_cad_value(value);
+        }
+    }
+
+    fn write_table(&mut self, e: &table::Table) {
+        let type_code = self.class_type_code("ACAD_TABLE", common::OBJ_TABLE);
+        self.entity_preamble(type_code, &e.common);
+
+        // Insert base (mirrors read_insert; tables carry no attributes).
+        self.writer.write_3bit_double(e.insertion_point);
+        if self.version.r13_14_only() {
+            self.writer.write_bit_double(1.0);
+            self.writer.write_bit_double(1.0);
+            self.writer.write_bit_double(1.0);
+        }
+        if self.version.r2000_plus() {
+            self.writer.write_2bits(3); // scale (1,1,1), no data
+        }
+        self.writer.write_bit_double(0.0); // rotation
+        self.writer.write_3bit_double(e.normal);
+        self.writer.write_bit(false); // has attributes
+        self.writer.write_handle(
+            DwgReferenceType::HardPointer,
+            e.block_record_handle.map(|h| h.value()).unwrap_or(0),
+        );
+
+        if self.version.r2010_plus() {
+            self.writer.write_byte(0); // unknown RC
+            self.writer.write_handle(DwgReferenceType::SoftPointer, 0); // null handle
+            self.writer.write_bit_long(0); // unknown BL
+            if self.version.r2013_plus(self.dxf_version) {
+                self.writer.write_bit_long(0);
+            } else {
+                self.writer.write_bit(true);
+            }
+            self.write_table_content(e);
+            self.writer.write_bit_short(38); // unknown
+            self.writer.write_3bit_double(e.horizontal_direction);
+            self.writer.write_bit_long(0); // has break data = false
+            self.writer.write_bit_long(0); // break row range count
+        } else {
+            self.writer.write_bit_short(0); // value flag
+            self.writer.write_3bit_double(e.horizontal_direction);
+            self.writer.write_bit_long(e.columns.len() as i32);
+            self.writer.write_bit_long(e.rows.len() as i32);
+            for col in &e.columns {
+                self.writer.write_bit_double(col.width);
+            }
+            for row in &e.rows {
+                self.writer.write_bit_double(row.height);
+            }
+            self.writer.write_handle(
+                DwgReferenceType::HardPointer,
+                e.table_style_handle.map(|h| h.value()).unwrap_or(0),
+            );
+            for row in &e.rows {
+                for cell in &row.cells {
+                    self.write_table_cell_data(cell);
+                }
+            }
+        }
+
+        self.register_object(e.common.handle);
+    }
+
     /// Mirrors [`read_underlay`] field-for-field. Unlike the raster image
     /// writer there is a single (definition) handle, no version-gated
     /// clip-inversion bit, and the clip boundary is always a bit-long count

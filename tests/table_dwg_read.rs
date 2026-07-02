@@ -5,11 +5,13 @@
 //! rows and cell contents. This reads both — the placement and the actual cell
 //! text — from a real R2007 drawing (two schedules).
 
+use std::io::Cursor;
+
 use acadrust::entities::EntityType;
 use acadrust::types::Handle;
-use acadrust::DwgReader;
+use acadrust::{CadDocument, DwgReader, DwgWriter};
 
-fn load_tables() -> Option<Vec<acadrust::entities::Table>> {
+fn load_doc() -> Option<CadDocument> {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/roundtrip/blocks_and_tables_metric.dwg"
@@ -19,15 +21,20 @@ fn load_tables() -> Option<Vec<acadrust::entities::Table>> {
         return None;
     }
     let mut reader = DwgReader::from_file(path).expect("open fixture");
-    let doc = reader.read().expect("read fixture");
-    Some(
-        doc.entities()
-            .filter_map(|e| match e {
-                EntityType::Table(t) => Some(t.clone()),
-                _ => None,
-            })
-            .collect(),
-    )
+    Some(reader.read().expect("read fixture"))
+}
+
+fn tables_of(doc: &CadDocument) -> Vec<acadrust::entities::Table> {
+    doc.entities()
+        .filter_map(|e| match e {
+            EntityType::Table(t) => Some(t.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn load_tables() -> Option<Vec<acadrust::entities::Table>> {
+    load_doc().map(|d| tables_of(&d))
 }
 
 #[test]
@@ -93,4 +100,37 @@ fn table_cell_content_is_parsed() {
     assert_eq!(door.rows[2].cells[0].text_value(), "1");
     assert_eq!(door.rows[2].cells[3].text_value(), "TWO PANEL");
     assert_eq!(door.rows[2].cells[5].text_value(), "TRU STYLE");
+}
+
+#[test]
+fn real_tables_survive_a_dwg_write() {
+    // Read the real R2007 drawing, write it back to DWG and re-read: the tables
+    // and their cell text must survive the writer.
+    let Some(doc) = load_doc() else { return };
+
+    let bytes = DwgWriter::write_to_vec(&doc).expect("DWG write");
+    let rt = DwgReader::from_stream(Cursor::new(bytes))
+        .read()
+        .expect("DWG re-read");
+    let tables = tables_of(&rt);
+
+    let door = tables
+        .iter()
+        .find(|t| {
+            t.rows
+                .first()
+                .and_then(|r| r.cells.first())
+                .map(|c| c.text_value() == "DOOR SCHEDULE")
+                .unwrap_or(false)
+        })
+        .expect("DOOR SCHEDULE lost on DWG write");
+
+    let header: Vec<String> = door.rows[1]
+        .cells
+        .iter()
+        .map(|c| c.text_value().to_string())
+        .collect();
+    assert_eq!(header[0], "SYM.");
+    assert_eq!(header[5], "MANUFACTURER");
+    assert_eq!(door.rows[2].cells[3].text_value(), "TWO PANEL");
 }

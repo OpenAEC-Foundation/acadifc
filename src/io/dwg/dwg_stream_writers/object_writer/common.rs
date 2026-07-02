@@ -96,6 +96,7 @@ pub const OBJ_PDFUNDERLAY: i16 = -12;  // UNLISTED: always use class number
 pub const OBJ_DWFUNDERLAY: i16 = -13;  // UNLISTED: always use class number
 pub const OBJ_DGNUNDERLAY: i16 = -14;  // UNLISTED: always use class number
 pub const OBJ_HELIX: i16 = -15;        // UNLISTED: always use class number
+pub const OBJ_TABLE: i16 = -16;        // UNLISTED: always use class number
 
 // Fixed-type non-graphical objects (standard type codes from ODA spec)
 pub const OBJ_XRECORD: i16 = 79;        // 0x4F
