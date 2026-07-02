@@ -239,6 +239,10 @@ pub struct Viewport {
     pub circle_sides: i16,
     /// Frozen layer handles
     pub frozen_layers: Vec<Handle>,
+    /// Clip-boundary entity handle (H 340). Non-NULL when the viewport is
+    /// clipped by a non-rectangular boundary; NULL for a plain rectangular
+    /// viewport.
+    pub clip_boundary_handle: Handle,
     /// Render mode
     pub render_mode: ViewportRenderMode,
     /// UCS per viewport flag
@@ -309,6 +313,7 @@ impl Viewport {
             twist_angle: 0.0,
             circle_sides: 1000,
             frozen_layers: Vec::new(),
+            clip_boundary_handle: Handle::NULL,
             render_mode: ViewportRenderMode::Wireframe2D,
             ucs_per_viewport: false,
             ucs_icon_visible: true,

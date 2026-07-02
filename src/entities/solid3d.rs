@@ -767,6 +767,9 @@ pub struct Region {
     pub wires: Vec<Wire>,
     /// Silhouette data for viewports.
     pub silhouettes: Vec<Silhouette>,
+    /// Handle of the associated history object (H 350, R2007+); NULL when the
+    /// region records no construction history.
+    pub history_handle: Option<Handle>,
 }
 
 impl Region {
@@ -779,6 +782,7 @@ impl Region {
             acis_data: AcisData::new(),
             wires: Vec::new(),
             silhouettes: Vec::new(),
+            history_handle: None,
         }
     }
 
@@ -928,6 +932,9 @@ pub struct Body {
     pub wires: Vec<Wire>,
     /// Silhouette data for viewports.
     pub silhouettes: Vec<Silhouette>,
+    /// Handle of the associated history object (H 350, R2007+); NULL when the
+    /// body records no construction history.
+    pub history_handle: Option<Handle>,
 }
 
 impl Body {
@@ -940,6 +947,7 @@ impl Body {
             acis_data: AcisData::new(),
             wires: Vec::new(),
             silhouettes: Vec::new(),
+            history_handle: None,
         }
     }
 

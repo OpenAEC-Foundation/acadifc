@@ -1517,7 +1517,7 @@ impl<'a> DwgObjectWriter<'a> {
 
         // Clip boundary handle (hard pointer)
         self.writer
-            .write_handle(DwgReferenceType::HardPointer, 0);
+            .write_handle(DwgReferenceType::HardPointer, e.clip_boundary_handle.value());
 
         // R2000 (AC1015) only: VIEWPORT ENT HEADER
         if self.version == crate::io::dwg::dwg_version::DwgVersion::AC15 {
@@ -3433,6 +3433,12 @@ impl<'a> DwgObjectWriter<'a> {
             }
         }
 
+        // REGION R2007+: history_id handle (same slot as 3DSOLID).
+        if self.version.r2007_plus() {
+            let h = e.history_handle.map(|h| h.value()).unwrap_or(0);
+            self.writer.write_handle(DwgReferenceType::SoftPointer, h);
+        }
+
         self.register_object(e.common.handle);
     }
 
@@ -3461,6 +3467,12 @@ impl<'a> DwgObjectWriter<'a> {
             if self.version.r2013_plus(self.dxf_version) {
                 self.write_acis_revision(&e.acis_data.revision);
             }
+        }
+
+        // BODY R2007+: history_id handle (same slot as 3DSOLID).
+        if self.version.r2007_plus() {
+            let h = e.history_handle.map(|h| h.value()).unwrap_or(0);
+            self.writer.write_handle(DwgReferenceType::SoftPointer, h);
         }
 
         self.register_object(e.common.handle);

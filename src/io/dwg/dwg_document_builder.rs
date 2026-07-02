@@ -1673,6 +1673,13 @@ impl DwgDocumentBuilder {
                             e.frozen_layers.push(Handle::new(h));
                         }
                     }
+                    // Clip-boundary handle (H 340): first entity-specific handle
+                    // after the frozen layers. Non-NULL => the viewport is
+                    // clipped by a boundary entity.
+                    let clip = reader.read_handle();
+                    if clip != 0 {
+                        e.clip_boundary_handle = Handle::new(clip);
+                    }
                     let _ = document.add_entity(EntityType::Viewport(e));
                 },
                 OBJ_POLYLINE_2D => {
@@ -2233,6 +2240,13 @@ impl DwgDocumentBuilder {
                         e.acis_data.placement_origin().unwrap_or(data.point);
                     e.wires = data.wires;
                     e.silhouettes = data.silhouettes;
+                    // REGION R2007+: history_id handle (same slot as 3DSOLID).
+                    if self.obj_reader.version().r2007_plus() {
+                        let h = reader.read_handle();
+                        if h != 0 {
+                            e.history_handle = Some(Handle::new(h));
+                        }
+                    }
                     let _ = document.add_entity(EntityType::Region(e));
                 },
                 OBJ_BODY => {
@@ -2254,6 +2268,13 @@ impl DwgDocumentBuilder {
                         e.acis_data.placement_origin().unwrap_or(data.point);
                     e.wires = data.wires;
                     e.silhouettes = data.silhouettes;
+                    // BODY R2007+: history_id handle (same slot as 3DSOLID).
+                    if self.obj_reader.version().r2007_plus() {
+                        let h = reader.read_handle();
+                        if h != 0 {
+                            e.history_handle = Some(Handle::new(h));
+                        }
+                    }
                     let _ = document.add_entity(EntityType::Body(e));
                 },
 
