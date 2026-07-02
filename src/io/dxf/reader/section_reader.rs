@@ -2835,20 +2835,43 @@ impl<'a> SectionReader<'a> {
 
     /// Read a POLYLINE or POLYFACE MESH entity, returning the appropriate EntityType.
     fn read_polyline_entity(&mut self) -> Result<Option<EntityType>> {
-        use crate::entities::polyline::Vertex3D;
+        use crate::entities::polyline::{Vertex2D, VertexFlags, PolylineFlags, SmoothSurfaceType};
+        use crate::entities::polyline3d::{
+            Polyline3D, Vertex3DPolyline, Polyline3DFlags,
+            SmoothSurfaceType as SmoothSurface3D,
+        };
+        use crate::entities::polygon_mesh::{
+            PolygonMesh, PolygonMeshVertex, PolygonMeshFlags, SurfaceSmoothType,
+        };
         use crate::entities::polyface_mesh::{
             PolyfaceMesh, PolyfaceVertex, PolyfaceFace,
             PolyfaceMeshFlags, PolyfaceVertexFlags,
         };
 
+        // One captured geometry vertex — mapped to the target vertex type once
+        // the POLYLINE flags (code 70) tell us which kind of polyline this is.
+        struct RawVertex {
+            loc: crate::types::Vector3,
+            vflags: i16,
+            start_width: f64,
+            end_width: f64,
+            bulge: f64,
+            tangent: f64,
+        }
+
         let mut common = EntityCommon::new();
         let mut flags: i16 = 0;
         let mut elevation = 0.0f64;
-        let mut _vertex_count: i16 = 0;
-        let mut _face_count: i16 = 0;
-        // Polyline plain fields
-        let mut polyline_vertices: Vec<Vertex3D> = Vec::new();
-        // Polyface fields
+        let mut thickness = 0.0f64;
+        let mut def_start_width = 0.0f64;
+        let mut def_end_width = 0.0f64;
+        let mut count_m: i16 = 0; // 71 (mesh M / pface vert count)
+        let mut count_n: i16 = 0; // 72 (mesh N / pface face count)
+        let mut density_m: i16 = 0; // 73
+        let mut density_n: i16 = 0; // 74
+        let mut smooth: i16 = 0; // 75 (smooth surface type)
+        let mut normal = PointReader::new();
+        let mut geom_vertices: Vec<RawVertex> = Vec::new();
         let mut pface_vertices: Vec<PolyfaceVertex> = Vec::new();
         let mut pface_faces: Vec<PolyfaceFace> = Vec::new();
 
@@ -2856,10 +2879,12 @@ impl<'a> SectionReader<'a> {
             if pair.code == 0 {
                 if pair.value_string == "VERTEX" {
                     // --- Read one VERTEX subentity ---
-                    let mut vx = 0.0f64;
-                    let mut vy = 0.0f64;
-                    let mut vz = 0.0f64;
+                    let mut loc = crate::types::Vector3::ZERO;
                     let mut vflags: i16 = 0;
+                    let mut sw = 0.0f64;
+                    let mut ew = 0.0f64;
+                    let mut bulge = 0.0f64;
+                    let mut tangent = 0.0f64;
                     let mut vi1: i16 = 0;
                     let mut vi2: i16 = 0;
                     let mut vi3: i16 = 0;
@@ -2870,9 +2895,13 @@ impl<'a> SectionReader<'a> {
                             break;
                         }
                         match vpair.code {
-                            10 => { if let Some(v) = vpair.as_double() { vx = v; } }
-                            20 => { if let Some(v) = vpair.as_double() { vy = v; } }
-                            30 => { if let Some(v) = vpair.as_double() { vz = v; } }
+                            10 => { if let Some(v) = vpair.as_double() { loc.x = v; } }
+                            20 => { if let Some(v) = vpair.as_double() { loc.y = v; } }
+                            30 => { if let Some(v) = vpair.as_double() { loc.z = v; } }
+                            40 => { if let Some(v) = vpair.as_double() { sw = v; } }
+                            41 => { if let Some(v) = vpair.as_double() { ew = v; } }
+                            42 => { if let Some(v) = vpair.as_double() { bulge = v; } }
+                            50 => { if let Some(v) = vpair.as_double() { tangent = v; } }
                             70 => { if let Some(v) = vpair.as_i16() { vflags = v; } }
                             71 => { if let Some(v) = vpair.as_i16() { vi1 = v; } }
                             72 => { if let Some(v) = vpair.as_i16() { vi2 = v; } }
@@ -2887,10 +2916,10 @@ impl<'a> SectionReader<'a> {
                     // Face records are written with flag=128 only.
                     // Therefore: check bit 64 FIRST.
                     if (vflags & 64) != 0 {
-                        // Geometry vertex
+                        // Polyface geometry vertex
                         pface_vertices.push(PolyfaceVertex {
                             common: EntityCommon::default(),
-                            location: crate::types::Vector3::new(vx, vy, vz),
+                            location: loc,
                             flags: PolyfaceVertexFlags::from_bits_truncate(vflags),
                             bulge: 0.0,
                             start_width: 0.0,
@@ -2900,21 +2929,26 @@ impl<'a> SectionReader<'a> {
                         });
                     } else if (vflags & 128) != 0 {
                         // Face record (only bit 128 set, no bit 64)
-                        let mut face = PolyfaceFace {
+                        pface_faces.push(PolyfaceFace {
                             common: EntityCommon::default(),
-                            flags: PolyfaceVertexFlags::NONE,
+                            flags: PolyfaceVertexFlags::from_bits_truncate(vflags),
                             index1: vi1,
                             index2: vi2,
                             index3: vi3,
                             index4: vi4,
                             color: None,
-                        };
-                        face.flags = PolyfaceVertexFlags::from_bits_truncate(vflags);
-                        pface_faces.push(face);
+                        });
                     } else {
-                        polyline_vertices.push(Vertex3D::new(
-                            crate::types::Vector3::new(vx, vy, vz),
-                        ));
+                        // Plain polyline / polygon-mesh vertex — keep every field
+                        // so the type-specific mapping below can use them.
+                        geom_vertices.push(RawVertex {
+                            loc,
+                            vflags,
+                            start_width: sw,
+                            end_width: ew,
+                            bulge,
+                            tangent,
+                        });
                     }
                 } else if pair.value_string == "SEQEND" {
                     while let Some(seqend_pair) = self.reader.read_pair()? {
@@ -2951,25 +2985,61 @@ impl<'a> SectionReader<'a> {
                             elevation = z;
                         }
                     }
+                    39 => {
+                        if let Some(t) = pair.as_double() {
+                            thickness = t;
+                        }
+                    }
+                    40 => {
+                        if let Some(w) = pair.as_double() {
+                            def_start_width = w;
+                        }
+                    }
+                    41 => {
+                        if let Some(w) = pair.as_double() {
+                            def_end_width = w;
+                        }
+                    }
                     71 => {
-                        if let Some(vc) = pair.as_i16() {
-                            _vertex_count = vc;
+                        if let Some(v) = pair.as_i16() {
+                            count_m = v;
                         }
                     }
                     72 => {
-                        if let Some(fc) = pair.as_i16() {
-                            _face_count = fc;
+                        if let Some(v) = pair.as_i16() {
+                            count_n = v;
                         }
                     }
+                    73 => {
+                        if let Some(v) = pair.as_i16() {
+                            density_m = v;
+                        }
+                    }
+                    74 => {
+                        if let Some(v) = pair.as_i16() {
+                            density_n = v;
+                        }
+                    }
+                    75 => {
+                        if let Some(v) = pair.as_i16() {
+                            smooth = v;
+                        }
+                    }
+                    210 | 220 | 230 => { normal.add_coordinate(&pair); }
                     _ => { self.try_read_common_entity_code(&pair, &mut common)?; }
                 }
             }
         }
 
-        // PolyfaceMeshFlags::POLYFACE_MESH = 64 (bit 6)
-        let is_polyface = (flags & 64) != 0;
+        let normal_v = normal
+            .get_point()
+            .unwrap_or(crate::types::Vector3::new(0.0, 0.0, 1.0));
 
-        if is_polyface || !pface_vertices.is_empty() || !pface_faces.is_empty() {
+        // Route by POLYLINE flag bits (code 70): 64 = polyface mesh, 16 = polygon
+        // mesh, 8 = 3D polyline, otherwise a 2D (heavy) polyline. Previously
+        // every non-polyface POLYLINE collapsed to a generic Polyline, dropping
+        // the 2D widths/bulge, the polygon-mesh grid and the 3D-polyline type.
+        if (flags & 64) != 0 || !pface_vertices.is_empty() || !pface_faces.is_empty() {
             let mut mesh = PolyfaceMesh::new();
             mesh.common = common;
             mesh.flags = PolyfaceMeshFlags::from_bits_truncate(flags);
@@ -2977,14 +3047,67 @@ impl<'a> SectionReader<'a> {
             mesh.vertices = pface_vertices;
             mesh.faces = pface_faces;
             Ok(Some(EntityType::PolyfaceMesh(mesh)))
+        } else if (flags & 16) != 0 {
+            let mut mesh = PolygonMesh::new();
+            mesh.common = common;
+            mesh.flags = PolygonMeshFlags::from_bits_truncate(flags);
+            mesh.m_vertex_count = count_m;
+            mesh.n_vertex_count = count_n;
+            mesh.m_smooth_density = density_m;
+            mesh.n_smooth_density = density_n;
+            mesh.smooth_type = SurfaceSmoothType::from_i16(smooth);
+            mesh.elevation = elevation;
+            mesh.normal = normal_v;
+            mesh.vertices = geom_vertices
+                .iter()
+                .map(|rv| PolygonMeshVertex {
+                    common: EntityCommon::default(),
+                    location: rv.loc,
+                    flags: rv.vflags,
+                })
+                .collect();
+            Ok(Some(EntityType::PolygonMesh(mesh)))
+        } else if (flags & 8) != 0 {
+            let mut pl = Polyline3D::new();
+            pl.common = common;
+            pl.flags = Polyline3DFlags::from_bits(flags as i32);
+            pl.smooth_type = SmoothSurface3D::from_value(smooth);
+            pl.default_start_width = def_start_width;
+            pl.default_end_width = def_end_width;
+            pl.elevation = elevation;
+            pl.normal = normal_v;
+            pl.vertices = geom_vertices
+                .iter()
+                .map(|rv| {
+                    let mut v = Vertex3DPolyline::new(rv.loc);
+                    v.flags = rv.vflags as i32;
+                    v
+                })
+                .collect();
+            Ok(Some(EntityType::Polyline3D(pl)))
         } else {
-            let mut polyline = Polyline::new();
-            polyline.common = common;
-            if (flags & 1) != 0 {
-                polyline.close();
-            }
-            polyline.vertices = polyline_vertices;
-            Ok(Some(EntityType::Polyline(polyline)))
+            let mut pl = Polyline2D::new();
+            pl.common = common;
+            pl.flags = PolylineFlags::from_bits(flags as u16);
+            pl.smooth_surface = SmoothSurfaceType::from(smooth);
+            pl.start_width = def_start_width;
+            pl.end_width = def_end_width;
+            pl.thickness = thickness;
+            pl.elevation = elevation;
+            pl.normal = normal_v;
+            pl.vertices = geom_vertices
+                .iter()
+                .map(|rv| {
+                    let mut v = Vertex2D::new(rv.loc);
+                    v.flags = VertexFlags::from_bits(rv.vflags as u8);
+                    v.start_width = rv.start_width;
+                    v.end_width = rv.end_width;
+                    v.bulge = rv.bulge;
+                    v.curve_tangent = rv.tangent;
+                    v
+                })
+                .collect();
+            Ok(Some(EntityType::Polyline2D(pl)))
         }
     }
 
