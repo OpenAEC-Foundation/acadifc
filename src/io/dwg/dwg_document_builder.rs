@@ -1283,20 +1283,27 @@ impl DwgDocumentBuilder {
                     let _ = document.add_entity(EntityType::Insert(e));
                 },
                 OBJ_TABLE => {
-                    // ACAD_TABLE is INSERT-derived: reading the shared insert
-                    // base (transform + block reference) positions the table and
-                    // links it to the anonymous block that renders its cells. The
-                    // per-cell content (huge, version-dependent) is not parsed;
-                    // because the object reader seeks to each object by offset,
-                    // this partial read is safe and never desyncs the stream.
-                    let data = entities::read_insert(&mut reader, self.obj_reader.version());
+                    // ACAD_TABLE is INSERT-derived: the insert base positions the
+                    // table and links it to the block that renders its cells; on
+                    // R2010+ the inline table content (columns/rows/cells) follows.
+                    let data = entities::read_table(
+                        &mut reader,
+                        self.obj_reader.version(),
+                        self.obj_reader.dxf_version(),
+                    );
                     let mut e = crate::entities::Table::default();
                     e.common = entity_common;
-                    e.insertion_point = data.insert_point;
-                    e.normal = data.normal;
-                    if data.block_handle != 0 {
-                        e.block_record_handle = Some(Handle::from(data.block_handle));
+                    e.insertion_point = data.insert.insert_point;
+                    e.normal = data.insert.normal;
+                    e.horizontal_direction = data.horizontal_direction;
+                    if data.insert.block_handle != 0 {
+                        e.block_record_handle = Some(Handle::from(data.insert.block_handle));
                     }
+                    if data.style_handle != 0 {
+                        e.table_style_handle = Some(Handle::from(data.style_handle));
+                    }
+                    e.columns = data.columns;
+                    e.rows = data.rows;
                     let _ = document.add_entity(EntityType::Table(e));
                 },
                 OBJ_LWPOLYLINE => {

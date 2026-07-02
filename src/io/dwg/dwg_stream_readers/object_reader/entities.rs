@@ -9,6 +9,10 @@ use crate::io::dwg::dwg_version::DwgVersion;
 use crate::types::{Color, Handle, Vector2, Vector3, DxfVersion};
 use crate::entities::multileader::*;
 use crate::entities::solid3d::{Wire, WireType, Silhouette, AcisRevision};
+use crate::entities::table::{
+    CellContent, CellStateFlags, CellType, CellValue, CellValueType, TableCell,
+    TableCellContentType, TableColumn, TableRow,
+};
 use super::safe_count;
 
 // ════════════════════════════════════════════════════════════════════════
@@ -1760,6 +1764,524 @@ pub fn read_underlay(reader: &mut DwgMergedReader) -> UnderlayData {
         fade,
         definition_handle,
         clip_boundary_vertices,
+    }
+}
+
+// ── Table (ACAD_TABLE) content — R2010+ ──────────────────────────────
+//
+// The table entity is INSERT-derived; after the insert base the R2010+ record
+// carries the full table content inline (equivalent to the TABLECONTENT
+// object). This ports ACadSharp's readTableContent + sub-parsers. acadrust's
+// model does not hold every cell-style / border / geometry detail, so those
+// sub-structures are read (to stay positioned) but only their meaningful data
+// (column widths, row heights, cell text/value) is retained.
+
+/// Decoded ACAD_TABLE entity (insert base + parsed content).
+pub struct TableEntityData {
+    pub insert: InsertData,
+    pub columns: Vec<TableColumn>,
+    pub rows: Vec<TableRow>,
+    pub horizontal_direction: Vector3,
+    pub style_handle: u64,
+}
+
+fn cell_value_type(code: i32) -> CellValueType {
+    match code {
+        1 => CellValueType::Long,
+        2 => CellValueType::Double,
+        4 => CellValueType::String,
+        8 => CellValueType::Date,
+        0x10 => CellValueType::Point2D,
+        0x20 => CellValueType::Point3D,
+        0x40 => CellValueType::Handle,
+        0x80 => CellValueType::Buffer,
+        0x100 => CellValueType::ResultBuffer,
+        0x200 => CellValueType::General,
+        _ => CellValueType::Unknown,
+    }
+}
+
+/// General/String value: BL byte count then bytes (R2007+ = UTF-16LE minus the
+/// trailing NUL, else the reader's ANSI code page).
+fn read_string_cad_value(reader: &mut DwgMergedReader, version: DwgVersion) -> String {
+    let len = safe_count(reader.read_bit_long()) as usize;
+    let bytes = reader.read_bytes(len);
+    if version.r2007_plus() {
+        let n = len.saturating_sub(2);
+        let units: Vec<u16> = bytes[..n.min(bytes.len())]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        String::from_utf16_lossy(&units)
+    } else {
+        String::from_utf8_lossy(&bytes[..len.min(bytes.len())]).into_owned()
+    }
+}
+
+/// A single table cell value (AcDbCellValue). See ACadSharp readCadValue.
+fn read_cad_value(reader: &mut DwgMergedReader, version: DwgVersion) -> CellValue {
+    let mut v = CellValue::new();
+    if version.r2007_plus() {
+        v.flags = reader.read_bit_long();
+    }
+    let type_code = reader.read_bit_long();
+    v.value_type = cell_value_type(type_code);
+
+    // Read the typed value body. The ACadSharp "IsEmpty" gate that can skip
+    // this does not fire for real tables — reading it unconditionally keeps
+    // every cell byte-aligned (verified against real drawings).
+    match type_code {
+        0 | 1 => v.numeric_value = reader.read_bit_long() as f64, // Unknown / Long
+        2 => v.numeric_value = reader.read_bit_double(),         // Double
+        4 | 0x200 => v.text = read_string_cad_value(reader, version), // String / General
+        8 => {
+            // Date: BL size + size bytes.
+            let size = reader.read_bit_long();
+            if size > 0 {
+                let _ = reader.read_bytes(size as usize);
+            }
+        }
+        0x10 => {
+            // Point2D: BL len + 2 raw doubles.
+            if reader.read_bit_long() > 0 {
+                let _ = reader.read_2raw_double();
+            }
+        }
+        0x20 => {
+            // Point3D: BL len + 3 raw doubles.
+            if reader.read_bit_long() > 0 {
+                let _ = reader.read_raw_double();
+                let _ = reader.read_raw_double();
+                let _ = reader.read_raw_double();
+            }
+        }
+        0x40 => v.handle_value = Some(Handle::from(reader.read_handle())), // Handle
+        _ => {}                                                            // Buffer / ResultBuffer — unmodelled
+    }
+
+    if version.r2007_plus() {
+        let _units = reader.read_bit_long();
+        v.format = reader.read_variable_text();
+        v.formatted_value = reader.read_variable_text();
+    }
+    v
+}
+
+/// A cell content border (read to stay positioned; not retained).
+fn read_border(reader: &mut DwgMergedReader) {
+    reader.read_bit_long(); // property override flags
+    reader.read_bit_long(); // type
+    reader.read_cm_color(); // colour
+    reader.read_bit_long(); // line weight
+    reader.read_handle(); // line-type handle
+    reader.read_bit_long(); // is-invisible
+    reader.read_bit_double(); // double-line spacing
+}
+
+/// Content format block. Returns (colour, text-style handle, text height,
+/// rotation) — the fields acadrust keeps on a cell content.
+fn read_cell_content_format(
+    reader: &mut DwgMergedReader,
+) -> (Color, Option<Handle>, f64, f64) {
+    reader.read_bit_long(); // property override flags
+    reader.read_bit_long(); // property flags
+    reader.read_bit_long(); // value data type
+    reader.read_bit_long(); // value unit type
+    let _fmt = reader.read_variable_text(); // value format string
+    let rotation = reader.read_bit_double();
+    let _scale = reader.read_bit_double();
+    reader.read_bit_long(); // alignment
+    let color = reader.read_cm_color();
+    let text_style = reader.read_handle();
+    let text_height = reader.read_bit_double();
+    (
+        color,
+        (text_style != 0).then(|| Handle::from(text_style)),
+        text_height,
+        rotation,
+    )
+}
+
+/// Cell content geometry (read to stay positioned; not retained).
+fn read_cell_content_geometry(reader: &mut DwgMergedReader) {
+    reader.read_3bit_double();
+    reader.read_3bit_double();
+    reader.read_bit_double();
+    reader.read_bit_double();
+    reader.read_bit_double();
+    reader.read_bit_double();
+    reader.read_bit_long();
+}
+
+/// Cell style override (read to stay positioned; not retained). Returns early
+/// when the presence flag is unset, exactly like the source.
+fn read_cell_style(reader: &mut DwgMergedReader) {
+    reader.read_bit_long(); // type
+    if reader.read_bit_short() == 0 {
+        return; // no data
+    }
+    reader.read_bit_long(); // property override flags
+    reader.read_bit_long(); // table cell style property flags
+    reader.read_cm_color(); // background colour
+    reader.read_bit_long(); // content layout flags
+    read_cell_content_format(reader);
+    // Margin override flags: bit 0 present => six margin doubles follow.
+    if (reader.read_bit_short() & 0x01) != 0 {
+        for _ in 0..6 {
+            reader.read_bit_double();
+        }
+    }
+    let nborders = safe_count(reader.read_bit_long());
+    for _ in 0..nborders {
+        let edge = reader.read_bit_long();
+        if matches!(edge, 1 | 2 | 4 | 8 | 0x10 | 0x20) {
+            read_border(reader);
+        }
+    }
+}
+
+/// Custom data entry (read to stay positioned; not retained).
+fn read_custom_table_data(reader: &mut DwgMergedReader, version: DwgVersion) {
+    let _name = reader.read_variable_text();
+    let _ = read_cad_value(reader, version);
+}
+
+fn read_table_cell_content(reader: &mut DwgMergedReader, version: DwgVersion) -> CellContent {
+    let mut content = CellContent::new();
+    let content_type = reader.read_bit_long();
+    content.content_type = match content_type {
+        1 => TableCellContentType::Value,
+        2 => TableCellContentType::Field,
+        4 => TableCellContentType::Block,
+        _ => TableCellContentType::Unknown,
+    };
+    match content_type {
+        1 => content.value = read_cad_value(reader, version),
+        2 => {
+            let _ = reader.read_handle(); // field handle
+        }
+        4 => {
+            let bh = reader.read_handle(); // block record handle
+            if bh != 0 {
+                content.block_handle = Some(Handle::from(bh));
+            }
+        }
+        _ => {}
+    }
+    let natts = safe_count(reader.read_bit_long());
+    for _ in 0..natts {
+        let _attdef = reader.read_handle();
+        let _val = reader.read_variable_text();
+        let _index = reader.read_bit_long();
+    }
+    if reader.read_bit_short() != 0 {
+        let (color, text_style, text_height, rotation) = read_cell_content_format(reader);
+        content.color = color;
+        content.text_style_handle = text_style;
+        content.text_height = text_height;
+        content.rotation = rotation;
+    }
+    content
+}
+
+fn read_table_cell(reader: &mut DwgMergedReader, version: DwgVersion) -> TableCell {
+    let mut cell = TableCell::new();
+    cell.state = CellStateFlags::from_bits_truncate(reader.read_bit_long() as u32);
+    cell.tooltip = reader.read_variable_text();
+    cell.custom_data = reader.read_bit_long();
+    let ndata = safe_count(reader.read_bit_long());
+    for _ in 0..ndata {
+        read_custom_table_data(reader, version);
+    }
+    cell.has_linked_data = reader.read_bit_long() == 1;
+    if cell.has_linked_data {
+        let _ = reader.read_handle(); // data link object
+        reader.read_bit_long(); // row count
+        reader.read_bit_long(); // column count
+        reader.read_bit_long(); // unknown
+    }
+    let ncontents = safe_count(reader.read_bit_long());
+    for _ in 0..ncontents {
+        cell.contents.push(read_table_cell_content(reader, version));
+    }
+    read_cell_style(reader); // cell style override
+    reader.read_bit_long(); // style id
+    if reader.read_bit_long() != 0 {
+        reader.read_bit_long();
+        reader.read_bit_double();
+        reader.read_bit_double();
+        let geom_flags = reader.read_bit_long();
+        let _ = reader.read_handle();
+        if geom_flags != 0 {
+            read_cell_content_geometry(reader);
+        }
+    }
+    cell
+}
+
+/// The AcDbLinkedTableData / TABLECONTENT body. Returns the columns, rows and
+/// the trailing table-style handle.
+fn read_table_content(
+    reader: &mut DwgMergedReader,
+    version: DwgVersion,
+) -> (Vec<TableColumn>, Vec<TableRow>, u64) {
+    let _name = reader.read_variable_text();
+    let _description = reader.read_variable_text();
+
+    let ncols = safe_count(reader.read_bit_long());
+    let mut columns = Vec::with_capacity(ncols as usize);
+    for _ in 0..ncols {
+        let name = reader.read_variable_text();
+        let custom_data = reader.read_bit_long();
+        let ndata = safe_count(reader.read_bit_long());
+        for _ in 0..ndata {
+            read_custom_table_data(reader, version);
+        }
+        read_cell_style(reader);
+        reader.read_bit_long(); // style id
+        let width = reader.read_bit_double();
+        columns.push(TableColumn {
+            name,
+            width,
+            style: None,
+            custom_data,
+        });
+    }
+
+    let nrows = safe_count(reader.read_bit_long());
+    let mut rows = Vec::with_capacity(nrows as usize);
+    for _ in 0..nrows {
+        let ncells = safe_count(reader.read_bit_long());
+        let mut cells = Vec::with_capacity(ncells as usize);
+        for _ in 0..ncells {
+            cells.push(read_table_cell(reader, version));
+        }
+        let custom_data = reader.read_bit_long();
+        let ndata = safe_count(reader.read_bit_long());
+        for _ in 0..ndata {
+            read_custom_table_data(reader, version);
+        }
+        read_cell_style(reader);
+        reader.read_bit_long(); // style id
+        let height = reader.read_bit_double();
+        rows.push(TableRow {
+            height,
+            cells,
+            style: None,
+            custom_data,
+        });
+    }
+
+    let nfields = safe_count(reader.read_bit_long());
+    for _ in 0..nfields {
+        let _ = reader.read_handle();
+    }
+    read_cell_style(reader); // table base cell style
+    let nranges = safe_count(reader.read_bit_long());
+    for _ in 0..nranges {
+        reader.read_bit_long(); // top row
+        reader.read_bit_long(); // left column
+        reader.read_bit_long(); // bottom row
+        reader.read_bit_long(); // right column
+    }
+    let style_handle = reader.read_handle();
+    (columns, rows, style_handle)
+}
+
+/// Pre-R2010 flat-format cell (AcDbTable cell data). The cell value/text is
+/// carried in the trailing R2007+ AcDbCellValue block, so the per-cell style
+/// override block must be parsed in full to reach it.
+fn read_table_cell_data(
+    reader: &mut DwgMergedReader,
+    version: DwgVersion,
+    dxf_version: DxfVersion,
+) -> TableCell {
+    let mut cell = TableCell::new();
+    let ctype = reader.read_bit_short(); // 1 = text, 2 = block
+    cell.cell_type = if ctype == 2 {
+        CellType::Block
+    } else {
+        CellType::Text
+    };
+    reader.read_byte(); // edge flags
+    cell.merged = reader.read_bit() as i32;
+    cell.auto_fit = reader.read_bit();
+    cell.merge_width = reader.read_bit_long();
+    cell.merge_height = reader.read_bit_long();
+    cell.rotation = reader.read_bit_double();
+    let value_handle = reader.read_handle();
+
+    match ctype {
+        1 => {
+            // Text: the string is inline only before R2007.
+            if value_handle == 0 && dxf_version < DxfVersion::AC1021 {
+                let text = reader.read_variable_text();
+                cell.contents.push(CellContent::text(&text));
+            }
+        }
+        2 => {
+            let _block_scale = reader.read_bit_double();
+            if reader.read_bit() {
+                let natts = safe_count(reader.read_bit_short() as i32);
+                for _ in 0..natts {
+                    let _ = reader.read_handle();
+                    reader.read_bit_short();
+                    let _ = reader.read_variable_text();
+                }
+            }
+        }
+        _ => {}
+    }
+
+    // Per-cell style override block (each conditional gated on the override
+    // flags; the grid line-weight bit gates both the weight and the visibility
+    // read, mirroring the source exactly to stay byte-aligned).
+    if reader.read_bit() {
+        let flags = reader.read_bit_long();
+        reader.read_byte(); // virtual edge flag
+        if flags & 0x01 != 0 {
+            reader.read_bit_short(); // alignment
+        }
+        if flags & 0x02 != 0 {
+            reader.read_bit(); // background fill none
+        }
+        if flags & 0x04 != 0 {
+            reader.read_cm_color(); // background colour
+        }
+        if flags & 0x08 != 0 {
+            reader.read_cm_color(); // content colour
+        }
+        if flags & 0x10 != 0 {
+            reader.read_handle(); // text style
+        }
+        if flags & 0x20 != 0 {
+            reader.read_bit_double(); // text height
+        }
+        // Per edge: colour, line weight, visibility.
+        for (color_bit, lw_bit) in [
+            (0x40, 0x400),   // top
+            (0x80, 0x800),   // right
+            (0x100, 0x1000), // bottom
+            (0x200, 0x2000), // left
+        ] {
+            if flags & color_bit != 0 {
+                reader.read_cm_color();
+            }
+            if flags & lw_bit != 0 {
+                reader.read_bit_short(); // line weight
+            }
+            if flags & lw_bit != 0 {
+                reader.read_bit_short(); // visibility
+            }
+        }
+    }
+
+    // R2007+: unknown then the cell value (holds the text for R2007 files).
+    if version.r2007_plus() {
+        reader.read_bit_long(); // unknown
+        let mut content = CellContent::new();
+        content.value = read_cad_value(reader, version);
+        cell.contents.push(content);
+    }
+
+    cell
+}
+
+/// Read a full ACAD_TABLE entity: the insert base plus, on R2010+, the inline
+/// table content.
+pub fn read_table(
+    reader: &mut DwgMergedReader,
+    version: DwgVersion,
+    dxf_version: DxfVersion,
+) -> TableEntityData {
+    let insert = read_insert(reader, version);
+
+    let mut columns = Vec::new();
+    let mut rows = Vec::new();
+    let horizontal_direction;
+    let style_handle;
+
+    if version.r2010_plus() {
+        reader.read_byte(); // unknown RC
+        let _ = reader.read_handle(); // null handle
+        reader.read_bit_long(); // unknown BL
+        if version.r2013_plus(dxf_version) {
+            reader.read_bit_long();
+        } else {
+            reader.read_bit();
+        }
+
+        let (cols, rws, sh) = read_table_content(reader, version);
+        columns = cols;
+        rows = rws;
+        style_handle = sh;
+
+        reader.read_bit_short(); // unknown (38)
+        horizontal_direction = reader.read_3bit_double();
+
+        if reader.read_bit_long() == 1 {
+            // break data
+            reader.read_bit_long(); // flags
+            reader.read_bit_long(); // flow direction
+            reader.read_bit_double(); // break spacing
+            reader.read_bit_long();
+            reader.read_bit_long();
+            let num = safe_count(reader.read_bit_long());
+            for _ in 0..num {
+                reader.read_3bit_double();
+                reader.read_bit_double();
+                reader.read_bit_long();
+            }
+        }
+        let nranges = safe_count(reader.read_bit_long());
+        for _ in 0..nranges {
+            reader.read_3bit_double();
+            reader.read_bit_long();
+            reader.read_bit_long();
+        }
+    } else {
+        // Pre-R2010 flat format: value flag, direction, dimensions, then column
+        // widths / row heights, the style handle, and one cell per grid slot.
+        // The trailing table-level override block is left unread — every cell is
+        // already parsed and the object reader seeks to the next object by
+        // offset, so stopping here is safe.
+        reader.read_bit_short(); // value flag
+        horizontal_direction = reader.read_3bit_double();
+        let ncols = safe_count(reader.read_bit_long());
+        let nrows = safe_count(reader.read_bit_long());
+        for _ in 0..ncols {
+            let width = reader.read_bit_double();
+            columns.push(TableColumn {
+                name: String::new(),
+                width,
+                style: None,
+                custom_data: 0,
+            });
+        }
+        for _ in 0..nrows {
+            let height = reader.read_bit_double();
+            rows.push(TableRow {
+                height,
+                cells: Vec::new(),
+                style: None,
+                custom_data: 0,
+            });
+        }
+        style_handle = reader.read_handle();
+        for ri in 0..(nrows as usize) {
+            for _ in 0..ncols {
+                let cell = read_table_cell_data(reader, version, dxf_version);
+                rows[ri].cells.push(cell);
+            }
+        }
+    }
+
+    TableEntityData {
+        insert,
+        columns,
+        rows,
+        horizontal_direction,
+        style_handle,
     }
 }
 
