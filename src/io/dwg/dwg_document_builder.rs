@@ -1108,13 +1108,16 @@ impl DwgDocumentBuilder {
 
         // ── AcDs SAB ordering ──────────────────────────────────────────────
         // R2013+ modeler geometry (3DSOLID/REGION/BODY/SURFACE) is stored as
-        // SAB blobs in the AcDs section, one per entity whose `has_ds_data`
-        // bit is set. The blobs sit in object-stream order, but `entities` is
-        // handle-sorted, so record the flagged modeler handles ordered by their
-        // object-stream file offset. `attach_acds_sab_blobs` pairs blob[i] with
-        // this list's i-th handle — correct regardless of entity sort order.
+        // SAB blobs in the AcDs section, one per entity whose `has_ds_data` bit
+        // is set. The AcDs data-store indexes those blobs through a search
+        // segment sorted ascending by owning-entity handle, and the blobs are
+        // laid out in that same record order — so the i-th blob (in file order)
+        // belongs to the i-th flagged modeler entity taken in ascending handle
+        // order. `attach_acds_sab_blobs` pairs blob[i] with this list's i-th
+        // handle. (Ordering by object-stream file offset instead mispaired
+        // blobs whenever the object-stream order diverged from handle order.)
         {
-            let mut ordered: Vec<(i64, Handle)> = document
+            let mut ordered: Vec<Handle> = document
                 .entities()
                 .filter(|e| {
                     matches!(
@@ -1125,13 +1128,10 @@ impl DwgDocumentBuilder {
                             | EntityType::Surface(_)
                     ) && e.common().has_ds_data
                 })
-                .filter_map(|e| {
-                    let h = e.common().handle;
-                    self.obj_reader.offset_for(h.value()).map(|off| (off, h))
-                })
+                .map(|e| e.common().handle)
                 .collect();
-            ordered.sort_by_key(|&(off, _)| off);
-            document.acis_sab_handles = ordered.into_iter().map(|(_, h)| h).collect();
+            ordered.sort_by_key(|h| h.value());
+            document.acis_sab_handles = ordered;
         }
 
         // ── Handle-collision repair ────────────────────────────────────────
