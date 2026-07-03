@@ -1134,6 +1134,42 @@ impl DwgDocumentBuilder {
             document.acis_sab_handles = ordered.into_iter().map(|(_, h)| h).collect();
         }
 
+        // ── Handle-collision repair ────────────────────────────────────────
+        // The document is seeded with standard table entries (Standard dim
+        // style, default block records, …) at low handles before the file's
+        // objects are read, so a synthesized entry can end up sharing a handle
+        // with a file object that legitimately owns it — e.g. the Standard dim
+        // style vs a paper-space block record. A duplicate handle makes that
+        // reference ambiguous and a strict reader rejects the owning object
+        // ("improperly read"). Re-home any dim-style entry whose handle also
+        // belongs to a block record, following the header references so the
+        // Standard style stays reachable.
+        {
+            use std::collections::HashSet;
+            let block_handles: HashSet<u64> =
+                document.block_records.iter().map(|b| b.handle.value()).collect();
+            let colliding: Vec<u64> = document
+                .dim_styles
+                .iter()
+                .map(|d| d.handle.value())
+                .filter(|h| block_handles.contains(h))
+                .collect();
+            for old in colliding {
+                let new_h = document.allocate_handle();
+                for d in document.dim_styles.iter_mut() {
+                    if d.handle.value() == old {
+                        d.handle = new_h;
+                    }
+                }
+                if document.header.current_dimstyle_handle.value() == old {
+                    document.header.current_dimstyle_handle = new_h;
+                }
+                if document.header.dim_text_style_handle.value() == old {
+                    document.header.dim_text_style_handle = new_h;
+                }
+            }
+        }
+
         self.notifications
     }
 
