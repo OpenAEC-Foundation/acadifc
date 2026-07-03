@@ -960,78 +960,80 @@ fn build_acds_data2_segment(entries: &[(Handle, Vec<u8>)]) -> Vec<u8> {
     seg
 }
 
-/// Build `datidx` segment id=4 — one index entry per ACIS record.
-fn build_acds_datidx(num_records: usize) -> Vec<u8> {
-    let num = num_records.max(1);
-    // 48-byte header + 20 bytes per index entry, padded to 16-byte alignment.
-    let raw = 48 + num * 20;
-    let seg_size = align16(raw).max(128);
-    let mut seg = vec![0x70u8; seg_size];
-
-    // Segment header
-    seg[0..8].copy_from_slice(&[0xAC, 0xD5, 0x64, 0x61, 0x74, 0x69, 0x64, 0x78]); // "datidx"
-    seg[8..12].copy_from_slice(&4u32.to_le_bytes()); // segment_idx=4
+/// Write the 48-byte AcDs segment header (signature + 6-char name + the fixed
+/// field block: segment_idx, is_blob01=0, segsize, unknown_2=0, ds_version=1,
+/// unknown_3=0, align offsets=0, 8× 0x55 fill).
+fn acds_segment_header(seg: &mut [u8], name: &[u8; 6], segment_idx: u32) {
+    let seg_len = seg.len() as u64;
+    seg[0..2].copy_from_slice(&[0xAC, 0xD5]);
+    seg[2..8].copy_from_slice(name);
+    seg[8..12].copy_from_slice(&segment_idx.to_le_bytes());
     seg[12..16].copy_from_slice(&0u32.to_le_bytes()); // is_blob01
-    seg[16..24].copy_from_slice(&(seg_size as u64).to_le_bytes()); // segsize + unknown_2
-    seg[24..28].copy_from_slice(&1u32.to_le_bytes()); // ds_version (always 1, NOT the record count)
+    seg[16..24].copy_from_slice(&seg_len.to_le_bytes()); // segsize + unknown_2
+    seg[24..28].copy_from_slice(&1u32.to_le_bytes()); // ds_version (always 1)
     seg[28..32].copy_from_slice(&0u32.to_le_bytes()); // unknown_3
     seg[32..40].copy_from_slice(&0u64.to_le_bytes()); // data/objdata align offsets
     seg[40..48].copy_from_slice(&[0x55; 8]); // fill
+}
 
-    // Index entries: (row_index, 0, schema_id=2, 0, data_count=1) — 20 bytes each.
-    let mut pos = 48;
+/// Build `datidx` segment id=4 — one index entry per ACIS record.
+///
+/// Layout (matches a BricsCAD-authored reference): the 48-byte segment header,
+/// then `num_entries` (RL), `di_unknown` (RL = 0), then one 12-byte index entry
+/// per record — `(segidx = 2 [the _data_ segment], offset = i*20, schidx = 1)`.
+fn build_acds_datidx(num_records: usize) -> Vec<u8> {
+    let num = num_records.max(1);
+    let raw = 48 + 8 + num * 12;
+    let seg_size = align16(raw).max(128);
+    let mut seg = vec![0x70u8; seg_size];
+    acds_segment_header(&mut seg, b"datidx", 4);
+
+    seg[48..52].copy_from_slice(&(num as u32).to_le_bytes()); // num_entries
+    seg[52..56].copy_from_slice(&0u32.to_le_bytes()); // di_unknown
+    let mut pos = 56;
     for i in 0..num {
-        seg[pos..pos + 4].copy_from_slice(&((i + 1) as u32).to_le_bytes());
-        seg[pos + 4..pos + 8].copy_from_slice(&0u32.to_le_bytes());
-        seg[pos + 8..pos + 12].copy_from_slice(&2u32.to_le_bytes());
-        seg[pos + 12..pos + 16].copy_from_slice(&0u32.to_le_bytes());
-        seg[pos + 16..pos + 20].copy_from_slice(&1u32.to_le_bytes());
-        pos += 20;
+        seg[pos..pos + 4].copy_from_slice(&2u32.to_le_bytes()); // segidx (→ _data_ id=2)
+        seg[pos + 4..pos + 8].copy_from_slice(&((i as u32) * 20).to_le_bytes()); // offset
+        seg[pos + 8..pos + 12].copy_from_slice(&1u32.to_le_bytes()); // schidx
+        pos += 12;
     }
-
     seg
 }
 
-/// Build `search` segment id=7 with one handle→record lookup per ACIS entity.
+/// Build `search` segment id=7 — the datastore's per-schema sorted lookup index.
+///
+/// Two schemas, matching a BricsCAD-authored reference: schema 0 (`AcDbDs::ID`,
+/// namidx=1) sorts by record index (`sortedidx[i] = i << 32`); schema 1 (the
+/// data schema, namidx=0). Each schema: `namidx (RL), num_sortedidx (RL),
+/// sortedidx[] (RLLd), num_ididxs (RL), unknown (RL)`, then the ididx groups.
 fn build_acds_search_segment(handles: &[u32]) -> Vec<u8> {
-    let num = handles.len().max(1);
-    // 48-byte header + a small fixed preamble + 8 bytes per handle entry,
-    // padded to 16-byte alignment (kept at least the reference 192 bytes).
-    let preamble = 36usize;
-    let raw = 48 + preamble + num * 8;
+    let n = handles.len();
+    let mut content: Vec<u8> = Vec::new();
+    content.extend_from_slice(&2u32.to_le_bytes()); // num_search = 2 schemas
+
+    // Schema 0: sort key = record index.
+    content.extend_from_slice(&1u32.to_le_bytes()); // schema_namidx
+    content.extend_from_slice(&(n as u32).to_le_bytes()); // num_sortedidx
+    for i in 0..n {
+        content.extend_from_slice(&((i as u64) << 32).to_le_bytes());
+    }
+    content.extend_from_slice(&0u32.to_le_bytes()); // num_ididxs
+    content.extend_from_slice(&1u32.to_le_bytes()); // unknown
+
+    // Schema 1: the data schema (index body kept minimal for now).
+    content.extend_from_slice(&0u32.to_le_bytes()); // schema_namidx
+    content.extend_from_slice(&(n as u32).to_le_bytes()); // num_sortedidx
+    for i in 0..n {
+        content.extend_from_slice(&((i as u64) << 32).to_le_bytes());
+    }
+    content.extend_from_slice(&0u32.to_le_bytes()); // num_ididxs
+    content.extend_from_slice(&0u32.to_le_bytes()); // unknown
+
+    let raw = 48 + content.len();
     let seg_size = align16(raw).max(192);
     let mut seg = vec![0x70u8; seg_size];
-
-    // Segment header
-    seg[0..8].copy_from_slice(&[0xAC, 0xD5, 0x73, 0x65, 0x61, 0x72, 0x63, 0x68]); // "search"
-    seg[8..12].copy_from_slice(&7u32.to_le_bytes()); // segment_idx=7
-    seg[12..16].copy_from_slice(&0u32.to_le_bytes()); // is_blob01
-    seg[16..24].copy_from_slice(&(seg_size as u64).to_le_bytes()); // segsize + unknown_2
-    seg[24..28].copy_from_slice(&1u32.to_le_bytes()); // ds_version (always 1, NOT the record count)
-    seg[28..32].copy_from_slice(&0u32.to_le_bytes()); // unknown_3
-    seg[32..40].copy_from_slice(&0u64.to_le_bytes()); // data/objdata align offsets
-    seg[40..48].copy_from_slice(&[0x55; 8]); // fill
-
-    // Preamble (matches reference file layout for the schema-with-data table).
-    let content: &[u8] = &[
-        0x02, 0x00, 0x00, 0x00, // num_schemas_with_data = 2
-        0x01, 0x00, 0x00, 0x00, //
-        0x01, 0x00, 0x00, 0x00, //
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // zeros
-        0x00, 0x00, 0x00, 0x00, //
-        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //
-        0x01, 0x00, 0x00, 0x00, //
-    ];
-    seg[48..48 + content.len()].copy_from_slice(content);
-
-    // Handle→record entries: (handle u32, record_index u32) at offset 84.
-    let mut pos = 84;
-    for (i, &handle_val) in handles.iter().enumerate() {
-        seg[pos..pos + 4].copy_from_slice(&handle_val.to_le_bytes());
-        seg[pos + 4..pos + 8].copy_from_slice(&((i + 1) as u32).to_le_bytes());
-        pos += 8;
-    }
-
+    acds_segment_header(&mut seg, b"search", 7);
+    seg[48..48 + content.len()].copy_from_slice(&content);
     seg
 }
 
