@@ -932,10 +932,11 @@ fn build_acds_data2_segment(entries: &[(Handle, Vec<u8>)]) -> Vec<u8> {
 
     // Segment header (48 bytes)
     seg.extend_from_slice(&[0xAC, 0xD5, 0x5F, 0x64, 0x61, 0x74, 0x61, 0x5F]); // "_data_"
-    seg.extend_from_slice(&2u32.to_le_bytes()); // id=2
-    seg.extend_from_slice(&0u32.to_le_bytes()); // pad
+    seg.extend_from_slice(&2u32.to_le_bytes()); // segment_idx=2
+    seg.extend_from_slice(&0u32.to_le_bytes()); // is_blob01
     seg.extend_from_slice(&(seg_size as u64).to_le_bytes()); // segment size
-    seg.extend_from_slice(&(entries.len() as u64).to_le_bytes()); // record count
+    seg.extend_from_slice(&1u32.to_le_bytes()); // ds_version (always 1, NOT the record count)
+    seg.extend_from_slice(&0u32.to_le_bytes()); // unknown_3
     seg.extend_from_slice(&0u32.to_le_bytes()); // meta field1 = 0
     seg.extend_from_slice(&5u32.to_le_bytes()); // meta field2 = 5 (num columns)
     seg.extend_from_slice(&[0x55; 8]); // fill "UUUUUUUU"
@@ -969,11 +970,12 @@ fn build_acds_datidx(num_records: usize) -> Vec<u8> {
 
     // Segment header
     seg[0..8].copy_from_slice(&[0xAC, 0xD5, 0x64, 0x61, 0x74, 0x69, 0x64, 0x78]); // "datidx"
-    seg[8..12].copy_from_slice(&4u32.to_le_bytes()); // id=4
-    seg[12..16].copy_from_slice(&0u32.to_le_bytes()); // pad
-    seg[16..24].copy_from_slice(&(seg_size as u64).to_le_bytes()); // segment size
-    seg[24..32].copy_from_slice(&(num as u64).to_le_bytes()); // record count
-    seg[32..40].copy_from_slice(&0u64.to_le_bytes()); // meta
+    seg[8..12].copy_from_slice(&4u32.to_le_bytes()); // segment_idx=4
+    seg[12..16].copy_from_slice(&0u32.to_le_bytes()); // is_blob01
+    seg[16..24].copy_from_slice(&(seg_size as u64).to_le_bytes()); // segsize + unknown_2
+    seg[24..28].copy_from_slice(&1u32.to_le_bytes()); // ds_version (always 1, NOT the record count)
+    seg[28..32].copy_from_slice(&0u32.to_le_bytes()); // unknown_3
+    seg[32..40].copy_from_slice(&0u64.to_le_bytes()); // data/objdata align offsets
     seg[40..48].copy_from_slice(&[0x55; 8]); // fill
 
     // Index entries: (row_index, 0, schema_id=2, 0, data_count=1) — 20 bytes each.
@@ -1002,11 +1004,12 @@ fn build_acds_search_segment(handles: &[u32]) -> Vec<u8> {
 
     // Segment header
     seg[0..8].copy_from_slice(&[0xAC, 0xD5, 0x73, 0x65, 0x61, 0x72, 0x63, 0x68]); // "search"
-    seg[8..12].copy_from_slice(&7u32.to_le_bytes()); // id=7
-    seg[12..16].copy_from_slice(&0u32.to_le_bytes()); // pad
-    seg[16..24].copy_from_slice(&(seg_size as u64).to_le_bytes()); // segment size
-    seg[24..32].copy_from_slice(&(num as u64).to_le_bytes()); // record count
-    seg[32..40].copy_from_slice(&0u64.to_le_bytes()); // meta
+    seg[8..12].copy_from_slice(&7u32.to_le_bytes()); // segment_idx=7
+    seg[12..16].copy_from_slice(&0u32.to_le_bytes()); // is_blob01
+    seg[16..24].copy_from_slice(&(seg_size as u64).to_le_bytes()); // segsize + unknown_2
+    seg[24..28].copy_from_slice(&1u32.to_le_bytes()); // ds_version (always 1, NOT the record count)
+    seg[28..32].copy_from_slice(&0u32.to_le_bytes()); // unknown_3
+    seg[32..40].copy_from_slice(&0u64.to_le_bytes()); // data/objdata align offsets
     seg[40..48].copy_from_slice(&[0x55; 8]); // fill
 
     // Preamble (matches reference file layout for the schema-with-data table).
