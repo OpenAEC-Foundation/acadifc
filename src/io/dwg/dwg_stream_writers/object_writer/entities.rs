@@ -3369,6 +3369,11 @@ impl<'a> DwgObjectWriter<'a> {
     // â”€â”€ ACIS entities (3DSOLID, REGION, BODY) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_solid3d(&mut self, e: &Solid3D) {
+        // R2013+: mark the entity as data-store-backed when its geometry will be
+        // emitted as a SAB blob into the AcDs section (below), so readers pair
+        // the blob with this solid. Must precede the common-data preamble.
+        self.pending_has_ds_data =
+            self.needs_acds_section() && e.acis_data.contributes_sab();
         self.entity_preamble(common::OBJ_3DSOLID, &e.common);
 
         let acds = self.needs_acds_section();
@@ -3407,6 +3412,8 @@ impl<'a> DwgObjectWriter<'a> {
     }
 
     fn write_region(&mut self, e: &Region) {
+        self.pending_has_ds_data =
+            self.needs_acds_section() && e.acis_data.contributes_sab();
         self.entity_preamble(common::OBJ_REGION, &e.common);
 
         let acds = self.needs_acds_section();
@@ -3443,6 +3450,8 @@ impl<'a> DwgObjectWriter<'a> {
     }
 
     fn write_body(&mut self, e: &Body) {
+        self.pending_has_ds_data =
+            self.needs_acds_section() && e.acis_data.contributes_sab();
         self.entity_preamble(common::OBJ_BODY, &e.common);
 
         let acds = self.needs_acds_section();

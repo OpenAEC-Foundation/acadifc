@@ -94,6 +94,12 @@ pub struct DwgObjectWriter<'a> {
     /// SAB data entries collected during entity writing (AC1027+).
     /// Each entry is (entity_handle, sab_binary_data).
     pub(super) sab_entries: Vec<(Handle, Vec<u8>)>,
+    /// Set by a modeler-entity writer immediately before it emits the common
+    /// entity data, so the R2013+ `has_ds_data` bit is written `true` for a
+    /// 3DSOLID/REGION/BODY/SURFACE that contributes a SAB blob to the AcDs
+    /// section. `write_common_entity_data` consumes and clears it, so every
+    /// other entity writes `false`.
+    pub(super) pending_has_ds_data: bool,
     /// Tracks which object handles have already been written to prevent duplicates.
     pub(super) visited_objects: HashSet<Handle>,
     /// Every handle actually emitted to the object map. Central guard against
@@ -194,6 +200,7 @@ impl<'a> DwgObjectWriter<'a> {
             next_alloc_handle: max_h,
             model_space_extents: None,
             sab_entries: Vec::new(),
+            pending_has_ds_data: false,
             visited_objects: HashSet::new(),
             owner_overrides: std::collections::HashMap::new(),
             linetype_handles: std::collections::HashMap::new(),

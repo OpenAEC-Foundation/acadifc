@@ -297,6 +297,13 @@ pub struct EntityCommon {
     /// Entity mode (0=owned, 1=paper, 2=model) — raw DWG value for round-trip
     #[cfg_attr(feature = "serde", serde(skip))]
     pub entity_mode: Option<u8>,
+    /// R2013+ `has_ds_data` bit: the entity's modeler geometry (3DSOLID/REGION/
+    /// BODY/SURFACE) is stored as a SAB blob in the `AcDb:AcDsPrototype_1b`
+    /// data-store section rather than inline. Set by the DWG reader; the writer
+    /// re-derives it from the presence of ACIS data. Not part of the logical
+    /// model, so skipped for serde.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub has_ds_data: bool,
 }
 
 impl EntityCommon {
@@ -322,6 +329,7 @@ impl EntityCommon {
             plotstyle_flags: 0,
             plotstyle_handle: None,
             entity_mode: None,
+            has_ds_data: false,
         }
     }
 

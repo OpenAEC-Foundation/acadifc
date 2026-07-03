@@ -966,6 +966,14 @@ pub struct CadDocument {
     /// `None` when not loaded from DWG (new/DXF).
     pub dwg_source_version: Option<DxfVersion>,
 
+    /// Modeler-entity handles (3DSOLID/REGION/BODY/SURFACE) whose geometry is
+    /// stored as SAB blobs in the `AcDb:AcDsPrototype_1b` data-store section,
+    /// in object-stream (file-offset) order. Populated by the DWG reader so the
+    /// blob→entity attach step pairs each SAB blob with the correct entity
+    /// regardless of the document's handle-sorted entity order. Transient DWG
+    /// read artifact; empty for new/DXF documents.
+    pub(crate) acis_sab_handles: Vec<Handle>,
+
     /// Next handle to assign
     next_handle: u64,
 }
@@ -998,6 +1006,7 @@ impl CadDocument {
             reactors_by_handle: HashMap::new(),
             block_entity_handles: HashMap::new(),
             dwg_source_version: None,
+            acis_sab_handles: Vec::new(),
             // Start handle allocation above reserved table handles (0x1-0xA)
             // Table handles are well-known fixed values used by AutoCAD
             next_handle: 0x10,

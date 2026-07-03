@@ -384,10 +384,16 @@ impl<'a> DwgObjectWriter<'a> {
             }
         }
 
-        // R2013+: binary-data-present flag (MAIN)
+        // R2013+: `has_ds_data` flag (MAIN) — true only for a modeler entity
+        // whose geometry is emitted as a SAB blob into the AcDs section, so a
+        // reader knows to pull its geometry from there. Set by the modeler
+        // writer just before this call; consumed and cleared here so every
+        // other entity writes false.
         if self.version.r2013_plus(self.dxf_version) {
-            self.writer.write_bit(false);
+            let has_ds = self.pending_has_ds_data;
+            self.writer.write_bit(has_ds);
         }
+        self.pending_has_ds_data = false;
 
         // ── R13-R14 only: layer + linetype ──
         if self.version.r13_14_only() {

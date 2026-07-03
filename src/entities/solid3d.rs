@@ -326,6 +326,15 @@ impl AcisData {
         !self.sat_data.is_empty() || !self.sab_data.is_empty()
     }
 
+    /// Returns true when this ACIS data yields a SAB blob for the AcDs section
+    /// on write (binary SAB present, or SAT text convertible to SAB). Matches
+    /// the push condition in the DWG writer's `queue_sab_entry`, so the R2013+
+    /// `has_ds_data` entity flag stays in lockstep with the blobs actually
+    /// emitted — a mismatch would orphan a blob or a solid.
+    pub fn contributes_sab(&self) -> bool {
+        (self.is_binary && !self.sab_data.is_empty()) || !self.sat_data.is_empty()
+    }
+
     /// Strip the `End-of-ACIS-data` / `End-of-ASM-data` terminator line
     /// (and any trailing blank lines) from raw SAT text.
     ///

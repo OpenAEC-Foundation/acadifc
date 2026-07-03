@@ -230,22 +230,76 @@ fn extract_acds_sab_blobs(buf: &[u8]) -> Vec<Vec<u8>> {
     blobs
 }
 
-/// Attach extracted AcDs SAB blobs, in order, to the document's modeler
-/// (3DSOLID / REGION / BODY) entities. Returns the number attached.
+/// Attach extracted AcDs SAB blobs to the document's modeler (3DSOLID / REGION /
+/// BODY / SURFACE) entities. Returns the number attached.
+///
+/// The blobs sit in the AcDs section in object-stream order. When the builder
+/// captured the flagged (`has_ds_data`) modeler handles in that same order
+/// (`document.acis_sab_handles`), pair blob[i] with the i-th handle — correct
+/// even though `document.entities` is handle-sorted rather than in stream order.
+/// Files that predate handle capture (empty list) fall back to positional
+/// attachment in document order, matching the historical behaviour.
 fn attach_acds_sab_blobs(document: &mut crate::document::CadDocument, blobs: Vec<Vec<u8>>) -> usize {
     use crate::entities::solid3d::AcisVersion;
     use crate::entities::EntityType;
 
-    let mut it = blobs.into_iter();
-    let mut attached = 0usize;
-    // Fill an AcisData from the next blob; returns false when the iterator is
-    // exhausted (so the caller breaks).
+    // Fill an AcisData from a blob.
     fn fill(acis: &mut crate::entities::solid3d::AcisData, blob: Vec<u8>) {
         acis.sab_data = blob;
         acis.sat_data = String::new();
         acis.is_binary = true;
         acis.version = AcisVersion::Version2;
     }
+    // Apply a blob to whichever modeler entity carries `handle`, deriving the
+    // placement reference point now that the SAB geometry is available.
+    fn apply(entity: &mut EntityType, blob: Vec<u8>) -> bool {
+        match entity {
+            EntityType::Solid3D(s) => {
+                fill(&mut s.acis_data, blob);
+                if let Some(p) = s.acis_data.placement_origin() {
+                    s.point_of_reference = p;
+                }
+                true
+            }
+            EntityType::Region(r) => {
+                fill(&mut r.acis_data, blob);
+                if let Some(p) = r.acis_data.placement_origin() {
+                    r.point_of_reference = p;
+                }
+                true
+            }
+            EntityType::Body(b) => {
+                fill(&mut b.acis_data, blob);
+                if let Some(p) = b.acis_data.placement_origin() {
+                    b.point_of_reference = p;
+                }
+                true
+            }
+            EntityType::Surface(s) => {
+                fill(&mut s.acis_data, blob);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    // Preferred: attach by object-stream-ordered handle list (see doc comment).
+    let ordered = std::mem::take(&mut document.acis_sab_handles);
+    if !ordered.is_empty() {
+        let mut attached = 0usize;
+        for (handle, blob) in ordered.into_iter().zip(blobs.into_iter()) {
+            if let Some(entity) = document.get_entity_mut(handle) {
+                if apply(entity, blob) {
+                    attached += 1;
+                }
+            }
+        }
+        return attached;
+    }
+
+    // Fallback: positional attach in document order.
+    let mut it = blobs.into_iter();
+    let mut attached = 0usize;
     for entity in document.entities_mut() {
         // Only consume a blob for ACIS-backed entities, in document order.
         match entity {

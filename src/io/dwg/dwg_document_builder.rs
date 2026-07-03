@@ -1106,6 +1106,34 @@ impl DwgDocumentBuilder {
             }
         }
 
+        // ── AcDs SAB ordering ──────────────────────────────────────────────
+        // R2013+ modeler geometry (3DSOLID/REGION/BODY/SURFACE) is stored as
+        // SAB blobs in the AcDs section, one per entity whose `has_ds_data`
+        // bit is set. The blobs sit in object-stream order, but `entities` is
+        // handle-sorted, so record the flagged modeler handles ordered by their
+        // object-stream file offset. `attach_acds_sab_blobs` pairs blob[i] with
+        // this list's i-th handle — correct regardless of entity sort order.
+        {
+            let mut ordered: Vec<(i64, Handle)> = document
+                .entities()
+                .filter(|e| {
+                    matches!(
+                        e,
+                        EntityType::Solid3D(_)
+                            | EntityType::Region(_)
+                            | EntityType::Body(_)
+                            | EntityType::Surface(_)
+                    ) && e.common().has_ds_data
+                })
+                .filter_map(|e| {
+                    let h = e.common().handle;
+                    self.obj_reader.offset_for(h.value()).map(|off| (off, h))
+                })
+                .collect();
+            ordered.sort_by_key(|&(off, _)| off);
+            document.acis_sab_handles = ordered.into_iter().map(|(_, h)| h).collect();
+        }
+
         self.notifications
     }
 
@@ -3007,5 +3035,8 @@ fn map_entity_common(
     common.shadow_flags = data.shadow_flags;
     common.plotstyle_flags = data.plotstyle_flags;
     common.plotstyle_handle = data.plotstyle_handle.map(Handle::from);
+    // R2013+: geometry-in-AcDs flag, needed to pair AcDs SAB blobs with the
+    // right modeler entity in object-stream order.
+    common.has_ds_data = data.has_ds_data;
     common
 }

@@ -96,6 +96,11 @@ pub struct EntityCommonData {
     pub plotstyle_flags: u8,
     /// Plotstyle handle (if plotstyle_flags == 0b11)
     pub plotstyle_handle: Option<u64>,
+    /// R2013+ `has_ds_data` bit: the entity's geometry lives in the AcDs
+    /// (Autodesk Data Store) section. For a 3DSOLID/REGION/BODY/SURFACE this
+    /// signals that a SAB blob in `AcDb:AcDsPrototype_1b` belongs to it; the
+    /// blobs pair with these entities in object-stream (file-offset) order.
+    pub has_ds_data: bool,
 }
 
 /// Common non-entity object data.
@@ -410,9 +415,12 @@ impl DwgObjectReader {
             if h != 0 { Some(h) } else { None }
         };
 
-        // R2013+: binary data flag
+        // R2013+: `has_ds_data` bit — set when the entity's geometry lives in
+        // the AcDs data store (3DSOLID/REGION/BODY/SURFACE SAB blobs). Captured
+        // so the AcDs blob→entity attach can honour object-stream order.
+        let mut has_ds_data = false;
         if self.version.r2013_plus(self.dxf_version) {
-            let _has_binary_data = reader.read_bit();
+            has_ds_data = reader.read_bit();
         }
 
         // R13-R14: layer + linetype
@@ -481,6 +489,7 @@ impl DwgObjectReader {
                 shadow_flags: 0,
                 plotstyle_flags: 0,
                 plotstyle_handle: None,
+                has_ds_data,
             };
         }
 
@@ -567,6 +576,7 @@ impl DwgObjectReader {
             shadow_flags,
             plotstyle_flags,
             plotstyle_handle,
+            has_ds_data,
         }
     }
 

@@ -841,6 +841,66 @@ fn dwg_roundtrip(doc: &CadDocument) -> CadDocument {
     reader.read().expect("DWG read failed")
 }
 
+// ── AcDs SAB round-trip (issue 225) ───────────────────────────────────────
+//
+// On R2013+ a 3DSOLID/REGION/BODY's geometry is not inline — it lives as a SAB
+// blob in the `AcDb:AcDsPrototype_1b` data-store section, and the entity carries
+// a `has_ds_data` flag telling readers to look there. Two regressions this
+// guards against: (1) the writer never set `has_ds_data`, so AutoCAD/BricsCAD
+// dropped every solid as "data stream is empty"; (2) blobs were paired with
+// entities positionally in handle-sorted order rather than object-stream order,
+// so each solid came back with the *wrong* geometry.
+
+/// Fabricate a minimal SAB blob the AcDs reader recognises: the ASM binary
+/// magic, a distinctive body, and the `End-of-ASM-data` terminator.
+fn fake_sab_blob(tag: u8, body_len: usize) -> Vec<u8> {
+    let mut b = b"ASM BinaryFile".to_vec();
+    b.extend(std::iter::repeat(tag).take(body_len));
+    b.extend_from_slice(b"\x0E\x03End\x0E\x02of\x0E\x03ASM\x0D\x04data");
+    b
+}
+
+fn solid_with_sab(sab: Vec<u8>) -> EntityType {
+    let mut s = acadrust::entities::solid3d::Solid3D::new();
+    s.acis_data.sab_data = sab;
+    s.acis_data.is_binary = true;
+    s.acis_data.version = acadrust::entities::solid3d::AcisVersion::Version2;
+    EntityType::Solid3D(s)
+}
+
+#[test]
+fn dwg_r2018_acds_sab_pairs_with_correct_solid() {
+    let mut doc = CadDocument::with_version(DxfVersion::AC1032);
+    // Distinct sizes so a mis-pairing (shift) fails the byte-equality assert.
+    let blobs = [
+        fake_sab_blob(0xA1, 300),
+        fake_sab_blob(0xB2, 900),
+        fake_sab_blob(0xC3, 150),
+    ];
+    let handles: Vec<Handle> = blobs
+        .iter()
+        .map(|b| doc.add_entity(solid_with_sab(b.clone())).unwrap())
+        .collect();
+
+    let rt = dwg_roundtrip(&doc);
+
+    for (h, expected) in handles.iter().zip(blobs.iter()) {
+        let e = rt.get_entity(*h).expect("solid missing after roundtrip");
+        let EntityType::Solid3D(s) = e else {
+            panic!("handle {h:?} is not a 3DSOLID after roundtrip");
+        };
+        assert_eq!(
+            &s.acis_data.sab_data, expected,
+            "solid {h:?} came back with the wrong SAB blob (mis-paired)"
+        );
+        assert!(
+            s.common.has_ds_data,
+            "solid {h:?} lost its has_ds_data link — other CAD apps would \
+             drop it as an empty data stream"
+        );
+    }
+}
+
 // ── DXF: Entity count preservation ────────────────────────────────────
 
 #[test]
