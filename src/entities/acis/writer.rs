@@ -462,6 +462,87 @@ impl SatDocument {
         index
     }
 
+    /// Add an exact NURBS `spline-surface` record and return its index.
+    ///
+    /// Emits the `exact_spl_sur` form used for a free-form (non-analytic)
+    /// surface — a `bs3_surface` with a fit tolerance:
+    /// `spline-surface … forward_v { exact_spl_sur nubs|nurbs deg_u deg_v
+    /// u_clo v_clo none none n_u n_v (uknot mult)… (vknot mult)… ctrl… tol } I I I I`.
+    ///
+    /// * `rational` — `false` = `nubs` (control points are x y z); `true` =
+    ///   `nurbs` (each control point carries a trailing weight).
+    /// * `u_knots` / `v_knots` — the distinct knot values paired with their
+    ///   multiplicity.
+    /// * `control` — the control net in **v-major** order (all `u` for the first
+    ///   `v`, then the next `v`, …), `[x, y, z]`; `weights` (rational only) is a
+    ///   parallel array with one weight per control point.
+    ///
+    /// The control-net dimension must satisfy
+    /// `num_ctrl_u = Σ(u multiplicities) − (deg_u + 1)` and likewise for `v`, or
+    /// the surface is geometrically inconsistent. `u_closed` / `v_closed` select
+    /// the `open`/`closed` closure identifier (periodic is not emitted here).
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_spline_surface(
+        &mut self,
+        rev_v: bool,
+        rational: bool,
+        deg_u: i32,
+        deg_v: i32,
+        u_closed: bool,
+        v_closed: bool,
+        u_knots: &[(f64, i32)],
+        v_knots: &[(f64, i32)],
+        control: &[[f64; 3]],
+        weights: Option<&[f64]>,
+        fit_tol: f64,
+    ) -> i32 {
+        let index = self.records.len() as i32;
+        let mut record = SatRecord::new(index, "spline-surface");
+        record.attribute = SatPointer::NULL;
+        let id = |s: &str| SatToken::Ident(s.to_string());
+
+        record.tokens.push(SatToken::Pointer(SatPointer::NULL)); // v700 sentinel
+        record.tokens.push(id(if rev_v { "reversed_v" } else { "forward_v" }));
+        record.tokens.push(id("{"));
+        record.tokens.push(id("exact_spl_sur"));
+        record.tokens.push(id(if rational { "nurbs" } else { "nubs" }));
+        record.tokens.push(SatToken::Integer(deg_u as i64));
+        record.tokens.push(SatToken::Integer(deg_v as i64));
+        record.tokens.push(id(if u_closed { "closed" } else { "open" }));
+        record.tokens.push(id(if v_closed { "closed" } else { "open" }));
+        record.tokens.push(id("none")); // u-singularity
+        record.tokens.push(id("none")); // v-singularity
+        record.tokens.push(SatToken::Integer(u_knots.len() as i64));
+        record.tokens.push(SatToken::Integer(v_knots.len() as i64));
+        for &(knot, mult) in u_knots {
+            record.tokens.push(SatToken::Float(knot));
+            record.tokens.push(SatToken::Integer(mult as i64));
+        }
+        for &(knot, mult) in v_knots {
+            record.tokens.push(SatToken::Float(knot));
+            record.tokens.push(SatToken::Integer(mult as i64));
+        }
+        for (i, p) in control.iter().enumerate() {
+            record.tokens.push(SatToken::Float(p[0]));
+            record.tokens.push(SatToken::Float(p[1]));
+            record.tokens.push(SatToken::Float(p[2]));
+            if rational {
+                let w = weights.and_then(|w| w.get(i)).copied().unwrap_or(1.0);
+                record.tokens.push(SatToken::Float(w));
+            }
+        }
+        record.tokens.push(SatToken::Float(fit_tol));
+        record.tokens.push(id("}"));
+        record.tokens.push(id("I"));
+        record.tokens.push(id("I"));
+        record.tokens.push(id("I"));
+        record.tokens.push(id("I"));
+
+        self.records.push(record);
+        self.header.num_records = self.records.len();
+        index
+    }
+
     /// Add a vertex record and return its index.
     pub fn add_vertex(&mut self, edge: SatPointer, point: SatPointer) -> i32 {
         let index = self.records.len() as i32;
@@ -803,5 +884,41 @@ mod tests {
         let cone = SatConeSurface::from_record(cones[0]).unwrap();
         assert!((cone.sin_half_angle() - sin_val).abs() < 1e-10, "sin mismatch: {} vs {}", cone.sin_half_angle(), sin_val);
         assert!((cone.cos_half_angle() - cos_val).abs() < 1e-10, "cos mismatch: {} vs {}", cone.cos_half_angle(), cos_val);
+    }
+
+    #[test]
+    fn spline_surface_emits_valid_sat() {
+        // Bilinear (degree 1×1) exact spline surface — a flat quad expressed as
+        // a NURBS. Knot vectors [0,0,1,1] each → 2×2 control net.
+        let mut doc = SatDocument::new_body();
+        let u_knots = [(0.0, 2), (1.0, 2)];
+        let v_knots = [(0.0, 2), (1.0, 2)];
+        let control = [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+        ];
+        let idx = doc.add_spline_surface(
+            false, false, 1, 1, false, false, &u_knots, &v_knots, &control, None, 1e-6,
+        );
+        assert!(idx > 0);
+
+        // Round-trip through the SAT text parser and validate.
+        let output = doc.to_sat_string();
+        let re = SatDocument::parse(&output).expect("emitted spline-surface must re-parse");
+        let sp = re
+            .records_of_type("spline-surface")
+            .into_iter()
+            .next()
+            .expect("spline-surface present after re-parse");
+        // deg_u, deg_v tokens.
+        assert!(matches!(sp.tokens.get(5), Some(SatToken::Integer(1))));
+        assert!(matches!(sp.tokens.get(6), Some(SatToken::Integer(1))));
+        assert!(
+            re.validate().is_empty(),
+            "spline-surface failed validation: {:?}",
+            re.validate()
+        );
     }
 }
