@@ -799,16 +799,14 @@ impl DwgBitReader {
                 // in the data stream.
                 let is_book_color = (flags & 0x4000) > 0;
 
-                // 0x2000: transparency (BL) — read BEFORE the color-book
-                // handle / rgb, matching the entity ENC field order.
-                if (flags & 0x2000) > 0 {
-                    let value = self.read_bit_long();
-                    transparency = Transparency::from_alpha_value(value as u32);
-                }
-
                 // A true/complex color rgb (BL) is present ONLY when the color
                 // is not a book-color reference (0x4000) but has the 0x8000
                 // flag. A book color carries its rgb via the handle instead.
+                //
+                // Field order in the data stream is rgb/color FIRST, then the
+                // transparency BL. (An entity with both a true colour and a
+                // transparency has flags 0x8000|0x2000 = 0xA000; the rgb long
+                // precedes the transparency long.)
                 let color = if is_book_color {
                     Color::from_index((size & 0x0FFF) as i16)
                 } else if (flags & 0x8000) > 0 {
@@ -831,6 +829,13 @@ impl DwgBitReader {
                     // ACI color index (lower 12 bits)
                     Color::from_index((size & 0x0FFF) as i16)
                 };
+
+                // 0x2000: transparency (BL) — read AFTER the rgb/color-book
+                // value, matching the entity ENC field order.
+                if (flags & 0x2000) > 0 {
+                    let value = self.read_bit_long();
+                    transparency = Transparency::from_alpha_value(value as u32);
+                }
 
                 (color, transparency, is_book_color)
             } else {

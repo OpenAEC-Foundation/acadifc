@@ -37,14 +37,19 @@ impl Transparency {
     /// Works for both DWG and DXF formats:
     /// - `0` → ByLayer
     /// - Type byte `1` → ByBlock (treated as opaque)
-    /// - Type byte `2` (DXF code 440) → explicit transparency value in low byte
-    /// - Type byte `3` (DWG ENC) → explicit transparency value in low byte
+    /// - Type byte `2` (DXF code 440) → explicit value in low byte
+    /// - Type byte `3` (DWG ENC) → explicit value in low byte
+    ///
+    /// The on-disk low byte is an **alpha/opacity** value (`255` = fully
+    /// opaque, `0` = fully transparent), which is the inverse of this type's
+    /// internal representation (`0` = opaque, `255` = fully transparent), so
+    /// the explicit value is inverted here.
     pub fn from_alpha_value(value: u32) -> Self {
         let type_byte = (value >> 24) as u8;
         match type_byte {
             0 => Transparency::BY_LAYER,
             1 => Transparency::OPAQUE, // BYBLOCK = opaque for now
-            2 | 3 => Transparency((value & 0xFF) as u8),
+            2 | 3 => Transparency(255 - (value & 0xFF) as u8),
             _ => Transparency::OPAQUE,
         }
     }
@@ -81,22 +86,28 @@ impl Transparency {
     pub const T_90: Transparency = Transparency(230);  // 90% transparent
     
     /// Convert to DWG alpha value (32-bit format, type byte 3).
+    ///
+    /// The low byte written is the on-disk **alpha/opacity** (`255` = opaque),
+    /// the inverse of the internal transparency-amount representation.
     pub fn to_alpha_value(&self) -> i32 {
         if self.0 == 0 {
             0
         } else {
-            // Type 3 = explicit value (DWG)
-            ((3u32 << 24) | self.0 as u32) as i32
+            // Type 3 = explicit value (DWG); low byte = opacity = 255 - transparency
+            ((3u32 << 24) | (255 - self.0) as u32) as i32
         }
     }
 
     /// Convert to DXF code 440 value (32-bit format, type byte 2).
+    ///
+    /// The low byte written is the on-disk **alpha/opacity** (`255` = opaque),
+    /// the inverse of the internal transparency-amount representation.
     pub fn to_dxf_value(&self) -> i32 {
         if self.0 == 0 {
             0
         } else {
-            // Type 2 = explicit value (DXF)
-            ((2u32 << 24) | self.0 as u32) as i32
+            // Type 2 = explicit value (DXF); low byte = opacity = 255 - transparency
+            ((2u32 << 24) | (255 - self.0) as u32) as i32
         }
     }
 }
@@ -180,6 +191,31 @@ mod tests {
     #[test]
     fn test_default_transparency() {
         assert_eq!(Transparency::default(), Transparency::OPAQUE);
+    }
+
+    #[test]
+    fn test_packed_value_is_opacity_inverted() {
+        // On-disk low byte is opacity (255 = opaque), inverse of the internal
+        // transparency-amount representation.
+        // 0x020000FF: fully opaque.
+        assert_eq!(Transparency::from_alpha_value(0x0200_00FF), Transparency::OPAQUE);
+        // 0x02000026 (byte 38 opacity) → 85% transparent (internal byte 217).
+        let t = Transparency::from_alpha_value(0x0200_0026);
+        assert_eq!(t.alpha(), 217);
+        assert!((t.as_percent() - 0.85).abs() < 0.01);
+        // 0x02000000 (opacity 0) → fully transparent.
+        assert_eq!(Transparency::from_alpha_value(0x0200_0000), Transparency::TRANSPARENT);
+    }
+
+    #[test]
+    fn test_packed_value_roundtrip() {
+        // An 85%-transparent value (internal 217) writes opacity byte 38 to
+        // both DWG (type 3) and DXF (type 2), and reads back unchanged.
+        let t = Transparency::new(217);
+        assert_eq!(t.to_dxf_value() as u32, 0x0200_0026);
+        assert_eq!(t.to_alpha_value() as u32, 0x0300_0026);
+        assert_eq!(Transparency::from_alpha_value(t.to_dxf_value() as u32), t);
+        assert_eq!(Transparency::from_alpha_value(t.to_alpha_value() as u32), t);
     }
 }
 

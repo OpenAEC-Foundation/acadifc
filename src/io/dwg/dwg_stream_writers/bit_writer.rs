@@ -719,13 +719,9 @@ impl DwgBitWriter {
 
         self.write_bit_short(flags as i16);
 
-        // Field order matches the entity ENC encoding: transparency BL first,
-        // then the true-color rgb (book colors emit neither — the rgb comes
-        // from the AcDbColor handle).
-        if has_transparency {
-            self.write_bit_long(transparency.to_alpha_value());
-        }
-
+        // Field order matches the entity ENC encoding: the true-color rgb BL
+        // FIRST, then the transparency BL (book colors emit no rgb — it comes
+        // from the AcDbColor handle — but still emit the transparency last).
         if is_true_color && !is_book_color {
             let color_long = match color {
                 Color::Rgb { r, g, b } => {
@@ -738,6 +734,10 @@ impl DwgBitWriter {
                 Color::ByBlock => 0xC3u32 << 24,
             };
             self.write_bit_long(color_long as i32);
+        }
+
+        if has_transparency {
+            self.write_bit_long(transparency.to_alpha_value());
         }
     }
 
