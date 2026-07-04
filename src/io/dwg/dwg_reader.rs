@@ -245,6 +245,10 @@ fn extract_acds_record_blobs(buf: &[u8]) -> Vec<(u64, Vec<u8>)> {
     };
     let marker = [0xACu8, 0xD5, 0x5F, 0x64, 0x61, 0x74, 0x61, 0x5F]; // "\xAC\xD5_data_"
     let mut out: Vec<(u64, Vec<u8>)> = Vec::new();
+    // Records whose blob is not in the table's own data — handled below from the
+    // pre-table blob pool. Kept in record order.
+    let mut orphan_handles: Vec<u64> = Vec::new();
+    let mut first_table = usize::MAX;
     // A large datastore splits its records across several `_data_` segments, so
     // process every one whose content is a record table (opens with `col0=0x14`).
     let mut scan = 0;
@@ -254,6 +258,7 @@ fn extract_acds_record_blobs(buf: &[u8]) -> Vec<(u64, Vec<u8>)> {
         if rd(seg + 48) != Some(0x14) {
             continue; // e.g. the empty thumbnail `_data_` segment
         }
+        first_table = first_table.min(seg);
         // Segment size (RQ at header offset 16) bounds this segment's blob data,
         // so the last record does not run into the following segment.
         let seg_size = buf
@@ -282,7 +287,8 @@ fn extract_acds_record_blobs(buf: &[u8]) -> Vec<(u64, Vec<u8>)> {
             let region_start = base + off;
             let region_end = recs.get(k + 1).map_or(seg_end, |&(_, o)| base + o);
             if region_start >= seg_end || region_end <= region_start {
-                continue; // record with no geometry
+                orphan_handles.push(handle); // blob lives in the pre-table pool
+                continue;
             }
             let region = &buf[region_start..region_end.min(seg_end)];
             let Some(mp) = region
@@ -290,12 +296,36 @@ fn extract_acds_record_blobs(buf: &[u8]) -> Vec<(u64, Vec<u8>)> {
                 .position(|w| w == b"ASM BinaryFile")
                 .or_else(|| region.windows(15).position(|w| w == b"ACIS BinaryFile"))
             else {
-                continue; // no SAB body in this record's range
+                orphan_handles.push(handle); // blob lives in the pre-table pool
+                continue;
             };
             let start = region_start + mp;
             if let Some((end, marker_len)) = find_acds_end(buf, start) {
                 out.push((handle, buf[start..end + marker_len].to_vec()));
             }
+        }
+    }
+    // Records whose table entry carries no inline blob take theirs from a blob
+    // pool that sits before the first record table. Those blobs appear there in
+    // record order, so pair them one-for-one with the orphan records — but only
+    // when the counts match exactly, so a stray magic can't shift the pairing.
+    if !orphan_handles.is_empty() && first_table != usize::MAX {
+        let mut pool: Vec<Vec<u8>> = Vec::new();
+        let mut pos = 0;
+        while let Some(start) = find_acds_magic(buf, pos) {
+            if start >= first_table {
+                break;
+            }
+            match find_acds_end(buf, start) {
+                Some((end, marker_len)) => {
+                    pool.push(buf[start..end + marker_len].to_vec());
+                    pos = end + marker_len;
+                }
+                None => break,
+            }
+        }
+        if pool.len() == orphan_handles.len() {
+            out.extend(orphan_handles.into_iter().zip(pool));
         }
     }
     out
