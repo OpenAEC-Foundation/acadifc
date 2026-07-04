@@ -1393,12 +1393,27 @@ impl SatDocument {
     }
 
     /// Returns a record by index.
+    ///
+    /// Records are parsed and appended in index order, so slot `index` almost
+    /// always holds the record whose `.index == index` — an O(1) hit. Only a
+    /// document whose records were re-ordered or hand-built falls back to the
+    /// linear scan. Tessellation resolves O(records) pointers per solid, so the
+    /// old unconditional scan made every solid O(records²) — the dominant cost
+    /// of meshing an ACIS-heavy drawing.
     pub fn record(&self, index: usize) -> Option<&SatRecord> {
+        if let Some(r) = self.records.get(index) {
+            if r.index == index as i32 {
+                return Some(r);
+            }
+        }
         self.records.iter().find(|r| r.index == index as i32)
     }
 
     /// Returns a mutable record by index.
     pub fn record_mut(&mut self, index: usize) -> Option<&mut SatRecord> {
+        if matches!(self.records.get(index), Some(r) if r.index == index as i32) {
+            return self.records.get_mut(index);
+        }
         self.records.iter_mut().find(|r| r.index == index as i32)
     }
 
