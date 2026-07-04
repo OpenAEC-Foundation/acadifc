@@ -548,13 +548,18 @@ pub fn read_spline(
     let mut _flags1 = 0i32;
     let mut knot_param = 0i32;
 
-    let scenario;
+    let mut scenario = reader.read_bit_long();
     if version.r2013_plus(dxf_version) {
-        scenario = reader.read_bit_long();
         _flags1 = reader.read_bit_long();
         knot_param = reader.read_bit_long();
-    } else {
-        scenario = reader.read_bit_long();
+        // R2013+ encodes the storage method in `splineflags1`, not the leading
+        // scenario field (which is unreliable here): bit 0 = created from fit
+        // points (scenario 2), bit 1 = control vertices (scenario 1).
+        if _flags1 & 1 != 0 {
+            scenario = 2;
+        } else if _flags1 & 2 != 0 {
+            scenario = 1;
+        }
     }
 
     let degree = reader.read_bit_long();
