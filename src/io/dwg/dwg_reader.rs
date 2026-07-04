@@ -211,11 +211,20 @@ const ASM_END_MARKER: &[u8] = b"\x0E\x03End\x0E\x02of\x0E\x03ASM\x0D\x04data";
 /// the exact planar/NURBS export), not just ASM bodies read from other apps.
 const ACIS_END_MARKER: &[u8] = b"End-of-ACIS-data";
 
-/// First end-marker (ASM or classic ACIS) at/after `from`, with its length so
+/// First end-marker (ASM or classic ACIS) in `buf[from..to]`, with its length so
 /// the caller can advance past the whole terminator.
-fn find_acds_end(buf: &[u8], from: usize) -> Option<(usize, usize)> {
-    let asm = find_subsequence(buf, ASM_END_MARKER, from).map(|e| (e, ASM_END_MARKER.len()));
-    let acis = find_subsequence(buf, ACIS_END_MARKER, from).map(|e| (e, ACIS_END_MARKER.len()));
+///
+/// `to` bounds the search: a SAB body carries only ONE of the two end-marker
+/// families, so the search for the absent one would otherwise run to the end of
+/// the whole (often hundreds-of-MB) AcDs buffer on every call. With thousands of
+/// records that is O(records × buf) — the dominant cost of opening a 3D-heavy
+/// DWG. Callers pass the tightest known upper bound (segment end, next blob, or
+/// the pre-table region) so a missing marker costs one bounded scan, not a full
+/// one. (#203)
+fn find_acds_end(buf: &[u8], from: usize, to: usize) -> Option<(usize, usize)> {
+    let hay = &buf[..to.min(buf.len())];
+    let asm = find_subsequence(hay, ASM_END_MARKER, from).map(|e| (e, ASM_END_MARKER.len()));
+    let acis = find_subsequence(hay, ACIS_END_MARKER, from).map(|e| (e, ACIS_END_MARKER.len()));
     match (asm, acis) {
         (Some(a), Some(b)) => Some(if a.0 <= b.0 { a } else { b }),
         (a, None) => a,
@@ -300,7 +309,14 @@ fn extract_acds_record_blobs(buf: &[u8]) -> Vec<(u64, Vec<u8>)> {
                 continue;
             };
             let start = region_start + mp;
-            if let Some((end, marker_len)) = find_acds_end(buf, start) {
+            // This record's blob ends at its region boundary; the end marker can
+            // trail a few bytes past `off[r+1]`, so bound to `region_end` plus a
+            // small slack (clamped to the segment). Bounding to `region_end`, not
+            // `seg_end`, is what makes this linear: a big datastore is often ONE
+            // segment (seg_end ≈ buf.len()), so a per-record scan to seg_end for
+            // the absent marker family is still O(records × buf). (#203)
+            let end_bound = (region_end + ASM_END_MARKER.len()).min(seg_end);
+            if let Some((end, marker_len)) = find_acds_end(buf, start, end_bound) {
                 out.push((handle, buf[start..end + marker_len].to_vec()));
             }
         }
@@ -316,7 +332,9 @@ fn extract_acds_record_blobs(buf: &[u8]) -> Vec<(u64, Vec<u8>)> {
             if start >= first_table {
                 break;
             }
-            match find_acds_end(buf, start) {
+            // Pool blobs sit before the first record table, so bound the end
+            // search there rather than scanning into (or past) the tables.
+            match find_acds_end(buf, start, first_table) {
                 Some((end, marker_len)) => {
                     pool.push(buf[start..end + marker_len].to_vec());
                     pos = end + marker_len;
@@ -346,7 +364,12 @@ fn extract_acds_sab_blobs(buf: &[u8]) -> Vec<Vec<u8>> {
     // the buffer is scanned once overall — not once per blob per magic, which
     // was quadratic on 3D-heavy files with many SAB bodies (issue #203).
     while let Some(start) = find_acds_magic(buf, pos) {
-        match find_acds_end(buf, start) {
+        // A body's end marker precedes the next blob's header magic, so bound
+        // the (possibly-absent) marker search there instead of running to the
+        // end of the whole buffer on every blob — the same O(n²) trap as the
+        // record-table path. (#203)
+        let bound = find_acds_magic(buf, start + 1).unwrap_or(buf.len());
+        match find_acds_end(buf, start, bound) {
             Some((end, marker_len)) => {
                 let stop = end + marker_len;
                 blobs.push(buf[start..stop].to_vec());
