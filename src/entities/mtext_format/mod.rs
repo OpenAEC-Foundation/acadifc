@@ -100,6 +100,6 @@ pub use parser::parse_mtext;
 pub use parser::parse_plain_text;
 pub use types::{
     MTextColor, MTextDocument, MTextFont, MTextLineAlignment, MTextLineSpacing, MTextParagraph,
-    MTextParagraphAlignment, MTextSpan, MTextStroke, ParagraphProperties, SpanProperties,
-    SpecialChar, StackingData, StackingType, TabStop,
+    MTextParagraphAlignment, MTextScalar, MTextSpan, MTextStroke, ParagraphProperties,
+    SpanProperties, SpecialChar, StackingData, StackingType, TabStop,
 };

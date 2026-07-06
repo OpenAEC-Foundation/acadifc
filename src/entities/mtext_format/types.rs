@@ -456,6 +456,36 @@ impl MTextFont {
 // Span Properties
 // ============================================================================
 
+/// A height set by `\H`: either a multiplier on the current height
+/// (`\H<v>x;`, relative) or an absolute drawing-unit height (`\H<v>;`).
+///
+/// The two are kept distinct because a consumer resolves them differently: an
+/// absolute height is divided by the entity's text height to obtain a factor,
+/// while a relative factor applies directly. A prior absolute height carries
+/// through a following relative factor (`\H5;\H2x;` → `Absolute(10)`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum MTextScalar {
+    /// Multiplier relative to the current height (`\H<v>x;`).
+    Factor(f64),
+    /// Absolute drawing-unit height (`\H<v>;`).
+    Absolute(f64),
+}
+
+impl MTextScalar {
+    /// The numeric value, regardless of kind.
+    pub fn value(self) -> f64 {
+        match self {
+            MTextScalar::Factor(v) | MTextScalar::Absolute(v) => v,
+        }
+    }
+
+    /// `true` for a relative (`\H…x;`) factor.
+    pub fn is_relative(self) -> bool {
+        matches!(self, MTextScalar::Factor(_))
+    }
+}
+
 /// Properties applied to a text span.
 #[derive(Debug, Clone, PartialEq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -472,9 +502,9 @@ pub struct SpanProperties {
     /// Font specification. Empty name means inherit.
     pub font: Option<MTextFont>,
 
-    /// Height factor relative to base text height. `None` means 1.0 (default).
-    /// E.g. 0.5 means 50% of base height.
-    pub height: Option<f64>,
+    /// Height from `\H`: a relative factor (`\H<v>x;`) or an absolute
+    /// drawing-unit height (`\H<v>;`). `None` means inherit (default 1.0).
+    pub height: Option<MTextScalar>,
 
     /// Stroke decorations (underline, overline, strikethrough).
     pub stroke: MTextStroke,
@@ -1031,8 +1061,14 @@ impl MTextDocument {
 
         // Height — only emit when changed
         if props.height != current_props.height {
-            if let Some(h) = props.height {
-                write!(result, "\\H{};", h).ok();
+            match props.height {
+                Some(MTextScalar::Factor(v)) => {
+                    write!(result, "\\H{}x;", v).ok();
+                }
+                Some(MTextScalar::Absolute(v)) => {
+                    write!(result, "\\H{};", v).ok();
+                }
+                None => {}
             }
         }
 
@@ -1229,12 +1265,12 @@ mod tests {
         let mut props = SpanProperties::default();
         let mut other = SpanProperties::default();
         other.color = Some(MTextColor::Index(3));
-        other.height = Some(0.5);
+        other.height = Some(MTextScalar::Absolute(0.5));
         other.set_underline(true);
 
         props.merge(&other);
         assert_eq!(props.color, Some(MTextColor::Index(3)));
-        assert_eq!(props.height, Some(0.5));
+        assert_eq!(props.height, Some(MTextScalar::Absolute(0.5)));
         assert!(props.underline());
     }
 

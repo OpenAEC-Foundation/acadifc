@@ -593,12 +593,19 @@ impl MTextParser {
         };
 
         if let Ok(f) = num_str.trim().parse::<f64>() {
-            if is_relative {
-                let cur = self.current_props().height.unwrap_or(1.0);
-                self.current_props_mut().height = Some(cur * f.abs());
+            // Relative multiplies the current height, preserving whether that
+            // current height is a factor or an absolute value; a fresh relative
+            // is a factor over the implicit 1.0. Absolute always resets.
+            let scalar = if is_relative {
+                match self.current_props().height {
+                    Some(MTextScalar::Absolute(c)) => MTextScalar::Absolute(c * f.abs()),
+                    Some(MTextScalar::Factor(c)) => MTextScalar::Factor(c * f.abs()),
+                    None => MTextScalar::Factor(f.abs()),
+                }
             } else {
-                self.current_props_mut().height = Some(f.abs());
-            }
+                MTextScalar::Absolute(f.abs())
+            };
+            self.current_props_mut().height = Some(scalar);
         }
     }
 
@@ -1211,13 +1218,19 @@ mod tests {
     #[test]
     fn test_parse_height_absolute() {
         let doc = parse_mtext(r"{\H2;Big}", false);
-        assert_eq!(doc.paragraphs[0].spans[0].properties.height, Some(2.0));
+        assert_eq!(
+            doc.paragraphs[0].spans[0].properties.height,
+            Some(MTextScalar::Absolute(2.0))
+        );
     }
 
     #[test]
     fn test_parse_height_relative() {
         let doc = parse_mtext(r"{\H2x;Bigger}", false);
-        assert_eq!(doc.paragraphs[0].spans[0].properties.height, Some(2.0));
+        assert_eq!(
+            doc.paragraphs[0].spans[0].properties.height,
+            Some(MTextScalar::Factor(2.0))
+        );
     }
 
     // ========================================================================
@@ -1520,9 +1533,18 @@ mod tests {
         // Height set in outer group should be inherited
         let doc = parse_mtext("{\\H2;Normal{\\C1;Colored}Back}", false);
         // Normal has H2, Colored has H2+C1, Back has H2
-        assert_eq!(doc.paragraphs[0].spans[0].properties.height, Some(2.0));
-        assert_eq!(doc.paragraphs[0].spans[1].properties.height, Some(2.0));
-        assert_eq!(doc.paragraphs[0].spans[2].properties.height, Some(2.0));
+        assert_eq!(
+            doc.paragraphs[0].spans[0].properties.height,
+            Some(MTextScalar::Absolute(2.0))
+        );
+        assert_eq!(
+            doc.paragraphs[0].spans[1].properties.height,
+            Some(MTextScalar::Absolute(2.0))
+        );
+        assert_eq!(
+            doc.paragraphs[0].spans[2].properties.height,
+            Some(MTextScalar::Absolute(2.0))
+        );
     }
 
     // ========================================================================
@@ -1864,8 +1886,14 @@ mod tests {
     fn test_height_carries_across_paragraphs() {
         let doc = parse_mtext("{\\H2;Tall\\PStill tall}", false);
         assert_eq!(doc.paragraphs.len(), 2);
-        assert_eq!(doc.paragraphs[0].spans[0].properties.height, Some(2.0));
-        assert_eq!(doc.paragraphs[1].spans[0].properties.height, Some(2.0));
+        assert_eq!(
+            doc.paragraphs[0].spans[0].properties.height,
+            Some(MTextScalar::Absolute(2.0))
+        );
+        assert_eq!(
+            doc.paragraphs[1].spans[0].properties.height,
+            Some(MTextScalar::Absolute(2.0))
+        );
     }
 
     #[test]
