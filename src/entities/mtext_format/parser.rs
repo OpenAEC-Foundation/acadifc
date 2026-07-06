@@ -252,6 +252,30 @@ impl MTextParser {
                 '%' => {
                     self.handle_special_char();
                 }
+                '^' => {
+                    // Caret-encoded controls: `^I` tab, `^J` line break,
+                    // `^M` carriage return (ignored). Anything else is a
+                    // literal caret.
+                    match self.chars.get(self.pos + 1).copied() {
+                        Some('I') => {
+                            self.text_buf.push('\t');
+                            self.pos += 2;
+                        }
+                        Some('J') => {
+                            self.pos += 2;
+                            self.flush_current_span(merge_spans);
+                            self.document
+                                .push_paragraph(std::mem::take(&mut self.current_paragraph));
+                        }
+                        Some('M') => {
+                            self.pos += 2;
+                        }
+                        _ => {
+                            self.text_buf.push('^');
+                            self.pos += 1;
+                        }
+                    }
+                }
                 _ => {
                     self.text_buf.push(ch);
                     self.pos += 1;
@@ -353,6 +377,12 @@ impl MTextParser {
             }
             '}' => {
                 self.text_buf.push('}');
+                self.pos += 1;
+            }
+            // Escaped semicolon → literal `;` (so a `;` can appear in text
+            // without terminating a control code).
+            ';' => {
+                self.text_buf.push(';');
                 self.pos += 1;
             }
 
@@ -1320,6 +1350,21 @@ mod tests {
             parse_plain_text("%%176").paragraphs[0].to_plain_text(),
             "°"
         );
+    }
+
+    #[test]
+    fn test_mtext_escaped_semicolon() {
+        // `\;` is a literal semicolon, not a code terminator.
+        let doc = parse_mtext(r"a\;b", false);
+        assert_eq!(doc.to_plain_text(), "a;b");
+    }
+
+    #[test]
+    fn test_mtext_caret_codes() {
+        // `^I` → tab, `^J` → line break (new paragraph), `^M` → ignored.
+        assert!(parse_mtext("a^Ib", false).to_plain_text().contains('\t'));
+        assert_eq!(parse_mtext("a^Jb", false).paragraphs.len(), 2);
+        assert_eq!(parse_mtext("a^Mb", false).to_plain_text(), "ab");
     }
 
     // ========================================================================
