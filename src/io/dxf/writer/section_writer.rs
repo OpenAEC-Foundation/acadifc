@@ -1901,6 +1901,10 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             self.writer.write_double(20, seed.y)?;
         }
 
+        // Extended data (e.g. HATCHBACKGROUNDCOLOR) — must be the last group
+        // codes of the entity.
+        self.write_xdata(&hatch.common.extended_data)?;
+
         Ok(())
     }
 
