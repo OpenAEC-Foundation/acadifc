@@ -132,17 +132,22 @@ impl<W: Write> DxfTextWriter<W> {
             return t2 + 4;
         }
         let mut cursor = Cursor::new(&mut self.fmt_buf[..]);
-        // write! into a Cursor<&mut [u8]> does not allocate
-        let _ = write!(cursor, "{:.16}", value);
+        // Rust's `{}` Display for f64 emits the shortest decimal string that
+        // round-trips back to the same value, and never uses exponent notation
+        // for magnitudes in this branch's range (1e-15 ..= 1e15).  This matches
+        // AutoCAD's compact output (e.g. "943.920153") instead of dumping the
+        // full 16-digit binary expansion of the float ("943.9201530000000275"),
+        // which trimming trailing zeros cannot clean up because the tail digits
+        // are rounding noise, not zeros.  write! into a Cursor<&mut [u8]> does
+        // not allocate.
+        let _ = write!(cursor, "{}", value);
         let mut len = cursor.position() as usize;
-        // Trim trailing '0's (but keep at least one digit after '.')
-        while len > 1 && self.fmt_buf[len - 1] == b'0' {
-            len -= 1;
-        }
-        // If we trimmed down to just '.', add back a '0'
-        if len > 0 && self.fmt_buf[len - 1] == b'.' {
-            self.fmt_buf[len] = b'0';
-            len += 1;
+        // `{}` prints whole numbers without a fractional part ("15" not "15.0");
+        // DXF real values conventionally carry a decimal point, so add ".0".
+        if !self.fmt_buf[..len].contains(&b'.') {
+            self.fmt_buf[len] = b'.';
+            self.fmt_buf[len + 1] = b'0';
+            len += 2;
         }
         // Append CRLF
         self.fmt_buf[len] = b'\r';
@@ -337,6 +342,34 @@ mod tests {
         }
         let output = String::from_utf8(buf).unwrap();
         assert!(output.contains("FF\r\n"));
+    }
+
+    #[test]
+    fn test_write_double_compact() {
+        // Regression: the writer used to emit the full 16-decimal expansion of
+        // the f64 (e.g. "943.9201530000000275"), because trimming trailing
+        // zeros cannot remove binary rounding noise.  It must emit the shortest
+        // decimal that round-trips to the same value instead.
+        let mut buf = Vec::new();
+        {
+            let mut writer = DxfTextWriter::new(&mut buf);
+            writer.write_double(10, 943.920153).unwrap();
+        }
+        let output = String::from_utf8(buf).unwrap();
+        assert_eq!(output, " 10\r\n943.920153\r\n");
+    }
+
+    #[test]
+    fn test_write_double_integer_keeps_point() {
+        // Whole values must still carry a decimal point ("15.0", not "15"),
+        // since `{}` prints integers without a fractional part.
+        let mut buf = Vec::new();
+        {
+            let mut writer = DxfTextWriter::new(&mut buf);
+            writer.write_double(40, 15.0).unwrap();
+        }
+        let output = String::from_utf8(buf).unwrap();
+        assert_eq!(output, " 40\r\n15.0\r\n");
     }
 }
 
