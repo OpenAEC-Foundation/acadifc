@@ -150,7 +150,7 @@ pub enum DxfCode {
     /// Viewport ID
     ViewportId = 69,
     
-    /// Integer values (70-78)
+    /// Integer values (70-79)
     Int70 = 70,
     Int71 = 71,
     Int72 = 72,
@@ -160,6 +160,7 @@ pub enum DxfCode {
     Int76 = 76,
     Int77 = 77,
     Int78 = 78,
+    Int79 = 79,
 
     // ===== 90-99: 32-bit integer values =====
 
@@ -601,6 +602,7 @@ impl DxfCode {
             76 => DxfCode::Int76,
             77 => DxfCode::Int77,
             78 => DxfCode::Int78,
+            79 => DxfCode::Int79,
             90 => DxfCode::Int90,
             91 => DxfCode::Int91,
             92 => DxfCode::Int92,
