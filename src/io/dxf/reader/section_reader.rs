@@ -4149,6 +4149,31 @@ impl<'a> SectionReader<'a> {
                         };
                     }
                 }
+                52 => {
+                    if let Some(a) = pair.as_double() {
+                        hatch.pattern_angle = a.to_radians();
+                    }
+                }
+                41 => {
+                    if let Some(s) = pair.as_double() {
+                        hatch.pattern_scale = s;
+                    }
+                }
+                77 => {
+                    if let Some(d) = pair.as_i16() {
+                        hatch.is_double = d != 0;
+                    }
+                }
+                78 => {
+                    // Number of pattern definition lines. Each line follows as
+                    // 53 (angle), 43/44 (base point), 45/46 (offset), then 79
+                    // (dash count) and that many 49 (dash length) codes.
+                    let num_lines = pair.as_i16().unwrap_or(0).max(0) as usize;
+                    for _ in 0..num_lines {
+                        let line = self.read_hatch_pattern_line()?;
+                        hatch.pattern.lines.push(line);
+                    }
+                }
                 91 => {
                     if let Some(num_paths) = pair.as_i32() {
                         _num_boundary_paths = num_paths;
@@ -4242,6 +4267,48 @@ impl<'a> SectionReader<'a> {
         hatch.pattern_type = pattern_type;
 
         Ok(Some(hatch))
+    }
+
+    /// Read one pattern definition line for a HATCH (codes 53, 43/44, 45/46,
+    /// 79 + repeated 49). Angle is stored in radians to match the DWG reader.
+    fn read_hatch_pattern_line(&mut self) -> Result<crate::entities::hatch::HatchPatternLine> {
+        let mut line = crate::entities::hatch::HatchPatternLine {
+            angle: 0.0,
+            base_point: Vector2::new(0.0, 0.0),
+            offset: Vector2::new(0.0, 0.0),
+            dash_lengths: Vec::new(),
+        };
+        let mut num_dashes = 0usize;
+        // Fixed prefix ending at 79 (dash count); tolerate a missing/reordered
+        // code by pushing it back and stopping.
+        while let Some(p) = self.reader.read_pair()? {
+            match p.code {
+                53 => line.angle = p.as_double().unwrap_or(0.0).to_radians(),
+                43 => line.base_point.x = p.as_double().unwrap_or(0.0),
+                44 => line.base_point.y = p.as_double().unwrap_or(0.0),
+                45 => line.offset.x = p.as_double().unwrap_or(0.0),
+                46 => line.offset.y = p.as_double().unwrap_or(0.0),
+                79 => {
+                    num_dashes = p.as_i16().unwrap_or(0).max(0) as usize;
+                    break;
+                }
+                _ => {
+                    self.reader.push_back(p);
+                    break;
+                }
+            }
+        }
+        for _ in 0..num_dashes {
+            match self.reader.read_pair()? {
+                Some(p) if p.code == 49 => line.dash_lengths.push(p.as_double().unwrap_or(0.0)),
+                Some(p) => {
+                    self.reader.push_back(p);
+                    break;
+                }
+                None => break,
+            }
+        }
+        Ok(line)
     }
 
     /// Read a line edge for a HATCH boundary path (codes 10/20, 11/21)
