@@ -1170,6 +1170,74 @@ impl DwgDocumentBuilder {
             }
         }
 
+        // ── Post-pass: guarantee the mandatory *Model_Space / *Paper_Space ──
+        // block records exist and enumerate their geometry.
+        //
+        // The block-control table names the model/paper-space handles, but a
+        // file can reach here without their BLOCK_HEADER ever materialising as a
+        // record (absent from the object stream). The DWG writer emits a block's
+        // contents by walking `BlockRecord::entity_handles`, so a missing record
+        // — or one whose owned list stayed empty while entities point at it via
+        // `owner_handle` — serialises to nothing, silently dropping that space's
+        // geometry on the next save. Synthesize the missing records (the writer
+        // fabricates their BLOCK/ENDBLK markers from the allocated handles) and
+        // rebuild any empty owned-list from ownership so the round-trip is
+        // lossless.
+        {
+            use std::collections::HashMap;
+            for (h, is_model) in [
+                (document.header.model_space_block_handle, true),
+                (document.header.paper_space_block_handle, false),
+            ] {
+                if h.is_null() || document.block_records.iter().any(|br| br.handle == h) {
+                    continue;
+                }
+                let mut br = if is_model {
+                    crate::tables::BlockRecord::model_space()
+                } else {
+                    crate::tables::BlockRecord::paper_space()
+                };
+                br.handle = h;
+                br.block_entity_handle = document.allocate_handle();
+                br.block_end_handle = document.allocate_handle();
+                // Cross-link the owning Layout object, if present, so the record
+                // and its Layout reference each other like a normally-read pair.
+                for (oh, obj) in document.objects.iter() {
+                    if let crate::objects::ObjectType::Layout(l) = obj {
+                        if l.block_record == h {
+                            br.layout = *oh;
+                            break;
+                        }
+                    }
+                }
+                let _ = document.block_records.add(br);
+            }
+            // Fill any empty owned-entity list from `owner_handle`, in document
+            // (draw) order, excluding structural markers and INSERT sub-entities
+            // — the same set the writer excludes.
+            let mut by_owner: HashMap<Handle, Vec<Handle>> = HashMap::new();
+            for e in &document.entities {
+                if matches!(
+                    e,
+                    EntityType::Block(_) | EntityType::BlockEnd(_) | EntityType::AttributeEntity(_)
+                ) {
+                    continue;
+                }
+                let owner = e.common().owner_handle;
+                if owner.is_null() {
+                    continue;
+                }
+                by_owner.entry(owner).or_default().push(e.common().handle);
+            }
+            for br in document.block_records.iter_mut() {
+                if br.entity_handles.is_empty() {
+                    if let Some(list) = by_owner.get(&br.handle) {
+                        br.entity_handles = list.clone();
+                    }
+                }
+            }
+        }
+
         self.notifications
     }
 
