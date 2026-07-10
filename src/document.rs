@@ -871,6 +871,34 @@ impl Default for HeaderVariables {
     }
 }
 
+/// Format of an embedded DWG preview/thumbnail image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum PreviewFormat {
+    /// Windows DIB — a `BITMAPINFOHEADER` + palette + pixels, WITHOUT the
+    /// 14-byte `BITMAPFILEHEADER`. Prepend a file header to save as `.bmp`.
+    Bmp,
+    /// Windows Metafile.
+    Wmf,
+    /// PNG (written by R2013+).
+    Png,
+}
+
+/// An embedded preview/thumbnail image stored in a DWG file.
+///
+/// DWG files carry a small raster preview of the drawing, shown by file
+/// browsers and the Open dialog. `data` holds the raw stored image bytes in
+/// `format`. `None` on [`CadDocument::preview`] means the file has no preview;
+/// the writer then emits an empty preview section (the previous behaviour).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Preview {
+    /// Image encoding of `data`.
+    pub format: PreviewFormat,
+    /// Raw image bytes exactly as stored in the file (a DIB for `Bmp`).
+    pub data: Vec<u8>,
+}
+
 /// A CAD document containing all drawing data
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -966,6 +994,11 @@ pub struct CadDocument {
     /// `None` when not loaded from DWG (new/DXF).
     pub dwg_source_version: Option<DxfVersion>,
 
+    /// Embedded preview/thumbnail image. Populated by the DWG reader from the
+    /// file's preview section; the DWG writer embeds it when `Some` and emits an
+    /// empty preview when `None`. Not part of DXF.
+    pub preview: Option<Preview>,
+
     /// Modeler-entity handles (3DSOLID/REGION/BODY/SURFACE) whose geometry is
     /// stored as SAB blobs in the `AcDb:AcDsPrototype_1b` data-store section,
     /// in object-stream (file-offset) order. Populated by the DWG reader so the
@@ -1006,6 +1039,7 @@ impl CadDocument {
             reactors_by_handle: HashMap::new(),
             block_entity_handles: HashMap::new(),
             dwg_source_version: None,
+            preview: None,
             acis_sab_handles: Vec::new(),
             // Start handle allocation above reserved table handles (0x1-0xA)
             // Table handles are well-known fixed values used by AutoCAD

@@ -29,7 +29,7 @@ use crate::types::{DxfVersion, Handle};
 
 use super::dwg_stream_writers::{
     app_info_writer, aux_header_writer, classes_writer, handle_writer, header_writer,
-    preview_writer, DwgObjectWriter,
+    DwgObjectWriter,
 };
 use super::file_headers::{
     section_names, DwgFileHeaderWriterAC15, DwgFileHeaderWriterAC18, DwgFileHeaderWriterAC21,
@@ -443,7 +443,11 @@ fn write_ac15<W: Write + Seek>(
     fhw.add_section(section_names::HANDLES, handles_data);
 
     // ── Section: Preview ──
-    let preview_data = preview_writer::write_preview(version);
+    // Preview is the last section, so its file offset is known now; the
+    // container's image `start` fields are absolute file offsets relative to it.
+    let preview_base = fhw.pending_section_offset() as u64;
+    let preview_data =
+        crate::io::dwg::preview::build_preview(document.preview.as_ref(), preview_base);
     fhw.add_section(section_names::PREVIEW, preview_data);
 
     // ── Write final file ──
@@ -505,8 +509,21 @@ fn write_ac18<W: Write + Seek>(
     )?;
 
     // ── Section: Preview ──
-    let preview_data = preview_writer::write_preview(version);
-    fhw.add_section(output, section_names::PREVIEW, &preview_data, false, 0x400)?;
+    // The image `start` fields are absolute file offsets, so the preview page's
+    // data position must be known BEFORE building the container (the ODA page
+    // checksum covers the final bytes — patching offsets afterward would break
+    // it). `add_section` aligns via `write_magic_number` (pads by `pos % 0x20`)
+    // then writes a 0x20 page header; the header's preview seeker points at
+    // `page + 0x20`, which is where the container lands.
+    let cur = output.seek(std::io::SeekFrom::Current(0))? as u64;
+    let preview_base = (cur + cur % 0x20) + 0x20;
+    let preview_data =
+        crate::io::dwg::preview::build_preview(document.preview.as_ref(), preview_base);
+    // Keep the whole preview in one contiguous page (a split would scatter the
+    // container across page headers): a decompressed size ≥ its length, rounded
+    // up to a 0x20 multiple so the uncompressed page needs no compression pad.
+    let preview_page = ((preview_data.len() + 0x1F) & !0x1F).max(0x20);
+    fhw.add_section(output, section_names::PREVIEW, &preview_data, false, preview_page)?;
 
     // ── Section: AppInfo ──
     let app_info_data = app_info_writer::write_app_info(version);
@@ -594,7 +611,15 @@ fn write_ac21_impl<W: Write + Seek>(
     fhw.add_section(output, section_names::SUMMARY_INFO, &summary_data)?;
 
     // Preview
-    let preview_data = preview_writer::write_preview(version);
+    // AC21 `encoding=1` sections store raw, un-RS-encoded, 32-byte-aligned data,
+    // so the preview container lands contiguously at the current file position
+    // (full 1024-byte pages leave no gaps) and its seeker in the header points
+    // straight at it. That position is the `base` the container's absolute image
+    // `start` offsets are relative to; compute it before building (the per-page
+    // checksum covers the final bytes).
+    let preview_base = output.seek(std::io::SeekFrom::Current(0))? as u64;
+    let preview_data =
+        crate::io::dwg::preview::build_preview(document.preview.as_ref(), preview_base);
     fhw.add_section(output, section_names::PREVIEW, &preview_data)?;
 
     // AppInfo

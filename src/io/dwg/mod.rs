@@ -50,6 +50,7 @@ pub mod dwg_version;
 pub mod dwg_writer;
 pub mod eed_codec;
 pub mod file_headers;
+pub mod preview;
 pub mod reed_solomon;
 
 pub use dwg_reader::DwgReader;

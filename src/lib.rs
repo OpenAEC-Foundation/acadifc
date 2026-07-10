@@ -157,6 +157,7 @@ pub use tables::{
 
 // Re-export document
 pub use document::CadDocument;
+pub use document::{Preview, PreviewFormat};
 
 // Re-export I/O types
 pub use io::dxf::{DxfReader, DxfReaderConfiguration, DxfWriter};

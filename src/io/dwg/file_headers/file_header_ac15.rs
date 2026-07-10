@@ -109,6 +109,21 @@ impl DwgFileHeaderWriterAC15 {
         }
     }
 
+    /// File offset where the next section added will begin.
+    ///
+    /// Equals the file header size plus every section already added. Because the
+    /// Preview is added last, calling this right before adding it yields the
+    /// Preview's file offset — the `base` its container's absolute image offsets
+    /// are relative to.
+    pub fn pending_section_offset(&self) -> usize {
+        FILE_HEADER_SIZE
+            + self
+                .records
+                .values()
+                .map(|(_, d)| d.as_ref().map_or(0, |d| d.len()))
+                .sum::<usize>()
+    }
+
     /// Get the file offset where the AcDbObjects section starts.
     ///
     /// This is used by the object writer to compute absolute handle→offset

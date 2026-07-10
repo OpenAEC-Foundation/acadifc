@@ -692,6 +692,32 @@ impl<R: Read + Seek> DwgReader<R> {
             }
         }
 
+        // 7. Preview / thumbnail image. Stored uncompressed at the raw file
+        //    offset in the header's preview seeker (all versions), wrapped in a
+        //    sentinel-bracketed container. Best-effort: a malformed or absent
+        //    preview simply leaves `document.preview` as `None`.
+        if info.preview_address > 0 {
+            let base = info.preview_address as u64;
+            if self.stream.seek(SeekFrom::Start(base)).is_ok() {
+                let mut head = [0u8; 20];
+                if self.stream.read_exact(&mut head).is_ok() {
+                    if let Some(overall) = crate::io::dwg::preview::overall_size(&head) {
+                        // Guard against a garbage size before allocating.
+                        if overall > 0 && overall < 64 * 1024 * 1024 {
+                            let total = crate::io::dwg::preview::container_len(overall);
+                            let mut buf = vec![0u8; total];
+                            if self.stream.seek(SeekFrom::Start(base)).is_ok()
+                                && self.stream.read_exact(&mut buf).is_ok()
+                            {
+                                document.preview =
+                                    crate::io::dwg::preview::parse_preview(&buf, base);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Transfer reader notifications to the document so callers can
         // inspect them via `document.notifications`.
         document.notifications.extend(std::mem::take(&mut self.notifications));
