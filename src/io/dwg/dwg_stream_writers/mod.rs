@@ -7,7 +7,6 @@
 //! ## Section writers (Sprint 3)
 //!
 //! Higher-level writers that produce complete DWG sections:
-//! - `preview_writer` — empty preview/thumbnail section
 //! - `app_info_writer` — application information section
 //! - `aux_header_writer` — auxiliary header (version, timestamps, HANDSEED)
 //! - `classes_writer` — DXF class definitions section
@@ -23,7 +22,6 @@ pub mod classes_writer;
 pub mod handle_writer;
 pub mod header_writer;
 pub mod object_writer;
-pub mod preview_writer;
 
 pub use bit_writer::DwgBitWriter;
 pub use merged_writer::DwgMergedWriter;
