@@ -1238,7 +1238,50 @@ impl DwgDocumentBuilder {
             }
         }
 
+        // The current model-space annotation scale (CANNOSCALE) is not carried
+        // in the DWG header stream, only in the AcDbVariableDictionary. Reflect
+        // it into the header so consumers (and DXF export) see the real scale
+        // rather than the "1:1" default.
+        Self::reflect_annotation_scale(document);
+
         self.notifications
+    }
+
+    /// Populate the header's current annotation scale (CANNOSCALE) from the
+    /// AcDbVariableDictionary — the DWG header stream omits it. Sets the scale
+    /// name and, from the referenced AcDbScale, the numeric value
+    /// (paper units / drawing units, e.g. "1:70" → 1/70).
+    fn reflect_annotation_scale(document: &mut CadDocument) {
+        let var_handle = document.objects.values().find_map(|o| match o {
+            crate::objects::ObjectType::Dictionary(d) => d
+                .entries
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("CANNOSCALE"))
+                .map(|(_, vh)| *vh),
+            _ => None,
+        });
+        let Some(vh) = var_handle else {
+            return;
+        };
+        let name = match document.objects.get(&vh) {
+            Some(crate::objects::ObjectType::DictionaryVariable(dv)) => dv.value.clone(),
+            _ => return,
+        };
+        if name.trim().is_empty() {
+            return;
+        }
+        let value = document.objects.values().find_map(|o| match o {
+            crate::objects::ObjectType::Scale(s)
+                if s.name.eq_ignore_ascii_case(&name) && s.drawing_units != 0.0 =>
+            {
+                Some(s.paper_units / s.drawing_units)
+            }
+            _ => None,
+        });
+        document.header.current_annotation_scale = name;
+        if let Some(v) = value {
+            document.header.annotation_scale_value = v;
+        }
     }
 
     /// Process a single object record in Pass 2.
