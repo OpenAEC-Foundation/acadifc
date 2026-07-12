@@ -1044,8 +1044,35 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         Ok(())
     }
 
-    /// Write an entity with explicit owner
+    /// Write an entity with explicit owner, followed by its XDATA.
+    ///
+    /// XDATA must sit at the end of the entity's own group codes, before any
+    /// child records (VERTEX / ATTRIB / SEQEND). Writers that emit such inline
+    /// children — the polylines, INSERT-with-attributes, the mesh forms — and
+    /// ATTRIB (emitted inline by INSERT) write their own XDATA at the right
+    /// spot; every other entity gets it here. `Unknown` entities re-emit their
+    /// captured bytes verbatim, so they are skipped.
     fn write_entity_with_owner(&mut self, entity: &EntityType, owner: Handle) -> Result<()> {
+        self.write_entity_body(entity, owner)?;
+        if !matches!(
+            entity,
+            EntityType::Polyline(_)
+                | EntityType::Polyline2D(_)
+                | EntityType::Polyline3D(_)
+                | EntityType::Insert(_)
+                | EntityType::PolyfaceMesh(_)
+                | EntityType::PolygonMesh(_)
+                | EntityType::AttributeEntity(_)
+                | EntityType::Unknown(_)
+        ) {
+            self.write_xdata(&entity.common().extended_data)?;
+        }
+        Ok(())
+    }
+
+    /// Dispatch to the per-type entity writer (no XDATA — see
+    /// [`write_entity_with_owner`](Self::write_entity_with_owner)).
+    fn write_entity_body(&mut self, entity: &EntityType, owner: Handle) -> Result<()> {
         match entity {
             EntityType::Point(e) => self.write_point(e, owner),
             EntityType::Line(e) => self.write_line(e, owner),
@@ -1320,6 +1347,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         }
         self.writer.write_i16(70, flags)?;
 
+        // XDATA precedes the child VERTEX/SEQEND records.
+        self.write_xdata(&polyline.common.extended_data)?;
+
         // VERTEX and SEQEND are owned by the polyline entity
         let polyline_handle = polyline.common.handle;
 
@@ -1377,6 +1407,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         if polyline.end_width != 0.0 {
             self.writer.write_double(41, polyline.end_width)?;
         }
+
+        // XDATA precedes the child VERTEX/SEQEND records.
+        self.write_xdata(&polyline.common.extended_data)?;
 
         // VERTEX and SEQEND are owned by the polyline entity
         let polyline_handle = polyline.common.handle;
@@ -1901,10 +1934,8 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             self.writer.write_double(20, seed.y)?;
         }
 
-        // Extended data (e.g. HATCHBACKGROUNDCOLOR) — must be the last group
-        // codes of the entity.
-        self.write_xdata(&hatch.common.extended_data)?;
-
+        // XDATA (e.g. HATCHBACKGROUNDCOLOR) is emitted by write_entity_with_owner
+        // after this returns — HATCH has no child records to precede.
         Ok(())
     }
 
@@ -2090,6 +2121,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         }
         self.write_normal(insert.normal)?;
 
+        // XDATA precedes the child ATTRIB/SEQEND records.
+        self.write_xdata(&insert.common.extended_data)?;
+
         // Write child ATTRIB entities + SEQEND when attributes are present
         if insert.has_attributes() {
             let insert_handle = insert.handle();
@@ -2169,7 +2203,10 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         
         // Polyline flags (bit 8 = 3D polyline)
         self.writer.write_i16(70, polyline.flags.to_bits() as i16)?;
-        
+
+        // XDATA precedes the child VERTEX/SEQEND records.
+        self.write_xdata(&polyline.common.extended_data)?;
+
         // Write vertices with proper subclass markers
         let polyline_handle = polyline.handle();
         for vertex in polyline.vertices.iter() {
@@ -2422,7 +2459,10 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         
         // Vertical alignment
         self.writer.write_i16(74, attrib.vertical_alignment.to_value())?;
-        
+
+        // XDATA precedes the parent INSERT's child SEQEND record.
+        self.write_xdata(&attrib.common.extended_data)?;
+
         Ok(())
     }
 
@@ -4271,8 +4311,11 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         
         // Vertex count - MUST come before smooth surface type
         self.writer.write_i16(71, mesh.vertex_count() as i16)?;
-        // Face count - MUST come before smooth surface type  
+        // Face count - MUST come before smooth surface type
         self.writer.write_i16(72, mesh.face_count() as i16)?;
+
+        // XDATA precedes the child VERTEX/SEQEND records.
+        self.write_xdata(&mesh.common.extended_data)?;
 
         // Write vertices with proper subclass markers
         for vertex in mesh.vertices.iter() {
@@ -4559,6 +4602,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             self.writer.write_double(220, mesh.normal.y)?;
             self.writer.write_double(230, mesh.normal.z)?;
         }
+
+        // XDATA precedes the child VERTEX/SEQEND records.
+        self.write_xdata(&mesh.common.extended_data)?;
 
         // VERTEX and SEQEND are owned by the mesh entity
         let mesh_handle = mesh.common.handle;
