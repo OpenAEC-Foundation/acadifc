@@ -418,8 +418,14 @@ impl DwgObjectReader {
         // R2013+: `has_ds_data` bit — set when the entity's geometry lives in
         // the AcDs data store (3DSOLID/REGION/BODY/SURFACE SAB blobs). Captured
         // so the AcDs blob→entity attach can honour object-stream order.
+        // The bit is absent for entities serialized WITH proxy/preview vector
+        // graphics (`has_graphic` == true) — e.g. MULTILEADER and WIPEOUT written
+        // by applications that cache a vector preview. Those objects are
+        // proxy-style serializations that omit the AcDs indicator; reading it
+        // there consumes a data bit and desyncs the whole record (the type-
+        // specific fields following common data then decode to garbage).
         let mut has_ds_data = false;
-        if self.version.r2013_plus(self.dxf_version) {
+        if self.version.r2013_plus(self.dxf_version) && !has_graphic {
             has_ds_data = reader.read_bit();
         }
 

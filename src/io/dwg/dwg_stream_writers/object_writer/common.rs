@@ -313,7 +313,8 @@ impl<'a> DwgObjectWriter<'a> {
         self.write_common_data(type_code, handle, xdata);
 
         // ── MAIN: graphic presence flag + optional graphic bytes ──
-        self.writer.write_bit(graphic_data.is_some());
+        let has_graphic = graphic_data.is_some();
+        self.writer.write_bit(has_graphic);
         if let Some(gdata) = graphic_data {
             // R2010+: BLL (Bit Long Long); pre-R2010: RL (Raw Long)
             let gsize = gdata.len() as i64;
@@ -389,7 +390,12 @@ impl<'a> DwgObjectWriter<'a> {
         // reader knows to pull its geometry from there. Set by the modeler
         // writer just before this call; consumed and cleared here so every
         // other entity writes false.
-        if self.version.r2013_plus(self.dxf_version) {
+        //
+        // Mirror the reader (see read_common_entity_data): entities serialized
+        // WITH proxy/preview vector graphics (`has_graphic`) omit this bit, so
+        // do not write it for them — otherwise a re-read (which skips it there)
+        // would desync the record.
+        if self.version.r2013_plus(self.dxf_version) && !has_graphic {
             let has_ds = self.pending_has_ds_data;
             self.writer.write_bit(has_ds);
         }
