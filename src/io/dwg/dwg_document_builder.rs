@@ -2989,6 +2989,27 @@ impl DwgDocumentBuilder {
                     );
                 }
                 _ => {
+                    // Annotative object-context leaves (*OBJECTCONTEXTDATA) carry
+                    // their annotation scale as the FIRST object-specific handle
+                    // (right after the common owner/reactors/xdict handles that
+                    // read_common_non_entity_data already consumed). Capture it
+                    // into the side map. The object is still stored verbatim as
+                    // Unknown below for byte-exact roundtrip — reading one handle
+                    // does not disturb raw_merged_data()/get_handle_bits(), which
+                    // snapshot the whole object independent of the read cursor.
+                    let is_context_data = document.classes.iter().any(|c| {
+                        c.class_number == type_code
+                            && c.dxf_name.to_uppercase().contains("OBJECTCONTEXTDATA")
+                    });
+                    if is_context_data {
+                        let scale = reader.read_handle();
+                        if scale != 0 {
+                            document
+                                .context_scales
+                                .insert(Handle::from(handle), Handle::from(scale));
+                        }
+                    }
+
                     // Preserve unrecognised non-entity objects verbatim so
                     // they survive roundtrip without losing their handles.
                     let type_name = format!("DWG_OBJ_{}", type_code);

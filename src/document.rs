@@ -965,6 +965,13 @@ pub struct CadDocument {
     /// without re-decoding the raw object stream.
     pub block_visibility_params: HashMap<Handle, crate::objects::BlockVisibilityParameter>,
 
+    /// Annotation-scale handle for each annotative object-context leaf (an
+    /// `*OBJECTCONTEXTDATA` object). A *side* view: the leaves stay verbatim in
+    /// `objects` as `ObjectType::Unknown` for DWG round-trip. Maps the context
+    /// object handle → its `AcDbScale` handle (in `ACAD_SCALELIST`), so a
+    /// consumer can resolve an annotative entity's applied annotation scale.
+    pub context_scales: HashMap<Handle, Handle>,
+
     /// AcDbBlockRepresentationData link: representation-object handle → the
     /// dynamic block-definition handle it represents (group code 340). Lets a
     /// consumer connect an anonymous evaluated block to its dynamic definition
@@ -1033,6 +1040,7 @@ impl CadDocument {
             entity_index: HashMap::new(),
             objects: HashMap::new(),
             block_visibility_params: HashMap::new(),
+            context_scales: HashMap::new(),
             block_representations: HashMap::new(),
             eed_by_handle: HashMap::new(),
             xdic_by_handle: HashMap::new(),
