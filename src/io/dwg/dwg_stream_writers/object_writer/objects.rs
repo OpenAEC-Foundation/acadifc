@@ -203,6 +203,7 @@ impl<'a> DwgObjectWriter<'a> {
             ObjectType::ImageDefinitionReactor(r) => self.write_image_definition_reactor(r),
             ObjectType::PlotSettings(p) => self.write_plot_settings_obj(p),
             ObjectType::Scale(s) => self.write_scale(s),
+            ObjectType::ObjectContextData(c) => self.write_object_context_data(c),
             ObjectType::SortEntitiesTable(s) => self.write_sort_entities_table(s),
             ObjectType::DictionaryVariable(d) => self.write_dictionary_variable(d),
             ObjectType::RasterVariables(r) => self.write_raster_variables(r),
@@ -1030,6 +1031,148 @@ impl<'a> DwgObjectWriter<'a> {
         self.writer.write_bit(scale.is_unit_scale);
 
         self.register_object(scale.handle);
+    }
+
+    // ── Object Context Data (annotative per-scale leaf) ─────────────
+
+    /// Write an `AcDb*ObjectContextData` leaf.
+    ///
+    /// An object read from a file carries its verbatim record in `source_raw`
+    /// and is re-emitted byte-for-byte (identical to the previous `Unknown`
+    /// passthrough) when the target uses the same encoding family; on an
+    /// incompatible cross-version save it is dropped, exactly as `Unknown` was.
+    /// A synthesized object (`source_raw == None`) is encoded from its fields:
+    /// the shared `AcDbObjectContextData` base (class_version, is_default), the
+    /// per-type placement payload in the DATA stream, and the
+    /// `AcDbAnnotScaleObjectContextData` scale handle in the object HANDLE
+    /// stream (the data and handle streams are written independently, so the
+    /// scale is the first object-specific handle regardless of interleave).
+    fn write_object_context_data(&mut self, obj: &ObjectContextData) {
+        if let Some(ref raw) = obj.source_raw {
+            if self.raw_passthrough_compatible(obj.source_version) {
+                self.register_raw_object(obj.handle, raw, obj.source_handle_bits);
+            }
+            return;
+        }
+
+        // UNLISTED type — resolve the 500+ class number (registered in the
+        // default class set, so this always resolves for a synthesized object).
+        let type_code = self.class_type_code(obj.class_name(), 0);
+        self.write_common_non_entity_data(
+            type_code,
+            obj.handle,
+            obj.owner_handle,
+            &obj.reactors,
+            &obj.xdictionary_handle,
+        );
+
+        // AcDbObjectContextData base.
+        self.writer.write_bit_short(obj.class_version);
+        self.writer.write_bit(obj.is_default);
+
+        // AcDb<Type>ObjectContextData placement payload (DATA stream).
+        match &obj.kind {
+            ObjectContextKind::BlkRef { rotation, insertion, scale_factor } => {
+                self.writer.write_bit_double(*rotation);
+                self.writer.write_bit_double(insertion.x);
+                self.writer.write_bit_double(insertion.y);
+                self.writer.write_bit_double(insertion.z);
+                self.writer.write_bit_double(scale_factor.x);
+                self.writer.write_bit_double(scale_factor.y);
+                self.writer.write_bit_double(scale_factor.z);
+            }
+            ObjectContextKind::Text { horizontal_mode, rotation, insertion, alignment } => {
+                self.writer.write_bit_short(*horizontal_mode);
+                self.writer.write_bit_double(*rotation);
+                self.writer.write_raw_double(insertion.x);
+                self.writer.write_raw_double(insertion.y);
+                self.writer.write_raw_double(alignment.x);
+                self.writer.write_raw_double(alignment.y);
+            }
+            ObjectContextKind::MText(m) => {
+                self.writer.write_bit_long(m.attachment);
+                // Binary stores x_axis_dir BEFORE ins_pt.
+                self.writer.write_bit_double(m.x_axis_dir.x);
+                self.writer.write_bit_double(m.x_axis_dir.y);
+                self.writer.write_bit_double(m.x_axis_dir.z);
+                self.writer.write_bit_double(m.insertion.x);
+                self.writer.write_bit_double(m.insertion.y);
+                self.writer.write_bit_double(m.insertion.z);
+                self.writer.write_bit_double(m.rect_width);
+                self.writer.write_bit_double(m.rect_height);
+                self.writer.write_bit_double(m.extents_width);
+                self.writer.write_bit_double(m.extents_height);
+                self.writer.write_bit_long(m.column_type);
+                if m.column_type != 0 {
+                    if let Some(c) = &m.columns {
+                        self.writer.write_bit_long(c.num_heights);
+                        self.writer.write_bit_double(c.width);
+                        self.writer.write_bit_double(c.gutter);
+                        self.writer.write_bit(c.auto_height);
+                        self.writer.write_bit(c.flow_reversed);
+                        if !c.auto_height && m.column_type == 2 {
+                            for h in &c.heights {
+                                self.writer.write_bit_double(*h);
+                            }
+                        }
+                    }
+                }
+            }
+            ObjectContextKind::Dim(d) => {
+                // AcDbDimensionObjectContextData base (data stream).
+                self.writer.write_raw_double(d.def_pt.x);
+                self.writer.write_raw_double(d.def_pt.y);
+                self.writer.write_bit(d.is_def_textloc);
+                self.writer.write_bit_double(d.text_rotation);
+                self.writer.write_bit(d.b293);
+                self.writer.write_bit(d.dimtofl);
+                self.writer.write_bit(d.dimosxd);
+                self.writer.write_bit(d.dimatfit);
+                self.writer.write_bit(d.dimtix);
+                self.writer.write_bit(d.dimtmove);
+                self.writer.write_byte(d.override_code);
+                self.writer.write_bit(d.has_arrow2);
+                self.writer.write_bit(d.flip_arrow2);
+                self.writer.write_bit(d.flip_arrow1);
+                // Subtype-specific 3BD point(s).
+                let mut pt = |p: &crate::types::Vector3| {
+                    self.writer.write_bit_double(p.x);
+                    self.writer.write_bit_double(p.y);
+                    self.writer.write_bit_double(p.z);
+                };
+                match &d.subtype {
+                    DimSubtype::Aligned { dimline_pt } => pt(dimline_pt),
+                    DimSubtype::Angular { arc_pt } => pt(arc_pt),
+                    DimSubtype::Diametric { first_arc_pt, def_pt } => {
+                        pt(first_arc_pt);
+                        pt(def_pt);
+                    }
+                    DimSubtype::Radial { first_arc_pt } => pt(first_arc_pt),
+                    DimSubtype::RadialLarge { ovr_center, jog_point } => {
+                        pt(ovr_center);
+                        pt(jog_point);
+                    }
+                    DimSubtype::Ordinate { feature_location_pt, leader_endpt } => {
+                        pt(feature_location_pt);
+                        pt(leader_endpt);
+                    }
+                }
+            }
+            ObjectContextKind::Opaque => {}
+        }
+
+        // AcDbAnnotScaleObjectContextData: the scale handle rides the object
+        // handle stream (LibreDWG ref-code 2 = soft owner).
+        self.writer
+            .write_handle(DwgReferenceType::SoftOwnership, obj.scale.value());
+        // Dimension context also carries a hard-pointer to its block (code 5),
+        // emitted after the scale in the handle stream.
+        if let ObjectContextKind::Dim(d) = &obj.kind {
+            self.writer
+                .write_handle(DwgReferenceType::HardPointer, d.block.value());
+        }
+
+        self.register_object(obj.handle);
     }
 
     // ── Sort Entities Table ─────────────────────────────────────────

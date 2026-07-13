@@ -1421,6 +1421,53 @@ impl CadDocument {
         self.classes.update_defaults();
     }
 
+    /// Ensure the CLASSES table carries the entry for an annotative
+    /// `AcDb*ObjectContextData` leaf class, so the DWG/DXF writer can emit its
+    /// 500+ class number. Call this when synthesizing a per-object annotation
+    /// context whose class the drawing does not already declare. No-op if the
+    /// class is already present or the name is unrecognised.
+    ///
+    /// Deliberately *not* part of [`initialize_defaults`](Self::initialize_defaults):
+    /// the DWG writer emits every class in this table, so auto-registering these
+    /// would inject spurious CLASSES entries into files that carry no annotative
+    /// context objects.
+    pub fn register_object_context_class(&mut self, dxf_name: &str) {
+        let cpp = match dxf_name {
+            "ACDB_BLKREFOBJECTCONTEXTDATA_CLASS" => "AcDbBlkRefObjectContextData",
+            "ACDB_TEXTOBJECTCONTEXTDATA_CLASS" => "AcDbTextObjectContextData",
+            "ACDB_MTEXTOBJECTCONTEXTDATA_CLASS" => "AcDbMTextObjectContextData",
+            "ACDB_ALDIMOBJECTCONTEXTDATA_CLASS" => "AcDbAlignedDimensionObjectContextData",
+            "ACDB_ANGDIMOBJECTCONTEXTDATA_CLASS" => "AcDbAngularDimensionObjectContextData",
+            "ACDB_DMDIMOBJECTCONTEXTDATA_CLASS" => "AcDbDiametricDimensionObjectContextData",
+            "ACDB_RADIMOBJECTCONTEXTDATA_CLASS" => "AcDbRadialDimensionObjectContextData",
+            "ACDB_RADIMLGOBJECTCONTEXTDATA_CLASS" => "AcDbRadialDimensionLargeObjectContextData",
+            "ACDB_ORDDIMOBJECTCONTEXTDATA_CLASS" => "AcDbOrdinateDimensionObjectContextData",
+            _ => return,
+        };
+        if self.classes.get_by_name(dxf_name).is_some() {
+            return;
+        }
+        use crate::classes::{DxfClass, ProxyFlags};
+        // Erase | Cloning | DisablesProxyWarningDialog — the flags real files
+        // carry on these proxy classes.
+        let proxy_flags = ProxyFlags(
+            ProxyFlags::ERASE_ALLOWED.0
+                | ProxyFlags::CLONING_ALLOWED.0
+                | ProxyFlags::DISABLES_PROXY_WARNING_DIALOG.0,
+        );
+        self.classes.add_or_update(DxfClass {
+            dxf_name: dxf_name.to_string(),
+            cpp_class_name: cpp.to_string(),
+            application_name: "ObjectDBX Classes".to_string(),
+            proxy_flags,
+            instance_count: 0,
+            was_zombie: false,
+            is_an_entity: false,
+            class_number: 0,
+            item_class_id: 0x1F3,
+        });
+    }
+
     /// Allocate a new unique handle
     pub fn allocate_handle(&mut self) -> Handle {
         // The DWG reader inserts objects straight into `objects` without

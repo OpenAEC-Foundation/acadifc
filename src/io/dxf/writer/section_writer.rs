@@ -9,6 +9,7 @@ use crate::error::Result;
 use crate::objects::{
     Dictionary, DictionaryVariable, DictionaryWithDefault, Group, ImageDefinition,
     ImageDefinitionReactor, Layout, MLineStyle, Material, MultiLeaderStyle,
+    DimSubtype, ObjectContextData, ObjectContextKind,
     ObjectType, PlotSettings, RasterVariables, Scale, SortEntitiesTable, SpatialFilter,
     TableStyle, VisualStyle, BookColor, WipeoutVariables, XRecord,
 };
@@ -2556,6 +2557,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 ObjectType::MultiLeaderStyle(style) => self.write_multileader_style(style)?,
                 ObjectType::TableStyle(style) => self.write_table_style(style)?,
                 ObjectType::Scale(scale) => self.write_scale(scale)?,
+                ObjectType::ObjectContextData(ctx) => self.write_object_context_data(ctx)?,
                 ObjectType::SortEntitiesTable(table) => self.write_sort_entities_table(table)?,
                 ObjectType::DictionaryVariable(var) => self.write_dictionary_variable(var)?,
                 ObjectType::VisualStyle(obj) => self.write_visualstyle(obj)?,
@@ -3219,6 +3221,127 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
         // Is unit scale
         self.writer.write_bool(290, scale.is_unit_scale)?;
+
+        Ok(())
+    }
+
+    /// Write an annotative per-object context leaf (`AcDb*ObjectContextData`)
+    /// as DXF group codes: the shared `AcDbObjectContextData` /
+    /// `AcDbAnnotScaleObjectContextData` base then the type-specific payload.
+    fn write_object_context_data(&mut self, ctx: &ObjectContextData) -> Result<()> {
+        self.writer.write_string(0, ctx.class_name())?;
+        self.writer.write_handle(5, ctx.handle)?;
+        if !ctx.reactors.is_empty() {
+            self.writer.write_string(102, "{ACAD_REACTORS")?;
+            for r in &ctx.reactors {
+                self.writer.write_handle(330, *r)?;
+            }
+            self.writer.write_string(102, "}")?;
+        }
+        self.writer.write_handle(330, ctx.owner_handle)?;
+
+        self.writer.write_subclass("AcDbObjectContextData")?;
+        self.writer.write_i16(70, ctx.class_version)?;
+        self.writer.write_bool(290, ctx.is_default)?;
+
+        self.writer.write_subclass("AcDbAnnotScaleObjectContextData")?;
+        self.writer.write_handle(340, ctx.scale)?;
+
+        match &ctx.kind {
+            ObjectContextKind::BlkRef { rotation, insertion, scale_factor } => {
+                self.writer.write_subclass("AcDbBlkRefObjectContextData")?;
+                self.writer.write_double(50, *rotation)?;
+                self.writer.write_double(10, insertion.x)?;
+                self.writer.write_double(20, insertion.y)?;
+                self.writer.write_double(30, insertion.z)?;
+                self.writer.write_double(41, scale_factor.x)?;
+                self.writer.write_double(42, scale_factor.y)?;
+                self.writer.write_double(43, scale_factor.z)?;
+            }
+            ObjectContextKind::Text { horizontal_mode, rotation, insertion, alignment } => {
+                self.writer.write_subclass("AcDbTextObjectContextData")?;
+                self.writer.write_i16(70, *horizontal_mode)?;
+                self.writer.write_double(50, *rotation)?;
+                self.writer.write_double(10, insertion.x)?;
+                self.writer.write_double(20, insertion.y)?;
+                self.writer.write_double(11, alignment.x)?;
+                self.writer.write_double(21, alignment.y)?;
+            }
+            ObjectContextKind::MText(m) => {
+                self.writer.write_subclass("AcDbMTextObjectContextData")?;
+                self.writer.write_i32(70, m.attachment)?;
+                // DXF emits ins_pt (10) then x_axis_dir (11) — reverse of binary.
+                self.writer.write_double(10, m.insertion.x)?;
+                self.writer.write_double(20, m.insertion.y)?;
+                self.writer.write_double(30, m.insertion.z)?;
+                self.writer.write_double(11, m.x_axis_dir.x)?;
+                self.writer.write_double(21, m.x_axis_dir.y)?;
+                self.writer.write_double(31, m.x_axis_dir.z)?;
+                self.writer.write_double(40, m.rect_width)?;
+                self.writer.write_double(41, m.rect_height)?;
+                self.writer.write_double(42, m.extents_width)?;
+                self.writer.write_double(43, m.extents_height)?;
+                self.writer.write_i32(71, m.column_type)?;
+                if m.column_type != 0 {
+                    if let Some(c) = &m.columns {
+                        self.writer.write_i32(72, c.num_heights)?;
+                        self.writer.write_double(44, c.width)?;
+                        self.writer.write_double(45, c.gutter)?;
+                        self.writer.write_bool(73, c.auto_height)?;
+                        self.writer.write_bool(74, c.flow_reversed)?;
+                        if !c.auto_height && m.column_type == 2 {
+                            for h in &c.heights {
+                                self.writer.write_double(46, *h)?;
+                            }
+                        }
+                    }
+                }
+            }
+            ObjectContextKind::Dim(d) => {
+                self.writer.write_subclass("AcDbDimensionObjectContextData")?;
+                self.writer.write_handle(2, d.block)?;
+                self.writer.write_bool(293, d.b293)?;
+                self.writer.write_double(10, d.def_pt.x)?;
+                self.writer.write_double(20, d.def_pt.y)?;
+                self.writer.write_double(30, 0.0)?;
+                self.writer.write_bool(294, d.is_def_textloc)?;
+                self.writer.write_double(140, d.text_rotation)?;
+                self.writer.write_bool(298, d.dimtofl)?;
+                self.writer.write_bool(291, d.dimosxd)?;
+                self.writer.write_bool(70, d.dimatfit)?;
+                self.writer.write_bool(292, d.dimtix)?;
+                self.writer.write_bool(71, d.dimtmove)?;
+                self.writer.write_i16(280, d.override_code as i16)?;
+                self.writer.write_bool(295, d.has_arrow2)?;
+                self.writer.write_bool(296, d.flip_arrow2)?;
+                self.writer.write_bool(297, d.flip_arrow1)?;
+                self.writer.write_subclass(d.subtype.subclass_marker())?;
+                let mut wp = |code: i32, p: &crate::types::Vector3| -> Result<()> {
+                    self.writer.write_double(code, p.x)?;
+                    self.writer.write_double(code + 10, p.y)?;
+                    self.writer.write_double(code + 20, p.z)?;
+                    Ok(())
+                };
+                match &d.subtype {
+                    DimSubtype::Aligned { dimline_pt } => wp(11, dimline_pt)?,
+                    DimSubtype::Angular { arc_pt } => wp(11, arc_pt)?,
+                    DimSubtype::Diametric { first_arc_pt, def_pt } => {
+                        wp(11, first_arc_pt)?;
+                        wp(12, def_pt)?;
+                    }
+                    DimSubtype::Radial { first_arc_pt } => wp(11, first_arc_pt)?,
+                    DimSubtype::RadialLarge { ovr_center, jog_point } => {
+                        wp(12, ovr_center)?;
+                        wp(13, jog_point)?;
+                    }
+                    DimSubtype::Ordinate { feature_location_pt, leader_endpt } => {
+                        wp(11, feature_location_pt)?;
+                        wp(12, leader_endpt)?;
+                    }
+                }
+            }
+            ObjectContextKind::Opaque => {}
+        }
 
         Ok(())
     }

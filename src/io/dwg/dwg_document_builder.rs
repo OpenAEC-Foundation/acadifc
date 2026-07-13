@@ -3035,41 +3035,298 @@ impl DwgDocumentBuilder {
                     // Annotative object-context leaves (*OBJECTCONTEXTDATA) carry
                     // their annotation scale as the FIRST object-specific handle
                     // (right after the common owner/reactors/xdict handles that
-                    // read_common_non_entity_data already consumed). Capture it
-                    // into the side map. The object is still stored verbatim as
-                    // Unknown below for byte-exact roundtrip — reading one handle
-                    // does not disturb raw_merged_data()/get_handle_bits(), which
-                    // snapshot the whole object independent of the read cursor.
-                    let is_context_data = document.classes.iter().any(|c| {
-                        c.class_number == type_code
-                            && c.dxf_name.to_uppercase().contains("OBJECTCONTEXTDATA")
-                    });
-                    if is_context_data {
-                        let scale = reader.read_handle();
+                    // read_common_non_entity_data already consumed). The
+                    // data-stream and handle-stream read cursors are independent,
+                    // and raw_merged_data()/get_handle_bits() snapshot the whole
+                    // object independent of either cursor — so we can decode the
+                    // fields we understand AND still capture the verbatim record.
+                    let class_name: Option<String> = document
+                        .classes
+                        .iter()
+                        .find(|c| c.class_number == type_code)
+                        .map(|c| c.dxf_name.to_uppercase());
+                    let is_context_data = class_name
+                        .as_deref()
+                        .map(|n| n.contains("OBJECTCONTEXTDATA"))
+                        .unwrap_or(false);
+
+                    // For the context leaves whose placement payload we model,
+                    // decode into a typed ObjectContextData (lets OCS create /
+                    // edit them). The verbatim `source_raw` is still kept so
+                    // reading an existing file re-emits it byte-for-byte.
+                    let modeled = if is_context_data {
+                        match class_name.as_deref().unwrap_or("") {
+                            "ACDB_BLKREFOBJECTCONTEXTDATA_CLASS" => {
+                                let class_version = reader.read_bit_short();
+                                let is_default = reader.read_bit();
+                                let rotation = reader.read_bit_double();
+                                let insertion = crate::types::Vector3::new(
+                                    reader.read_bit_double(),
+                                    reader.read_bit_double(),
+                                    reader.read_bit_double(),
+                                );
+                                let scale_factor = crate::types::Vector3::new(
+                                    reader.read_bit_double(),
+                                    reader.read_bit_double(),
+                                    reader.read_bit_double(),
+                                );
+                                let scale = reader.read_handle();
+                                Some((
+                                    crate::objects::ObjectContextKind::BlkRef {
+                                        rotation,
+                                        insertion,
+                                        scale_factor,
+                                    },
+                                    class_version,
+                                    is_default,
+                                    scale,
+                                ))
+                            }
+                            "ACDB_TEXTOBJECTCONTEXTDATA_CLASS" => {
+                                let class_version = reader.read_bit_short();
+                                let is_default = reader.read_bit();
+                                let horizontal_mode = reader.read_bit_short();
+                                let rotation = reader.read_bit_double();
+                                let insertion = crate::types::Vector2::new(
+                                    reader.read_raw_double(),
+                                    reader.read_raw_double(),
+                                );
+                                let alignment = crate::types::Vector2::new(
+                                    reader.read_raw_double(),
+                                    reader.read_raw_double(),
+                                );
+                                let scale = reader.read_handle();
+                                Some((
+                                    crate::objects::ObjectContextKind::Text {
+                                        horizontal_mode,
+                                        rotation,
+                                        insertion,
+                                        alignment,
+                                    },
+                                    class_version,
+                                    is_default,
+                                    scale,
+                                ))
+                            }
+                            "ACDB_MTEXTOBJECTCONTEXTDATA_CLASS" => {
+                                let class_version = reader.read_bit_short();
+                                let is_default = reader.read_bit();
+                                let attachment = reader.read_bit_long();
+                                // Binary stores x_axis_dir BEFORE ins_pt.
+                                let x_axis_dir = crate::types::Vector3::new(
+                                    reader.read_bit_double(),
+                                    reader.read_bit_double(),
+                                    reader.read_bit_double(),
+                                );
+                                let insertion = crate::types::Vector3::new(
+                                    reader.read_bit_double(),
+                                    reader.read_bit_double(),
+                                    reader.read_bit_double(),
+                                );
+                                let rect_width = reader.read_bit_double();
+                                let rect_height = reader.read_bit_double();
+                                let extents_width = reader.read_bit_double();
+                                let extents_height = reader.read_bit_double();
+                                let column_type = reader.read_bit_long();
+                                let columns = if column_type != 0 {
+                                    let num_heights = reader.read_bit_long();
+                                    let width = reader.read_bit_double();
+                                    let gutter = reader.read_bit_double();
+                                    let auto_height = reader.read_bit();
+                                    let flow_reversed = reader.read_bit();
+                                    let heights = if !auto_height && column_type == 2 {
+                                        (0..num_heights.max(0))
+                                            .map(|_| reader.read_bit_double())
+                                            .collect()
+                                    } else {
+                                        Vec::new()
+                                    };
+                                    Some(crate::objects::MTextColumns {
+                                        num_heights,
+                                        width,
+                                        gutter,
+                                        auto_height,
+                                        flow_reversed,
+                                        heights,
+                                    })
+                                } else {
+                                    None
+                                };
+                                let scale = reader.read_handle();
+                                Some((
+                                    crate::objects::ObjectContextKind::MText(
+                                        crate::objects::MTextContext {
+                                            attachment,
+                                            x_axis_dir,
+                                            insertion,
+                                            rect_width,
+                                            rect_height,
+                                            extents_width,
+                                            extents_height,
+                                            column_type,
+                                            columns,
+                                        },
+                                    ),
+                                    class_version,
+                                    is_default,
+                                    scale,
+                                ))
+                            }
+                            "ACDB_ALDIMOBJECTCONTEXTDATA_CLASS"
+                            | "ACDB_ANGDIMOBJECTCONTEXTDATA_CLASS"
+                            | "ACDB_DMDIMOBJECTCONTEXTDATA_CLASS"
+                            | "ACDB_RADIMOBJECTCONTEXTDATA_CLASS"
+                            | "ACDB_RADIMLGOBJECTCONTEXTDATA_CLASS"
+                            | "ACDB_ORDDIMOBJECTCONTEXTDATA_CLASS" => {
+                                let class_version = reader.read_bit_short();
+                                let is_default = reader.read_bit();
+                                // AcDbDimensionObjectContextData base (data stream).
+                                let def_pt = crate::types::Vector2::new(
+                                    reader.read_raw_double(),
+                                    reader.read_raw_double(),
+                                );
+                                let is_def_textloc = reader.read_bit();
+                                let text_rotation = reader.read_bit_double();
+                                let b293 = reader.read_bit();
+                                let dimtofl = reader.read_bit();
+                                let dimosxd = reader.read_bit();
+                                let dimatfit = reader.read_bit();
+                                let dimtix = reader.read_bit();
+                                let dimtmove = reader.read_bit();
+                                let override_code = reader.read_byte();
+                                let has_arrow2 = reader.read_bit();
+                                let flip_arrow2 = reader.read_bit();
+                                let flip_arrow1 = reader.read_bit();
+                                let mut p3 = || {
+                                    crate::types::Vector3::new(
+                                        reader.read_bit_double(),
+                                        reader.read_bit_double(),
+                                        reader.read_bit_double(),
+                                    )
+                                };
+                                let subtype = match class_name.as_deref().unwrap_or("") {
+                                    "ACDB_ALDIMOBJECTCONTEXTDATA_CLASS" => {
+                                        crate::objects::DimSubtype::Aligned { dimline_pt: p3() }
+                                    }
+                                    "ACDB_ANGDIMOBJECTCONTEXTDATA_CLASS" => {
+                                        crate::objects::DimSubtype::Angular { arc_pt: p3() }
+                                    }
+                                    "ACDB_DMDIMOBJECTCONTEXTDATA_CLASS" => {
+                                        crate::objects::DimSubtype::Diametric {
+                                            first_arc_pt: p3(),
+                                            def_pt: p3(),
+                                        }
+                                    }
+                                    "ACDB_RADIMOBJECTCONTEXTDATA_CLASS" => {
+                                        crate::objects::DimSubtype::Radial { first_arc_pt: p3() }
+                                    }
+                                    "ACDB_RADIMLGOBJECTCONTEXTDATA_CLASS" => {
+                                        crate::objects::DimSubtype::RadialLarge {
+                                            ovr_center: p3(),
+                                            jog_point: p3(),
+                                        }
+                                    }
+                                    _ => crate::objects::DimSubtype::Ordinate {
+                                        feature_location_pt: p3(),
+                                        leader_endpt: p3(),
+                                    },
+                                };
+                                drop(p3);
+                                // Handle stream: scale (soft owner) then block (hard ptr).
+                                let scale = reader.read_handle();
+                                let block = reader.read_handle();
+                                Some((
+                                    crate::objects::ObjectContextKind::Dim(
+                                        crate::objects::DimContext {
+                                            def_pt,
+                                            is_def_textloc,
+                                            text_rotation,
+                                            block: Handle::from(block),
+                                            b293,
+                                            dimtofl,
+                                            dimosxd,
+                                            dimatfit,
+                                            dimtix,
+                                            dimtmove,
+                                            override_code,
+                                            has_arrow2,
+                                            flip_arrow2,
+                                            flip_arrow1,
+                                            subtype,
+                                        },
+                                    ),
+                                    class_version,
+                                    is_default,
+                                    scale,
+                                ))
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
+
+                    let raw_handle_bits = reader.get_handle_bits();
+                    let raw_data = reader.raw_merged_data();
+
+                    if let Some((kind, class_version, is_default, scale)) = modeled {
                         if scale != 0 {
                             document
                                 .context_scales
                                 .insert(Handle::from(handle), Handle::from(scale));
                         }
+                        let reactors = non_entity_data
+                            .reactors
+                            .iter()
+                            .map(|&h| Handle::from(h))
+                            .collect();
+                        let xdictionary_handle =
+                            non_entity_data.xdictionary_handle.map(Handle::from);
+                        document.objects.insert(
+                            Handle::from(handle),
+                            crate::objects::ObjectType::ObjectContextData(
+                                crate::objects::ObjectContextData {
+                                    handle: Handle::from(handle),
+                                    owner_handle,
+                                    reactors,
+                                    xdictionary_handle,
+                                    class_version,
+                                    is_default,
+                                    scale: Handle::from(scale),
+                                    kind,
+                                    source_raw: Some(raw_data),
+                                    source_handle_bits: raw_handle_bits,
+                                    source_version: Some(document.version),
+                                },
+                            ),
+                        );
+                    } else {
+                        // Non-modeled context leaf: still capture its annotation
+                        // scale (first object handle) into the side map, then
+                        // preserve the whole object verbatim as Unknown. Other
+                        // unrecognised non-entity objects: verbatim only.
+                        if is_context_data {
+                            let scale = reader.read_handle();
+                            if scale != 0 {
+                                document
+                                    .context_scales
+                                    .insert(Handle::from(handle), Handle::from(scale));
+                            }
+                        }
+                        let type_name = format!("DWG_OBJ_{}", type_code);
+                        document.objects.insert(
+                            Handle::from(handle),
+                            crate::objects::ObjectType::Unknown {
+                                type_name,
+                                handle: Handle::from(handle),
+                                owner: owner_handle,
+                                raw_dxf_codes: None,
+                                raw_dwg_data: Some(raw_data),
+                                raw_dwg_handle_bits: raw_handle_bits,
+                                raw_dwg_version: Some(document.version),
+                            },
+                        );
                     }
-
-                    // Preserve unrecognised non-entity objects verbatim so
-                    // they survive roundtrip without losing their handles.
-                    let type_name = format!("DWG_OBJ_{}", type_code);
-                    let raw_handle_bits = reader.get_handle_bits();
-                    let raw_data = reader.raw_merged_data();
-                    document.objects.insert(
-                        Handle::from(handle),
-                        crate::objects::ObjectType::Unknown {
-                            type_name,
-                            handle: Handle::from(handle),
-                            owner: owner_handle,
-                            raw_dxf_codes: None,
-                            raw_dwg_data: Some(raw_data),
-                            raw_dwg_handle_bits: raw_handle_bits,
-                            raw_dwg_version: Some(document.version),
-                        },
-                    );
                 }
             }
         }
