@@ -734,8 +734,13 @@ pub fn read_mtext(
     }
 
     // R2018+: "is NOT annotative" bit, then (when not annotative) a block of
-    // redundant fields followed by optional column data.
-    let mut is_annotative = true;
+    // redundant fields followed by optional column data. The inline annotative
+    // bit exists only from R2018 on; for older files MTEXT annotativeness is
+    // carried by its text style / annotation context, not the entity, so the
+    // default here must be `false` — defaulting to `true` would mark *every*
+    // pre-R2018 MTEXT annotative and (mis)scale it in annotation-scaled
+    // viewports.
+    let mut is_annotative = false;
     let mut column_type = 0i16;
     let mut column_count = 0i32;
     let mut column_flow_reversed = false;
