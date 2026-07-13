@@ -4065,6 +4065,11 @@ impl<'a> SectionReader<'a> {
             dc.common.linetype = common.linetype;
             dc.common.linetype_scale = common.linetype_scale;
             dc.common.transparency = common.transparency;
+            // Carry the parsed XDATA onto the built dimension. Without this the
+            // per-object dimension-style overrides (ACAD_DSTYLE), annotative and
+            // plugin extended data read into `common` above are dropped, so any
+            // dimension XDATA silently vanishes on a DXF reload.
+            dc.common.extended_data = common.extended_data;
             if let Some(pt) = text_middle_point.get_point() {
                 dc.text_middle_point = pt;
             }
