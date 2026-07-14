@@ -3838,6 +3838,11 @@ impl<'a> SectionReader<'a> {
         let mut fourth_point = PointReader::new();
         let mut text = String::new();
         let mut style_name = String::from("Standard");
+        // Name of the anonymous block that holds the baked dimension picture
+        // (DXF group code 2). Without it the dimension has no geometry block to
+        // render from and consumers must recompute the picture, which drifts
+        // from the authored one.
+        let mut block_name = String::new();
         let mut layer = String::from("0");
         let mut color = Color::ByLayer;
         let mut line_weight = LineWeight::ByLayer;
@@ -3890,6 +3895,7 @@ impl<'a> SectionReader<'a> {
                     }
                 }
                 1 => text = pair.value_string.clone(),
+                2 => block_name = pair.value_string.clone(),
                 3 => style_name = pair.value_string.clone(),
                 10 | 20 | 30 => { definition_point.add_coordinate(&pair); }
                 11 | 21 | 31 => { text_middle_point.add_coordinate(&pair); }
@@ -4070,6 +4076,7 @@ impl<'a> SectionReader<'a> {
             // plugin extended data read into `common` above are dropped, so any
             // dimension XDATA silently vanishes on a DXF reload.
             dc.common.extended_data = common.extended_data;
+            dc.block_name = block_name;
             if let Some(pt) = text_middle_point.get_point() {
                 dc.text_middle_point = pt;
             }
