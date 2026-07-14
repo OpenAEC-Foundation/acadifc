@@ -150,7 +150,12 @@ impl MText {
             background_scale: 1.5,
             background_color: Color::ByLayer,
             background_transparency: 0,
-            is_annotative: true,
+            // Non-annotative by default. Real annotativeness is carried by the
+            // annotation context / text style (and, from R2018 DWG on, an inline
+            // entity bit the reader sets explicitly) — not by every fresh MTEXT.
+            // DXF has no entity-level annotative flag at all, so without this
+            // default it would mark every imported MTEXT annotative.
+            is_annotative: false,
             column_data: MTextColumnData::new(),
         }
     }

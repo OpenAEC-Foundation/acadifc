@@ -2143,14 +2143,14 @@ fn dwg_mtext_background_no_regression_all_versions() {
         assert_eq!(rt.value, "Plain", "DWG {} plain MTEXT value desynced", label);
         assert_eq!(rt.height, 3.0, "DWG {} plain MTEXT height desynced", label);
         assert_eq!(rt.background_fill_flags, 0, "DWG {} plain MTEXT spurious flags", label);
-        // The inline annotative flag exists only from R2018 on. There it
-        // round-trips the (default-true) value; older versions carry no such
-        // bit, so it reads back as the non-annotative default.
-        if version >= DxfVersion::AC1032 {
-            assert!(rt.is_annotative, "DWG {} R2018+ MTEXT annotative flag", label);
-        } else {
-            assert!(!rt.is_annotative, "DWG {} pre-R2018 MTEXT has no inline annotative bit", label);
-        }
+        // A plain (default) MTEXT is non-annotative on every version: R2018+
+        // round-trips the false inline bit, and older versions carry no bit at
+        // all. Annotativeness comes from the context/style, not a fresh entity.
+        assert!(
+            !rt.is_annotative,
+            "DWG {} plain MTEXT should be non-annotative",
+            label
+        );
     }
 }
 
