@@ -996,7 +996,11 @@ impl MultiLeader {
             block_scale: Vector3::new(1.0, 1.0, 1.0),
             scale_factor: 1.0,
             property_override_flags: MultiLeaderPropertyOverrideFlags::NONE,
-            enable_annotation_scale: true,
+            // Non-annotative by default (mirrors MTEXT.is_annotative). The DWG
+            // reader sets this explicitly from the entity bit and the DXF reader
+            // from group code 293; a fresh MULTILEADER must not inherit `true`,
+            // or a reader that missed the flag would over-scale every instance.
+            enable_annotation_scale: false,
             extend_leader_to_text: false,
             raw_dwg_data: None,
             dwg_handle_bits: 0,

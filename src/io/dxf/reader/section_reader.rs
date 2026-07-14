@@ -5575,6 +5575,7 @@ impl<'a> SectionReader<'a> {
                 291 => { if let Some(v) = pair.as_bool() { ml.enable_dogleg = v; } }
                 290 => { if let Some(v) = pair.as_bool() { ml.enable_landing = v; } }
                 292 => { if let Some(v) = pair.as_bool() { ml.text_frame = v; } }
+                293 => { if let Some(v) = pair.as_bool() { ml.enable_annotation_scale = v; } }
                 _ => { self.try_read_common_entity_code(&pair, &mut ml.common)?; }
             }
         }

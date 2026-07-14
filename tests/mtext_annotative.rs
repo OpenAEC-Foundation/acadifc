@@ -9,7 +9,7 @@
 
 use std::io::Cursor;
 
-use acadrust::entities::{EntityType, MText};
+use acadrust::entities::{EntityType, MText, MultiLeader};
 use acadrust::types::{DxfVersion, Vector3};
 use acadrust::{CadDocument, DxfReader, DxfWriter};
 
@@ -46,4 +46,37 @@ fn plain_mtext_not_annotative_after_dxf_roundtrip() {
         !mtext.is_annotative,
         "a plain MTEXT must read back non-annotative from DXF"
     );
+}
+
+#[test]
+fn multileader_annotation_scale_survives_dxf_roundtrip() {
+    // A plain (default) MULTILEADER must stay non-annotative, and an annotative
+    // one must round-trip via DXF group code 293 — the reader previously ignored
+    // 293, so every imported MULTILEADER inherited the old `true` default.
+    for enabled in [false, true] {
+        let mut doc = CadDocument::with_version(DxfVersion::AC1027);
+        let mut ml = MultiLeader::with_text(
+            "Label",
+            Vector3::new(20.0, 20.0, 0.0),
+            vec![Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 10.0, 0.0)],
+        );
+        ml.enable_annotation_scale = enabled;
+        doc.add_entity(EntityType::MultiLeader(ml)).unwrap();
+
+        let rt = dxf_roundtrip(&doc);
+        let got = rt
+            .entities()
+            .find_map(|e| {
+                if let EntityType::MultiLeader(m) = e {
+                    Some(m.enable_annotation_scale)
+                } else {
+                    None
+                }
+            })
+            .expect("MULTILEADER survived DXF round-trip");
+        assert_eq!(
+            got, enabled,
+            "MULTILEADER enable_annotation_scale should round-trip {enabled} via DXF"
+        );
+    }
 }
