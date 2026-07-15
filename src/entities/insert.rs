@@ -594,7 +594,7 @@ impl Insert {
                 let entities: Vec<EntityType> = br
                     .entity_handles
                     .iter()
-                    .filter_map(|h| document.entity_index.get(h).map(|&idx| document.entities[idx].clone()))
+                    .filter_map(|h| document.entity_index.get(h).map(|&idx| document.entities[idx].as_ref().clone()))
                     .collect();
                 self.explode(&entities)
             }

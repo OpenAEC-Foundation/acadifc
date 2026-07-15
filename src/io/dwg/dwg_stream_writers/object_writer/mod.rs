@@ -1633,7 +1633,7 @@ impl<'a> DwgObjectWriter<'a> {
         for &eh in handles {
             expanded.push(eh);
             if let Some(&idx) = self.document.entity_index.get(&eh) {
-                let entity = &self.document.entities[idx];
+                let entity = self.document.entities[idx].as_ref();
                 match entity {
                     EntityType::PolyfaceMesh(e) => {
                         for v in &e.vertices {
@@ -1709,7 +1709,7 @@ impl<'a> DwgObjectWriter<'a> {
             .entity_handles
             .iter()
             .find_map(|eh| {
-                if let Some(EntityType::Block(b)) = self.document.entity_index.get(eh).map(|&idx| &self.document.entities[idx]) {
+                if let Some(EntityType::Block(b)) = self.document.entity_index.get(eh).map(|&idx| self.document.entities[idx].as_ref()) {
                     Some(b.base_point)
                 } else {
                     None
@@ -1809,7 +1809,7 @@ impl<'a> DwgObjectWriter<'a> {
         let block = if !record.block_entity_handle.is_null() {
             let result = self.document.entity_index.get(&record.block_entity_handle)
                 .and_then(|&idx| {
-                    if let EntityType::Block(b) = &self.document.entities[idx] {
+                    if let EntityType::Block(b) = self.document.entities[idx].as_ref() {
                         Some(b.clone())
                     } else {
                         eprintln!("  BLOCK entity at idx {} is NOT Block type", idx);
@@ -1874,7 +1874,7 @@ impl<'a> DwgObjectWriter<'a> {
         let block_end = if !record.block_end_handle.is_null() {
             self.document.entity_index.get(&record.block_end_handle)
                 .and_then(|&idx| {
-                    if let EntityType::BlockEnd(be) = &self.document.entities[idx] {
+                    if let EntityType::BlockEnd(be) = self.document.entities[idx].as_ref() {
                         Some(be.clone())
                     } else {
                         None

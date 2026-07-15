@@ -19,6 +19,7 @@
 
 use crate::classes::DxfClassCollection;
 use crate::entities::{EntityCommon, EntityType};
+use std::sync::Arc;
 use crate::objects::ObjectType;
 use crate::tables::*;
 use crate::types::{DxfVersion, Color, Handle, Vector2, Vector3};
@@ -950,7 +951,13 @@ pub struct CadDocument {
     pub notifications: crate::notification::NotificationCollection,
 
     /// All entities in the document (contiguous storage for cache locality).
-    pub(crate) entities: Vec<EntityType>,
+    /// Each entity is behind an `Arc` so cloning the whole document — the undo
+    /// snapshot on every edit — is O(entities) atomic bumps that structurally
+    /// share the geometry, not an O(entities) deep copy. A single-entity edit
+    /// (`get_entity_mut`) copies just that one entity out of the shared Arc
+    /// (`Arc::make_mut`), so the snapshot and the live doc diverge only where
+    /// they actually differ.
+    pub(crate) entities: Vec<Arc<EntityType>>,
 
     /// Handle → index mapping for O(1) entity lookup by handle.
     pub(crate) entity_index: HashMap<Handle, usize>,
@@ -1095,7 +1102,7 @@ impl CadDocument {
         }
         // Raw graphical records + per-entity EED.
         let raw_entities = self.entities.iter().any(|e| {
-            let raw = match e {
+            let raw = match e.as_ref() {
                 crate::entities::EntityType::Unknown(u) => u.raw_dwg_data.is_some(),
                 crate::entities::EntityType::Surface(s) => s.raw_dwg_data.is_some(),
                 crate::entities::EntityType::MultiLeader(m) => m.raw_dwg_data.is_some(),
@@ -1547,20 +1554,24 @@ impl CadDocument {
 
         // Store in the flat entity map (DXF writer reads from here)
         let idx = self.entities.len();
-        self.entities.push(entity);
+        self.entities.push(Arc::new(entity));
         self.entity_index.insert(handle, idx);
         Ok(handle)
     }
 
     /// Get an entity by handle
     pub fn get_entity(&self, handle: Handle) -> Option<&EntityType> {
-        self.entity_index.get(&handle).map(|&idx| &self.entities[idx])
+        self.entity_index
+            .get(&handle)
+            .map(|&idx| self.entities[idx].as_ref())
     }
 
-    /// Get a mutable entity by handle
+    /// Get a mutable entity by handle. Copies just this entity out of any shared
+    /// Arc (`Arc::make_mut`), so an undo snapshot that shares it keeps the old
+    /// value while the live doc gets a private, mutable copy.
     pub fn get_entity_mut(&mut self, handle: Handle) -> Option<&mut EntityType> {
         let idx = *self.entity_index.get(&handle)?;
-        Some(&mut self.entities[idx])
+        Some(Arc::make_mut(&mut self.entities[idx]))
     }
 
     /// Explode an entity into simpler primitives, allocating valid handles.
@@ -1697,7 +1708,7 @@ impl CadDocument {
 
         // Store in the flat entity map
         let idx = self.entities.len();
-        self.entities.push(entity);
+        self.entities.push(Arc::new(entity));
         self.entity_index.insert(handle, idx);
         Ok(handle)
     }
@@ -1711,7 +1722,9 @@ impl CadDocument {
             let moved_handle = self.entities[idx].common().handle;
             self.entity_index.insert(moved_handle, idx);
         }
-        Some(entity)
+        // Hand back an owned entity: take it out of the Arc if we hold the last
+        // reference (a snapshot may still share it), else clone.
+        Some(Arc::try_unwrap(entity).unwrap_or_else(|a| (*a).clone()))
     }
 
     /// Add a new paper space layout to the document.
@@ -1786,7 +1799,7 @@ impl CadDocument {
             br.entity_handles.push(overall_vp_handle);
         }
         let idx = self.entities.len();
-        self.entities.push(EntityType::Viewport(overall_vp));
+        self.entities.push(Arc::new(EntityType::Viewport(overall_vp)));
         self.entity_index.insert(overall_vp_handle, idx);
 
         // Register in ACAD_LAYOUT dictionary
@@ -1819,12 +1832,16 @@ impl CadDocument {
     pub fn entities(&self) -> impl Iterator<Item = &EntityType> {
         self.entities
             .iter()
+            .map(|e| e.as_ref())
             .filter(|e| !matches!(e, EntityType::Block(_) | EntityType::BlockEnd(_)))
     }
 
-    /// Iterate over all entities mutably
+    /// Iterate over all entities mutably. Copy-on-write per entity: iterating
+    /// this after an undo snapshot detaches each entity from the shared Arc, so
+    /// it is O(entities) deep only for bulk passes (save prep, handle reassign),
+    /// not the single-entity edit path (which uses `get_entity_mut`).
     pub fn entities_mut(&mut self) -> impl Iterator<Item = &mut EntityType> {
-        self.entities.iter_mut()
+        self.entities.iter_mut().map(Arc::make_mut)
     }
 
     /// Owner handle of a dictionary/unknown object, for ownership-chain walks.
@@ -1875,7 +1892,7 @@ impl CadDocument {
         &self,
         insert_handle: Handle,
     ) -> Option<(Handle, &crate::objects::BlockVisibilityParameter)> {
-        let insert = self.entities.iter().find_map(|e| match e {
+        let insert = self.entities.iter().find_map(|e| match e.as_ref() {
             EntityType::Insert(i) if i.common.handle == insert_handle => Some(i),
             _ => None,
         })?;
@@ -2135,6 +2152,7 @@ impl CadDocument {
 
         // Model-space entities (document.entities) — use model space as default owner
         for entity in self.entities.iter_mut() {
+            let entity = Arc::make_mut(entity);
             let common = match entity {
                 EntityType::Dimension(d) => {
                     let base = d.base_mut();
@@ -2156,7 +2174,7 @@ impl CadDocument {
             let br_handle = br.handle;
             for eh in &br.entity_handles {
                 if let Some(&idx) = self.entity_index.get(eh) {
-                    let entity = &mut self.entities[idx];
+                    let entity = Arc::make_mut(&mut self.entities[idx]);
                     let common = match entity {
                         EntityType::Dimension(d) => {
                             let base = d.base_mut();

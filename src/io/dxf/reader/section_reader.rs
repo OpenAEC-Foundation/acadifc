@@ -606,7 +606,7 @@ impl<'a> SectionReader<'a> {
                             };
                             entity_handles.push(h);
                             let idx = document.entities.len();
-                            document.entities.push(entity);
+                            document.entities.push(std::sync::Arc::new(entity));
                             document.entity_index.insert(h, idx);
                         }
 

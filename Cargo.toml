@@ -40,7 +40,7 @@ ahash = "0.8"
 encoding_rs = "0.8"
 
 # Serialization (optional)
-serde = { version = "1", features = ["derive"], optional = true }
+serde = { version = "1", features = ["derive", "rc"], optional = true }
 
 # XML parsing (optional, for COLLADA import)
 quick-xml = { version = "0.36", optional = true }

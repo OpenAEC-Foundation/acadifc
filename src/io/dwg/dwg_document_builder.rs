@@ -906,6 +906,7 @@ impl DwgDocumentBuilder {
         // ── Post-pass: Attach pending attribute entities to parent INSERTs ──
         if !pending_attributes.is_empty() {
             for entity in &mut document.entities {
+                let entity = std::sync::Arc::make_mut(entity);
                 if let EntityType::Insert(ref mut ins) = entity {
                     let insert_handle = ins.common.handle.value();
                     if let Some(attribs) = pending_attributes.remove(&insert_handle) {
@@ -929,7 +930,7 @@ impl DwgDocumentBuilder {
                 let eh = entity.common().handle;
                 if let Some(&correct_owner) = binary_entity_owner.get(&eh) {
                     if entity.common().owner_handle != correct_owner {
-                        entity.common_mut().owner_handle = correct_owner;
+                        std::sync::Arc::make_mut(entity).common_mut().owner_handle = correct_owner;
                     }
                 }
             }
@@ -946,7 +947,7 @@ impl DwgDocumentBuilder {
                 .map(|e| (
                     e.common().handle,
                     e.common().owner_handle,
-                    matches!(e, EntityType::AttributeEntity(_) | EntityType::Block(_) | EntityType::BlockEnd(_)),
+                    matches!(e.as_ref(), EntityType::AttributeEntity(_) | EntityType::Block(_) | EntityType::BlockEnd(_)),
                 ))
                 .collect();
             for (eh, owner, is_excluded) in entity_owners {
@@ -1080,10 +1081,10 @@ impl DwgDocumentBuilder {
                 .collect();
             if !app_name_by_handle.is_empty() {
                 for entity in document.entities.iter_mut() {
-                    let xd = &mut entity.common_mut().extended_data;
-                    if xd.raw_dwg_eed.is_empty() {
+                    if entity.common().extended_data.raw_dwg_eed.is_empty() {
                         continue;
                     }
+                    let xd = &mut std::sync::Arc::make_mut(entity).common_mut().extended_data;
                     let blocks = xd.raw_dwg_eed.clone();
                     for (app_handle, bytes) in &blocks {
                         let Some(name) = app_name_by_handle.get(app_handle) else {
@@ -1218,7 +1219,7 @@ impl DwgDocumentBuilder {
             let mut by_owner: HashMap<Handle, Vec<Handle>> = HashMap::new();
             for e in &document.entities {
                 if matches!(
-                    e,
+                    e.as_ref(),
                     EntityType::Block(_) | EntityType::BlockEnd(_) | EntityType::AttributeEntity(_)
                 ) {
                     continue;
