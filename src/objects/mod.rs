@@ -4,6 +4,7 @@
 //! layouts, groups, and other organizational structures.
 
 mod block_visibility;
+mod dgn_linestyle;
 mod dictionary_variable;
 mod group;
 mod image_definition;
@@ -18,6 +19,7 @@ mod xrecord;
 mod stub_objects;
 
 pub use block_visibility::{BlockVisibilityParameter, BlockVisibilityState};
+pub use dgn_linestyle::{DgnLsComponent, DgnLsComponentType, DgnLsDefinition};
 pub use dictionary_variable::DictionaryVariable;
 pub use group::Group;
 pub use image_definition::{ImageDefinition, ImageDefinitionReactor, ResolutionUnit};

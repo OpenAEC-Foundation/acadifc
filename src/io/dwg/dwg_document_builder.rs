@@ -3285,6 +3285,66 @@ impl DwgDocumentBuilder {
                     let raw_handle_bits = reader.get_handle_bits();
                     let raw_data = reader.raw_merged_data();
 
+                    // DGN line-style objects (AcDbLS*): decode the header + the
+                    // component tree (handle references) into typed side tables
+                    // for rendering. Identified by class name so it is not tied to
+                    // this file's class numbering. The object still falls through
+                    // to the verbatim `Unknown` storage below, so the DWG
+                    // round-trips byte-for-byte; only the leaf stroke/placement
+                    // data-stream fields remain undecoded. The data and handle
+                    // read cursors are independent and the raw snapshot was
+                    // already taken, so these reads are side-effect free.
+                    if let Some(cn) = class_name.as_deref() {
+                        let is_ls_def = cn == "LSDEFINITION";
+                        let is_ls_comp = matches!(
+                            cn,
+                            "LSSYMBOLCOMPONENT"
+                                | "LSCOMPOUNDCOMPONENT"
+                                | "LSSTROKEPATTERNCOMPONENT"
+                                | "LSPOINTCOMPONENT"
+                        );
+                        if is_ls_def || is_ls_comp {
+                            use crate::objects::{
+                                DgnLsComponent, DgnLsComponentType, DgnLsDefinition,
+                            };
+                            let description = reader.read_variable_text();
+                            let _version = reader.read_bit_long();
+                            let type_field = reader.read_bit_long();
+                            let h = Handle::from(handle);
+                            if is_ls_def {
+                                let root = reader.read_handle();
+                                document.dgn_ls_definitions.insert(
+                                    h,
+                                    DgnLsDefinition {
+                                        handle: h,
+                                        name: description,
+                                        root_component: Handle::from(root),
+                                    },
+                                );
+                            } else if let Some(ct) = DgnLsComponentType::from_code(type_field) {
+                                // Component tree references from the handle stream
+                                // (after the common owner/reactor/xdict handles).
+                                let mut refs = Vec::new();
+                                for _ in 0..16 {
+                                    let r = reader.read_handle();
+                                    if r == 0 {
+                                        break;
+                                    }
+                                    refs.push(Handle::from(r));
+                                }
+                                document.dgn_ls_components.insert(
+                                    h,
+                                    DgnLsComponent {
+                                        handle: h,
+                                        component_type: ct,
+                                        description,
+                                        refs,
+                                    },
+                                );
+                            }
+                        }
+                    }
+
                     if let Some((kind, class_version, is_default, scale)) = modeled {
                         if scale != 0 {
                             document

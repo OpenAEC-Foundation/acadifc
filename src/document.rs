@@ -986,6 +986,18 @@ pub struct CadDocument {
     /// objects stay verbatim as `ObjectType::Unknown`.
     pub block_representations: HashMap<Handle, Handle>,
 
+    /// DGN line-style definitions (`AcDbLSDefinition`), keyed by handle. Present
+    /// for drawings converted from MicroStation DGN, whose custom linetypes are
+    /// empty in the standard `LTYPE` table and defined here instead. Read-side
+    /// view; the objects stay verbatim as `ObjectType::Unknown` for round-trip.
+    /// See [`crate::objects::DgnLsDefinition`].
+    pub dgn_ls_definitions: HashMap<Handle, crate::objects::DgnLsDefinition>,
+
+    /// DGN line-style components (`AcDbLS{Compound,StrokePattern,Point,Symbol}
+    /// Component`), keyed by handle — the nodes of a [`crate::objects::DgnLsDefinition`]'s
+    /// component tree. Read-side view; objects stay verbatim as `Unknown`.
+    pub dgn_ls_components: HashMap<Handle, crate::objects::DgnLsComponent>,
+
     /// Raw EED blobs per handle — populated during DWG read, consumed during DWG write.
     /// Keyed by the object/table-entry handle. Not serialized.
     pub(crate) eed_by_handle: HashMap<Handle, Vec<(u64, Vec<u8>)>>,
@@ -1049,6 +1061,8 @@ impl CadDocument {
             block_visibility_params: HashMap::new(),
             context_scales: HashMap::new(),
             block_representations: HashMap::new(),
+            dgn_ls_definitions: HashMap::new(),
+            dgn_ls_components: HashMap::new(),
             eed_by_handle: HashMap::new(),
             xdic_by_handle: HashMap::new(),
             reactors_by_handle: HashMap::new(),
