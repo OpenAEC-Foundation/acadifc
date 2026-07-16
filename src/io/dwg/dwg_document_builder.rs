@@ -2008,6 +2008,21 @@ impl DwgDocumentBuilder {
                     e.start_point = data.start_point;
                     e.normal = data.normal;
                     e.style_element_count = data.lines_in_style as usize;
+                    // Link the entity to its MLINESTYLE via the hard-pointer handle
+                    // read from the handle stream. Without this the entity keeps the
+                    // `MLine::new()` default ("Standard" / no handle), so a drawing's
+                    // custom multiline style (element offsets, per-line colours and
+                    // linetypes) is lost and the multiline is drawn with Standard's
+                    // ±0.5 offsets in the entity colour.
+                    if data.style_handle != 0 {
+                        let sh = Handle::new(data.style_handle);
+                        e.style_handle = Some(sh);
+                        if let Some(crate::objects::ObjectType::MLineStyle(s)) =
+                            document.objects.get(&sh)
+                        {
+                            e.style_name = s.name.clone();
+                        }
+                    }
                     // Populate vertices from parsed data
                     e.vertices = data.vertices.into_iter().map(|vd| {
                         use crate::entities::mline::{MLineVertex, MLineSegment};
