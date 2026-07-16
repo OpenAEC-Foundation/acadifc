@@ -87,6 +87,14 @@ pub struct DgnLsComponent {
     pub description: String,
     /// Hard-pointer handle references (see the struct docs for their meaning).
     pub refs: Vec<Handle>,
+    /// Symbol scale divisor (symbol components only): the referenced block's
+    /// native geometry is drawn at `1.0 / scale`. Decoded from the component's
+    /// leaf data (a big-endian f64); `1.0` when absent / not a symbol.
+    ///
+    /// The DGN line-style leaf uses byte-aligned **big-endian** floats, unlike
+    /// the surrounding DWG bit-codes; the exact per-field layout is only partly
+    /// mapped, so this is read from an empirically-located offset.
+    pub scale: f64,
 }
 
 impl DgnLsComponent {

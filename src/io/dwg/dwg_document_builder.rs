@@ -3332,6 +3332,23 @@ impl DwgDocumentBuilder {
                                     }
                                     refs.push(Handle::from(r));
                                 }
+                                // Symbol scale: a byte-aligned big-endian f64 in
+                                // the leaf (the DGN line-style leaf stores raw
+                                // big-endian floats). Empirically at byte 35.
+                                let scale = if ct == DgnLsComponentType::Symbol
+                                    && raw_data.len() >= 43
+                                {
+                                    let v = f64::from_be_bytes(
+                                        raw_data[35..43].try_into().unwrap(),
+                                    );
+                                    if v.is_finite() && v.abs() > 1e-9 && v.abs() < 1e6 {
+                                        v
+                                    } else {
+                                        1.0
+                                    }
+                                } else {
+                                    1.0
+                                };
                                 document.dgn_ls_components.insert(
                                     h,
                                     DgnLsComponent {
@@ -3339,6 +3356,7 @@ impl DwgDocumentBuilder {
                                         component_type: ct,
                                         description,
                                         refs,
+                                        scale,
                                     },
                                 );
                             }
