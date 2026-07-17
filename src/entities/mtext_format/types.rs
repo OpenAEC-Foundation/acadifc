@@ -683,6 +683,16 @@ pub struct MTextParagraph {
 
     /// Styled text spans in this paragraph.
     pub spans: Vec<MTextSpan>,
+
+    /// Whether this paragraph opens a new column — the `\N` break, as opposed
+    /// to `\P`, which only starts a new line.
+    ///
+    /// The two are otherwise identical (span properties carry across both), so
+    /// without this the distinction is gone the moment the string is parsed:
+    /// a reader lays the columns out as one stacked run, and
+    /// [`to_mtext_string`](MTextDocument::to_mtext_string) writes every break
+    /// back as `\P`, quietly collapsing a multi-column MTEXT on round-trip.
+    pub starts_column: bool,
 }
 
 impl MTextParagraph {
@@ -691,6 +701,7 @@ impl MTextParagraph {
         MTextParagraph {
             properties: ParagraphProperties::default(),
             spans: Vec::new(),
+            starts_column: false,
         }
     }
 
@@ -699,6 +710,7 @@ impl MTextParagraph {
         MTextParagraph {
             properties: ParagraphProperties::default(),
             spans: vec![MTextSpan::plain(text)],
+            starts_column: false,
         }
     }
 
@@ -861,7 +873,9 @@ impl MTextDocument {
 
         for (pi, paragraph) in self.paragraphs.iter().enumerate() {
             if pi > 0 {
-                result.push_str("\\P");
+                // `\N` opens a column, `\P` only a line — writing `\P` for both
+                // would flatten a multi-column MTEXT every time it round-trips.
+                result.push_str(if paragraph.starts_column { "\\N" } else { "\\P" });
             }
 
             // Emit paragraph properties

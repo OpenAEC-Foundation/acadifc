@@ -431,7 +431,10 @@ impl MTextParser {
                 self.flush_current_span(false);
                 self.document
                     .push_paragraph(std::mem::take(&mut self.current_paragraph));
-                // Span properties carry over, same as \P
+                // Span properties carry over, same as \P — the one difference
+                // is that what follows opens a new column, so mark it. Drop the
+                // mark and `\N` is indistinguishable from `\P` downstream.
+                self.current_paragraph.starts_column = true;
             }
 
             // Wrap at dimension line (skip, no output)
