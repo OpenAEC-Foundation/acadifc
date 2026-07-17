@@ -1028,22 +1028,33 @@ impl<'a> SatIntCurve<'a> {
         Some((degree, knots, ctrl))
     }
 
-    /// Sample `segs + 1` points evenly along the curve's valid parameter range.
-    /// Empty when the record has no decodable nubs geometry.
+    /// Sample `segs + 1` points evenly along the curve's full valid parameter
+    /// range. Empty when the record has no decodable nubs geometry.
     pub fn sample(&self, segs: usize) -> Vec<(f64, f64, f64)> {
+        let Some((degree, knots, _)) = self.nubs() else {
+            return Vec::new();
+        };
+        self.sample_range(knots[degree], knots[knots.len() - degree - 1], segs)
+    }
+
+    /// Sample `segs + 1` points evenly along `[t0, t1]` — an edge's own
+    /// parameter span, so only the used arc of the curve is emitted. The range
+    /// is clamped to the curve's valid parameter interval. Empty when the record
+    /// has no decodable nubs geometry or the span is degenerate.
+    pub fn sample_range(&self, t0: f64, t1: f64, segs: usize) -> Vec<(f64, f64, f64)> {
         let Some((degree, knots, ctrl)) = self.nubs() else {
             return Vec::new();
         };
         let segs = segs.max(1);
-        let t0 = knots[degree];
-        let t1 = knots[knots.len() - degree - 1];
-        if !(t1 > t0) {
+        let (lo, hi) = (knots[degree], knots[knots.len() - degree - 1]);
+        let (a, b) = (t0.min(t1).max(lo), t0.max(t1).min(hi));
+        if !(b > a) {
             return Vec::new();
         }
         (0..=segs)
             .map(|s| {
-                let t = t0 + (t1 - t0) * (s as f64 / segs as f64);
-                let p = de_boor(degree, &knots, &ctrl, t.min(t1).max(t0));
+                let t = a + (b - a) * (s as f64 / segs as f64);
+                let p = de_boor(degree, &knots, &ctrl, t);
                 (p[0], p[1], p[2])
             })
             .collect()
