@@ -975,6 +975,111 @@ impl<'a> SatEllipseCurve<'a> {
     }
 }
 
+/// Accessor for an `intcurve-curve` entity record — an interpolated spline
+/// curve. Its geometry is an embedded `nubs` (non-uniform B-spline) block:
+/// `... nubs <degree> <rational?> <n_knots> [<knot> <mult>]* [<x> <y> <z>]* ...`.
+/// Straight and elliptic edges have their own dedicated accessors; this covers
+/// the general spline edges (fillet/blend boundaries), which otherwise decode
+/// to nothing and leave a face un-trimmable.
+#[derive(Debug, Clone)]
+pub struct SatIntCurve<'a> {
+    record: &'a SatRecord,
+}
+
+impl<'a> SatIntCurve<'a> {
+    pub fn from_record(record: &'a SatRecord) -> Option<Self> {
+        if record.entity_type == "intcurve-curve" {
+            Some(Self { record })
+        } else {
+            None
+        }
+    }
+
+    /// Parse the embedded `nubs` block into (degree, expanded knots, control
+    /// points). `None` when the record carries no recognizable nubs data.
+    fn nubs(&self) -> Option<(usize, Vec<f64>, Vec<[f64; 3]>)> {
+        let t = &self.record.tokens;
+        let ni = t.iter().position(|x| x.as_ident() == Some("nubs"))?;
+        let degree = t.get(ni + 1)?.as_integer()? as usize;
+        // t[ni + 2] is the rational flag (0 = non-rational — the only form here).
+        let n_knots = t.get(ni + 3)?.as_integer()? as usize;
+        let mut knots: Vec<f64> = Vec::new();
+        let mut i = ni + 4;
+        for _ in 0..n_knots {
+            let k = t.get(i)?.as_float()?;
+            let mult = t.get(i + 1)?.as_integer()?.max(0) as usize;
+            for _ in 0..mult {
+                knots.push(k);
+            }
+            i += 2;
+        }
+        if knots.len() < degree + 2 {
+            return None;
+        }
+        let n_ctrl = knots.len() - degree - 1;
+        let mut ctrl: Vec<[f64; 3]> = Vec::with_capacity(n_ctrl);
+        for _ in 0..n_ctrl {
+            let x = t.get(i)?.as_float()?;
+            let y = t.get(i + 1)?.as_float()?;
+            let z = t.get(i + 2)?.as_float()?;
+            ctrl.push([x, y, z]);
+            i += 3;
+        }
+        Some((degree, knots, ctrl))
+    }
+
+    /// Sample `segs + 1` points evenly along the curve's valid parameter range.
+    /// Empty when the record has no decodable nubs geometry.
+    pub fn sample(&self, segs: usize) -> Vec<(f64, f64, f64)> {
+        let Some((degree, knots, ctrl)) = self.nubs() else {
+            return Vec::new();
+        };
+        let segs = segs.max(1);
+        let t0 = knots[degree];
+        let t1 = knots[knots.len() - degree - 1];
+        if !(t1 > t0) {
+            return Vec::new();
+        }
+        (0..=segs)
+            .map(|s| {
+                let t = t0 + (t1 - t0) * (s as f64 / segs as f64);
+                let p = de_boor(degree, &knots, &ctrl, t.min(t1).max(t0));
+                (p[0], p[1], p[2])
+            })
+            .collect()
+    }
+}
+
+/// Evaluate a B-spline curve at parameter `t` via De Boor's algorithm.
+fn de_boor(degree: usize, knots: &[f64], ctrl: &[[f64; 3]], t: f64) -> [f64; 3] {
+    // Knot span k: knots[k] <= t < knots[k+1], clamped into the valid interval.
+    let n = ctrl.len();
+    let mut k = degree;
+    while k + 1 < knots.len() && knots[k + 1] <= t && k + 1 <= n {
+        k += 1;
+    }
+    k = k.min(n - 1).max(degree);
+    // Working control points for the recursion.
+    let mut d: Vec<[f64; 3]> = (0..=degree)
+        .map(|j| ctrl[(k - degree + j).min(n - 1)])
+        .collect();
+    for r in 1..=degree {
+        for j in (r..=degree).rev() {
+            let i = k - degree + j;
+            let denom = knots[i + degree - r + 1] - knots[i];
+            let a = if denom.abs() > 1e-12 {
+                (t - knots[i]) / denom
+            } else {
+                0.0
+            };
+            for c in 0..3 {
+                d[j][c] = (1.0 - a) * d[j - 1][c] + a * d[j][c];
+            }
+        }
+    }
+    d[degree]
+}
+
 /// Accessor for a `plane-surface` entity record.
 ///
 /// Plane-surface layout: `plane-surface $<attrib> <px> <py> <pz> <nx> <ny> <nz> <ux> <uy> <uz> ...`
