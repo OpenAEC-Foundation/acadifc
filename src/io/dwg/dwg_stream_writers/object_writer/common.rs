@@ -391,11 +391,16 @@ impl<'a> DwgObjectWriter<'a> {
         // writer just before this call; consumed and cleared here so every
         // other entity writes false.
         //
-        // Mirror the reader (see read_common_entity_data): entities serialized
-        // WITH proxy/preview vector graphics (`has_graphic`) omit this bit, so
-        // do not write it for them — otherwise a re-read (which skips it there)
-        // would desync the record.
-        if self.version.r2013_plus(self.dxf_version) && !has_graphic {
+        // Mirror the reader (see read_common_entity_data): write it for R2013+
+        // as the spec — and ACadSharp / LibreDWG — do, except for MULTILEADER,
+        // which the reader skips because some writers omit it there. It was once
+        // skipped for every preview-bearing entity instead; that mis-modelled
+        // the format and desynced IMAGE / WIPEOUT (evidence in the reader).
+        //
+        // MULTILEADER is class-based, so its type code is per-file: resolve it
+        // rather than comparing against the OBJ_MULTILEADER placeholder.
+        let is_multileader = type_code == self.class_type_code("MULTILEADER", OBJ_MULTILEADER);
+        if self.version.r2013_plus(self.dxf_version) && !is_multileader {
             let has_ds = self.pending_has_ds_data;
             self.writer.write_bit(has_ds);
         }

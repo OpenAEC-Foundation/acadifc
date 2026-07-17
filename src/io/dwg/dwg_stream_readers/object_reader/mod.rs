@@ -418,14 +418,28 @@ impl DwgObjectReader {
         // R2013+: `has_ds_data` bit — set when the entity's geometry lives in
         // the AcDs data store (3DSOLID/REGION/BODY/SURFACE SAB blobs). Captured
         // so the AcDs blob→entity attach can honour object-stream order.
-        // The bit is absent for entities serialized WITH proxy/preview vector
-        // graphics (`has_graphic` == true) — e.g. MULTILEADER and WIPEOUT written
-        // by applications that cache a vector preview. Those objects are
-        // proxy-style serializations that omit the AcDs indicator; reading it
-        // there consumes a data bit and desyncs the whole record (the type-
-        // specific fields following common data then decode to garbage).
+        //
+        // Read it for everything the spec covers — as ACadSharp
+        // (`readReactorsAndDictionaryHandle`) and LibreDWG
+        // (`common_entity_data.spec`: `SINCE (R_2013) FIELD_B (has_ds_data)`)
+        // both do — except MULTILEADER, which some writers omit it for.
+        //
+        // This was previously gated on `!has_graphic`, on the theory that
+        // entities carrying a preview omit the bit. That is not the
+        // distinction: in one and the same drawing, WIPEOUT and IMAGE carry a
+        // preview AND write the bit, while MULTILEADER carries a preview and
+        // omits it. So the old gate desynced every preview-bearing IMAGE and
+        // WIPEOUT (fade/insertion/handles decoded to garbage, images silently
+        // vanished) just to keep MULTILEADER aligned.
+        //
+        // The skip cannot be deferred and validated later: the missing bit
+        // shifts the variable-length fields that follow (bit-shorts, ENC
+        // colour), so the divergence grows past one bit and no downstream
+        // anchor can recover it. It must be decided here, and `type_code` is
+        // already normalised to the stable OBJ_* constants for class-based
+        // entities, so keying on it is portable across files.
         let mut has_ds_data = false;
-        if self.version.r2013_plus(self.dxf_version) && !has_graphic {
+        if self.version.r2013_plus(self.dxf_version) && type_code != common::OBJ_MULTILEADER {
             has_ds_data = reader.read_bit();
         }
 
