@@ -114,6 +114,12 @@ pub fn read_classes(data: &[u8], version: DxfVersion, maintenance_version: u8) -
         class.proxy_flags = ProxyFlags::from(proxy_flags_raw);
         class.was_zombie = was_zombie;
         class.item_class_id = item_class_id;
+        // 0x1F2 marks a graphical entity, 0x1F3 a non-graphical object. Without
+        // this the flag stayed at its `false` default for every class, so any
+        // class-based entity the reader has no explicit type for (e.g. an
+        // application's custom entity) was classified as an object and decoded
+        // with the wrong layout — the entity, and whatever it drew, vanished.
+        class.is_an_entity = item_class_id == 0x1F2;
 
         // R2004+: instance count + 4 extra BL fields
         if version >= DxfVersion::AC1018 {
