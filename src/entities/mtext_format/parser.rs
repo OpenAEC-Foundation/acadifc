@@ -927,22 +927,36 @@ impl MTextParser {
                 }
                 i += 1;
             } else if ch == 't' && i + 1 < chars.len() {
-                // Tab stops: comma-separated positions
+                // Tab stops: comma-separated, each optionally prefixed by
+                // `c`/`r`/`D` (center/right/decimal); no prefix = left.
                 let start = i + 1;
                 let mut k = start;
                 while k < chars.len()
                     && (chars[k].is_ascii_digit()
-                        || chars[k] == '.'
-                        || chars[k] == '-'
-                        || chars[k] == ',')
+                        || matches!(
+                            chars[k],
+                            '.' | '-' | ',' | 'c' | 'C' | 'r' | 'R' | 'd' | 'D'
+                        ))
                 {
                     k += 1;
                 }
                 let segment: String = chars[start..k].iter().collect();
-                let mut tab_stops: Vec<f64> = self.current_paragraph.properties.tab_stops.clone();
+                let mut tab_stops = self.current_paragraph.properties.tab_stops.clone();
                 for part in segment.split(',') {
-                    if let Ok(v) = part.trim().parse::<f64>() {
-                        tab_stops.push(v);
+                    let part = part.trim();
+                    let (prefix, num) = match part.chars().next() {
+                        Some('c') | Some('C') => (b'c', &part[1..]),
+                        Some('r') | Some('R') => (b'r', &part[1..]),
+                        Some('d') | Some('D') => (b'D', &part[1..]),
+                        _ => (0, part),
+                    };
+                    if let Ok(v) = num.trim().parse::<f64>() {
+                        tab_stops.push(match prefix {
+                            b'c' => TabStop::Center(v),
+                            b'r' => TabStop::Right(v),
+                            b'D' => TabStop::Decimal(v),
+                            _ => TabStop::Left(v),
+                        });
                     }
                 }
                 self.current_paragraph.properties.tab_stops = tab_stops;
@@ -1745,7 +1759,19 @@ mod tests {
     #[test]
     fn test_parse_paragraph_tab_stops() {
         let doc = parse_mtext("{\\pt3,6,9;Text}", false);
-        assert_eq!(doc.paragraphs[0].properties.tab_stops, vec![3.0, 6.0, 9.0]);
+        assert_eq!(
+            doc.paragraphs[0].properties.tab_stops,
+            vec![TabStop::Left(3.0), TabStop::Left(6.0), TabStop::Left(9.0)]
+        );
+    }
+
+    #[test]
+    fn test_parse_paragraph_decimal_tab_stop() {
+        let doc = parse_mtext("{\\ptD.2;Text}", false);
+        assert_eq!(
+            doc.paragraphs[0].properties.tab_stops,
+            vec![TabStop::Decimal(0.2)]
+        );
     }
 
     #[test]
@@ -1761,7 +1787,10 @@ mod tests {
             doc.paragraphs[0].properties.line_spacing,
             Some(MTextLineSpacing::Exact(0.5))
         );
-        assert_eq!(doc.paragraphs[0].properties.tab_stops, vec![3.0, 6.0]);
+        assert_eq!(
+            doc.paragraphs[0].properties.tab_stops,
+            vec![TabStop::Left(3.0), TabStop::Left(6.0)]
+        );
     }
 
     #[test]

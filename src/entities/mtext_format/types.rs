@@ -285,8 +285,9 @@ pub struct ParagraphProperties {
     pub spacing_after: Option<f64>,
     /// Line spacing from `se<n>` (exact spacing in inches) or `sm<n>` (multiple of font height).
     pub line_spacing: Option<MTextLineSpacing>,
-    /// Tab stops from `t<n>` (comma-separated positions).
-    pub tab_stops: Vec<f64>,
+    /// Tab stops from `t<n>` (comma-separated, each optionally prefixed by
+    /// `c`/`r`/`D` for center/right/decimal alignment).
+    pub tab_stops: Vec<TabStop>,
 }
 
 /// Line spacing mode from `se` (exact) or `sm` (multiple) inside `\p...;`.
@@ -306,8 +307,10 @@ pub enum MTextLineSpacing {
 // Tab Stop
 // ============================================================================
 
-/// A tab stop position and alignment.
-#[derive(Debug, Clone, PartialEq)]
+/// A tab stop position and alignment. The prefix in `\p…t…;` selects the
+/// kind: no prefix = left, `c` = center, `r` = right, `D` = decimal (the text
+/// after the tab aligns its decimal point on the stop).
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TabStop {
     /// Left-aligned tab at position
@@ -316,6 +319,28 @@ pub enum TabStop {
     Center(f64),
     /// Right-aligned tab at position
     Right(f64),
+    /// Decimal (dot-aligned) tab at position (`D` prefix)
+    Decimal(f64),
+}
+
+impl TabStop {
+    /// The stop's position along the paragraph.
+    pub fn position(&self) -> f64 {
+        match self {
+            TabStop::Left(p) | TabStop::Center(p) | TabStop::Right(p) | TabStop::Decimal(p) => *p,
+        }
+    }
+}
+
+impl core::fmt::Display for TabStop {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            TabStop::Left(p) => write!(f, "{}", p),
+            TabStop::Center(p) => write!(f, "c{}", p),
+            TabStop::Right(p) => write!(f, "r{}", p),
+            TabStop::Decimal(p) => write!(f, "D{}", p),
+        }
+    }
 }
 
 // ============================================================================
