@@ -276,6 +276,25 @@ impl MTextParser {
                         }
                     }
                 }
+                '\n' => {
+                    // A raw line feed is a hard paragraph break, same as `\P`
+                    // or the caret form `^J`.
+                    self.pos += 1;
+                    self.flush_current_span(merge_spans);
+                    self.document
+                        .push_paragraph(std::mem::take(&mut self.current_paragraph));
+                }
+                '\t' => {
+                    // Keep the tab character; the layout engine resolves it to
+                    // the paragraph's next tab stop.
+                    self.text_buf.push('\t');
+                    self.pos += 1;
+                }
+                c if (c as u32) < 0x20 => {
+                    // Any other control character renders as a space.
+                    self.text_buf.push(' ');
+                    self.pos += 1;
+                }
                 _ => {
                     self.text_buf.push(ch);
                     self.pos += 1;
@@ -621,9 +640,12 @@ impl MTextParser {
     fn parse_rgb_color(&mut self) {
         let value_str = self.parse_semicolon_value();
         if let Ok(packed) = value_str.trim().parse::<u32>() {
-            let b_val = (packed & 0xFF) as u8;
+            // The MTEXT inline `\c` true-color value is byte-reversed relative
+            // to the usual 0xRRGGBB: the low byte is red and the high byte is
+            // blue (so `\c255` is pure red, not blue).
+            let r_val = (packed & 0xFF) as u8;
             let g_val = ((packed >> 8) & 0xFF) as u8;
-            let r_val = ((packed >> 16) & 0xFF) as u8;
+            let b_val = ((packed >> 16) & 0xFF) as u8;
             self.current_props_mut().color_rgb = Some((r_val, g_val, b_val));
             self.current_props_mut().color = None; // RGB overrides ACI
         }
@@ -1133,19 +1155,20 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_rgb_color_blue() {
-        // BGR packed 255 = (B=255,G=0,R=0) → RGB (0,0,255) = BLUE
-        let doc = parse_mtext(r"{\c255;Blue}", false);
+    fn test_parse_rgb_color_red() {
+        // The inline `\c` value is byte-reversed: low byte is red, so
+        // `\c255` (0x0000FF) = pure RED (255,0,0).
+        let doc = parse_mtext(r"{\c255;Red}", false);
         assert_eq!(doc.paragraphs[0].spans.len(), 1);
         assert_eq!(
             doc.paragraphs[0].spans[0].properties.color_rgb,
-            Some((0, 0, 255))
+            Some((255, 0, 0))
         );
     }
 
     #[test]
     fn test_parse_rgb_color_green() {
-        // BGR packed 65280 = (B=0,G=255,R=0) → RGB (0,255,0) = GREEN
+        // 0x00FF00 → green is the middle byte, unaffected by the R/B swap.
         let doc = parse_mtext(r"{\c65280;Green}", false);
         assert_eq!(
             doc.paragraphs[0].spans[0].properties.color_rgb,
@@ -1154,12 +1177,12 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_rgb_color_red() {
-        // BGR packed 16711680 = (B=0,G=0,R=255) → RGB (255,0,0) = RED
-        let doc = parse_mtext(r"{\c16711680;Red}", false);
+    fn test_parse_rgb_color_blue() {
+        // High byte is blue, so `\c16711680` (0xFF0000) = pure BLUE (0,0,255).
+        let doc = parse_mtext(r"{\c16711680;Blue}", false);
         assert_eq!(
             doc.paragraphs[0].spans[0].properties.color_rgb,
-            Some((255, 0, 0))
+            Some((0, 0, 255))
         );
     }
 
@@ -1784,6 +1807,23 @@ mod tests {
             doc.paragraphs[0].properties.tab_stops,
             vec![TabStop::Decimal(2.0)]
         );
+    }
+
+    #[test]
+    fn test_raw_line_feed_breaks_paragraph() {
+        // A raw LF (0x0A) is a hard paragraph break, like `\P` / `^J`.
+        let doc = parse_mtext("a\nb", false);
+        assert_eq!(doc.paragraphs.len(), 2);
+        assert_eq!(doc.paragraphs[0].spans[0].text, "a");
+        assert_eq!(doc.paragraphs[1].spans[0].text, "b");
+    }
+
+    #[test]
+    fn test_control_char_becomes_space() {
+        // Any control char other than tab/LF renders as a space.
+        let doc = parse_mtext("a\u{1}b", false);
+        assert_eq!(doc.paragraphs.len(), 1);
+        assert_eq!(doc.paragraphs[0].spans[0].text, "a b");
     }
 
     #[test]
