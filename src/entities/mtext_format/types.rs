@@ -166,10 +166,15 @@ impl MTextParagraphAlignment {
     /// Parse from the character after `q` in `\p...q<char>...;`
     pub fn from_char(ch: char) -> Self {
         match ch.to_ascii_lowercase() {
-            'l' | 'd' => MTextParagraphAlignment::Left,
+            'l' => MTextParagraphAlignment::Left,
             'r' => MTextParagraphAlignment::Right,
             'c' => MTextParagraphAlignment::Center,
             'j' => MTextParagraphAlignment::Justified,
+            'd' => MTextParagraphAlignment::Distributed,
+            // AutoCAD serializes the paragraph *Justify* option as `\pq*` (the
+            // `*` that means "reset" in the other sub-codes), so a `q*` reads as
+            // justified rather than an alignment reset.
+            '*' => MTextParagraphAlignment::Justified,
             _ => MTextParagraphAlignment::Default,
         }
     }
@@ -1224,7 +1229,7 @@ mod tests {
         );
         assert_eq!(
             MTextParagraphAlignment::from_char('d'),
-            MTextParagraphAlignment::Left
+            MTextParagraphAlignment::Distributed
         );
     }
 
