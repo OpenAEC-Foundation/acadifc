@@ -13,15 +13,15 @@
 //! Based on ACadSharp's `DwgObjectReader.cs`.
 
 pub mod common;
-pub mod tables;
 pub mod entities;
 pub mod objects;
+pub mod tables;
 
-use std::collections::HashMap;
 use crate::error::{DxfError, Result};
-use crate::io::dwg::dwg_version::DwgVersion;
 use crate::io::dwg::dwg_stream_readers::merged_reader::DwgMergedReader;
-use crate::types::{DxfVersion, Color, Transparency};
+use crate::io::dwg::dwg_version::DwgVersion;
+use crate::types::{Color, DxfVersion, Transparency};
+use std::collections::HashMap;
 
 /// Maximum number of items in any array read from the stream.
 /// Prevents infinite loops when reading corrupt data.
@@ -163,7 +163,8 @@ impl DwgObjectReader {
         if offset >= self.data.len() {
             return Err(DxfError::Parse(format!(
                 "Object offset {} out of range (data len {})",
-                offset, self.data.len()
+                offset,
+                self.data.len()
             )));
         }
 
@@ -186,7 +187,9 @@ impl DwgObjectReader {
         if pos + size > self.data.len() {
             return Err(DxfError::Parse(format!(
                 "Object record extends past data: offset={}, size={}, data_len={}",
-                offset, size, self.data.len()
+                offset,
+                size,
+                self.data.len()
             )));
         }
         let merged_data = self.data[pos..pos + size].to_vec();
@@ -203,12 +206,13 @@ impl DwgObjectReader {
         //      handle_start = total_data_bits - handle_bits
         //      flag_position = handle_start - 1
         if self.version.r2007_plus() {
-            let dwg = DwgVersion::from_dxf_version(self.dxf_version)
-                .unwrap_or(DwgVersion::AC15);
+            let dwg = DwgVersion::from_dxf_version(self.dxf_version).unwrap_or(DwgVersion::AC15);
 
             // Read type_code from temp reader
             let mut temp = crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::new(
-                merged_data.clone(), dwg, self.dxf_version,
+                merged_data.clone(),
+                dwg,
+                self.dxf_version,
             );
             let type_code = temp.read_object_type();
 
@@ -237,20 +241,27 @@ impl DwgObjectReader {
 
             // Main reader: starts at data_start_bits (after type_code [+ RL])
             let mut main_reader = crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::new(
-                merged_data.clone(), dwg, self.dxf_version,
+                merged_data.clone(),
+                dwg,
+                self.dxf_version,
             );
             main_reader.set_position_in_bits(data_start_bits);
 
             // Text reader: positioned by flag at flag_position
             let mut text_reader = crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::new(
-                merged_data.clone(), dwg, self.dxf_version,
+                merged_data.clone(),
+                dwg,
+                self.dxf_version,
             );
             text_reader.set_position_by_flag(flag_position);
 
             // Handle reader: starts at bit position handle_start (NOT byte-aligned).
-            let mut handle_reader = crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::new(
-                merged_data.clone(), dwg, self.dxf_version,
-            );
+            let mut handle_reader =
+                crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::new(
+                    merged_data.clone(),
+                    dwg,
+                    self.dxf_version,
+                );
             handle_reader.set_position_in_bits(handle_start);
 
             let mut reader = DwgMergedReader::from_readers(
@@ -276,14 +287,15 @@ impl DwgObjectReader {
         //
         //    For R13–R14 there is no top-level RL; we pass 0 and
         //    handle reads fall back to position 0.
-        let dwg = DwgVersion::from_dxf_version(self.dxf_version)
-            .unwrap_or(DwgVersion::AC15);
+        let dwg = DwgVersion::from_dxf_version(self.dxf_version).unwrap_or(DwgVersion::AC15);
 
         let handle_start_bits = if self.version.r2000_plus() {
             // Read BS + RL from a disposable temp reader to discover
             // the split point without consuming from the final reader.
             let mut temp = crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::new(
-                merged_data.clone(), dwg, self.dxf_version,
+                merged_data.clone(),
+                dwg,
+                self.dxf_version,
             );
             let _tc = temp.read_object_type(); // BS
             temp.read_raw_long() as i64 // RL = main_size_bits
@@ -294,12 +306,16 @@ impl DwgObjectReader {
 
         // Create main reader (reads from bit 0)
         let main_reader = crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::new(
-            merged_data.clone(), dwg, self.dxf_version,
+            merged_data.clone(),
+            dwg,
+            self.dxf_version,
         );
 
         // Create handle reader positioned at handle_start_bits
         let mut handle_reader = crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::new(
-            merged_data, dwg, self.dxf_version,
+            merged_data,
+            dwg,
+            self.dxf_version,
         );
         handle_reader.set_position_in_bits(handle_start_bits);
 
@@ -412,7 +428,11 @@ impl DwgObjectReader {
             }
         } else {
             let h = reader.read_handle();
-            if h != 0 { Some(h) } else { None }
+            if h != 0 {
+                Some(h)
+            } else {
+                None
+            }
         };
 
         // R2013+: `has_ds_data` bit — set when the entity's geometry lives in
@@ -439,8 +459,58 @@ impl DwgObjectReader {
         // already normalised to the stable OBJ_* constants for class-based
         // entities, so keying on it is portable across files.
         let mut has_ds_data = false;
-        if self.version.r2013_plus(self.dxf_version) && type_code != common::OBJ_MULTILEADER {
-            has_ds_data = reader.read_bit();
+        if self.version.r2013_plus(self.dxf_version) {
+            if type_code == common::OBJ_MULTILEADER {
+                // Some writers emit the has_ds bit for MULTILEADER, some omit it,
+                // within the same DWG version — so a fixed rule mis-decodes one
+                // family or the other. Decide by peeking the object's
+                // class_version (the first main-stream field after the common
+                // data): with the wrong choice the 1-bit shift cascades through
+                // the variable-length ENC colour and the version reads garbage.
+                // The peek walks the MAIN stream only — the handle reads
+                // interleaved in the common data live in the handle stream and
+                // don't move the main cursor, so replicating just the main reads
+                // lands exactly on the version either way.
+                let r2007 = self.version.r2007_plus();
+                let r2010 = self.version.r2010_plus();
+                let start = reader.position_in_bits();
+                let peek = |reader: &mut DwgMergedReader, read_ds: bool| -> i16 {
+                    if read_ds {
+                        let _ = reader.read_bit();
+                    }
+                    let _ = reader.read_en_color(); // colour (ENC, variable)
+                    let _ = reader.read_bit_double(); // linetype scale
+                    let _ = reader.main_mut().read_2bits(); // linetype flags
+                    if r2007 {
+                        let _ = reader.main_mut().read_2bits(); // material flags
+                        let _ = reader.read_byte(); // shadow flags
+                    }
+                    let _ = reader.main_mut().read_2bits(); // plotstyle flags
+                    if r2010 {
+                        // Three visual-style presence bits (their handles, when
+                        // set, are in the handle stream — skipped here).
+                        let _ = reader.read_bit();
+                        let _ = reader.read_bit();
+                        let _ = reader.read_bit();
+                    }
+                    let _ = reader.read_bit_short(); // invisibility
+                    let _ = reader.read_byte(); // lineweight
+                    reader.read_bit_short() // MULTILEADER class_version
+                };
+                let plausible = |v: i16| (0..=10).contains(&v);
+                let v_with = peek(reader, true);
+                reader.set_position_in_bits(start);
+                let v_without = peek(reader, false);
+                reader.set_position_in_bits(start);
+                // Only consume the bit when reading it makes the version decode
+                // sanely and skipping it does not — otherwise leave it (matching
+                // the omitting writers), which is the safe default.
+                if plausible(v_with) && !plausible(v_without) {
+                    has_ds_data = reader.read_bit();
+                }
+            } else {
+                has_ds_data = reader.read_bit();
+            }
         }
 
         // R13-R14: layer + linetype
@@ -637,7 +707,11 @@ impl DwgObjectReader {
             }
         } else {
             let h = reader.read_handle();
-            if h != 0 { Some(h) } else { None }
+            if h != 0 {
+                Some(h)
+            } else {
+                None
+            }
         };
 
         // R2013+: binary data flag
@@ -802,7 +876,7 @@ mod tests {
     fn test_modular_short_roundtrip() {
         // Verify roundtrip with the writer's encoding
         use crate::io::dwg::dwg_stream_writers::object_writer::common::{
-            write_modular_short_bytes, write_modular_char_bytes,
+            write_modular_char_bytes, write_modular_short_bytes,
         };
 
         for &val in &[0, 1, 42, 127, 128, 255, 1000, 32767, 32768, 65535, 100000] {
@@ -823,9 +897,9 @@ mod tests {
     #[test]
     fn test_read_record_roundtrip() {
         // Write a simple object record using the writer, then read it back
-        use crate::io::dwg::dwg_stream_writers::object_writer::common::write_modular_short_bytes;
-        use crate::io::dwg::dwg_stream_writers::merged_writer::DwgMergedWriter;
         use crate::io::dwg::crc;
+        use crate::io::dwg::dwg_stream_writers::merged_writer::DwgMergedWriter;
+        use crate::io::dwg::dwg_stream_writers::object_writer::common::write_modular_short_bytes;
 
         let dwg_ver = DwgVersion::AC15;
         let dxf_ver = DxfVersion::AC1015;
