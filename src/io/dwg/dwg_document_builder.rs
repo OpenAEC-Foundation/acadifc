@@ -972,6 +972,42 @@ impl DwgDocumentBuilder {
             }
         }
 
+        // ── Post-pass: cache each RasterImage's path from its IMAGEDEF ──
+        //
+        // An IMAGE entity carries no path of its own — the referenced
+        // ImageDefinition object holds it (the entity's `file_path` is only a
+        // convenience cache). Copy it across so rendering and loading can see
+        // the path directly: a resolvable local image loads its pixels, and an
+        // unresolved reference (a URL, a missing file) can show its path as
+        // text instead of a blank frame.
+        {
+            let def_paths: HashMap<Handle, String> = document
+                .objects
+                .iter()
+                .filter_map(|(h, o)| match o {
+                    crate::objects::ObjectType::ImageDefinition(d) if !d.file_name.is_empty() => {
+                        Some((*h, d.file_name.clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            if !def_paths.is_empty() {
+                for entity in &mut document.entities {
+                    let needs = matches!(&**entity, EntityType::RasterImage(im)
+                        if im.file_path.is_empty()
+                            && im.definition_handle.is_some_and(|h| def_paths.contains_key(&h)));
+                    if !needs {
+                        continue;
+                    }
+                    if let EntityType::RasterImage(im) = std::sync::Arc::make_mut(entity) {
+                        if let Some(p) = im.definition_handle.and_then(|h| def_paths.get(&h)) {
+                            im.file_path = p.clone();
+                        }
+                    }
+                }
+            }
+        }
+
         // ── Post-pass: Correct entity ownership from binary data ───────
         //
         // The DWG entity_mode=1 flag means "paper space entity" but does
