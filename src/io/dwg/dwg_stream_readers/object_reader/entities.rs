@@ -2976,6 +2976,66 @@ fn ole2frame_corners(data: &[u8]) -> (Vector3, Vector3) {
     }
 }
 
+/// R2018+ multiline attribute payload. When an ATTRIB/ATTDEF reports
+/// `mtext_type > 1` the stream carries an embedded MTEXT object
+/// (`AcDbMTextObjectEmbedded`) between the type byte and the tag. It must be
+/// consumed in full or the tag / field-length / flags that follow shift.
+/// The only field we keep is the MTEXT `text` — it holds the real multiline
+/// value (`A\PB`) that the plain single-line `text_value` truncates to `A`.
+/// Handle reads pull from the separate handle stream, so getting a handle
+/// wrong cannot desync the main-stream tag; only the main-stream field
+/// sequence matters, and it mirrors LibreDWG's macro exactly.
+fn read_embedded_mtext_text(reader: &mut DwgMergedReader) -> String {
+    // Reduced common-entity preamble.
+    let _entmode = reader.main_mut().read_2bits();
+    let _num_reactors = reader.read_bit_long();
+    let _is_xdic_missing = reader.read_bit();
+    let _has_ds_data = reader.read_bit();
+    let _color_raw = reader.read_bit_short();
+    let _ltype_scale = reader.read_bit_double();
+    let _ltype_flags = reader.main_mut().read_2bits();
+    let _plotstyle_flags = reader.main_mut().read_2bits();
+    let _material_flags = reader.main_mut().read_2bits();
+    let _shadow_flags = reader.read_byte();
+    let _has_full_visualstyle = reader.read_bit();
+    let _has_face_visualstyle = reader.read_bit();
+    let _has_edge_visualstyle = reader.read_bit();
+    let _invisible = reader.read_bit_short();
+    let _linewt = reader.read_byte();
+    let _layer = reader.read_handle();
+
+    // MTEXT geometry.
+    let _ins_pt = reader.read_3bit_double();
+    let _extrusion = reader.read_3bit_double();
+    let _x_axis = reader.read_3bit_double();
+    let _rect_width = reader.read_bit_double();
+    let _rect_height = reader.read_bit_double();
+    let _text_height = reader.read_bit_double();
+    let _attachment = reader.read_bit_short();
+    let _flow_dir = reader.read_bit_short();
+    let _extents_width = reader.read_bit_double();
+    let _extents_height = reader.read_bit_double();
+    let text = reader.read_variable_text();
+    let _style = reader.read_handle();
+    let _linespace_style = reader.read_bit_short();
+    let _linespace_factor = reader.read_bit_double();
+    let _unknown_b0 = reader.read_bit();
+    let bg_fill_flag = reader.read_bit_long();
+    // R2018 signals a background fill with bit 0.
+    if bg_fill_flag & 1 != 0 {
+        let _bg_fill_scale = reader.read_bit_long();
+        let _bg_fill_color = reader.read_cm_color();
+        let _bg_fill_trans = reader.read_bit_long();
+    }
+    let _is_not_annotative = reader.read_bit();
+    let _is_really_locked = reader.read_bit();
+    let annotative_data_size = reader.read_bit_short();
+    if annotative_data_size > 0 {
+        let _ = reader.read_bytes(annotative_data_size as usize);
+    }
+    text
+}
+
 pub fn read_attribute_definition(
     reader: &mut DwgMergedReader,
     version: DwgVersion,
@@ -2994,6 +3054,16 @@ pub fn read_attribute_definition(
     } else {
         1
     };
+
+    // A multiline attribute (mtext_type > 1) embeds a full MTEXT here; its text
+    // is the real multiline default value, which the single-line field above
+    // truncates to the first line.
+    if att_type > 1 {
+        let mtext = read_embedded_mtext_text(reader);
+        if !mtext.is_empty() {
+            text_data.value = mtext;
+        }
+    }
 
     let tag = reader.read_variable_text();
     let field_length = reader.read_bit_short();
@@ -3040,6 +3110,16 @@ pub fn read_attribute_entity(
     } else {
         1
     };
+
+    // A multiline attribute (mtext_type > 1) embeds a full MTEXT here; its text
+    // is the real multiline value, which the single-line field above truncates
+    // to the first line ("A" instead of "A\PB").
+    if att_type > 1 {
+        let mtext = read_embedded_mtext_text(reader);
+        if !mtext.is_empty() {
+            text_data.value = mtext;
+        }
+    }
 
     let tag = reader.read_variable_text();
     let field_length = reader.read_bit_short();
