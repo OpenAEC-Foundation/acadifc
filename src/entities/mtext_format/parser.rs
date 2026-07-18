@@ -621,15 +621,16 @@ impl MTextParser {
         self.current_props_mut().second_color = None;
         self.current_props_mut().color_rgb = None;
 
-        // Read color1
+        // Read color1. ACI runs 0..=256 (0 ByBlock, 256 ByLayer both mean
+        // "inherit" here); an out-of-range value is invalid and ignored.
         if let Some(c1) = self.parse_numeric_semicolon_value() {
-            if c1 != 0 && c1 != 256 {
+            if c1 != 0 && c1 != 256 && c1 <= 256 {
                 self.current_props_mut().color = Some(MTextColor::from_index(c1));
             }
 
             // Read color2 (ending color for gradient)
             if let Some(c2) = self.parse_numeric_semicolon_value() {
-                if c2 != 0 && c2 != 256 {
+                if c2 != 0 && c2 != 256 && c2 <= 256 {
                     self.current_props_mut().second_color = Some(MTextColor::from_index(c2));
                 }
             }
