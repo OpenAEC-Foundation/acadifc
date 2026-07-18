@@ -2263,6 +2263,41 @@ impl DwgDocumentBuilder {
                     e.insertion_point = data.text_data.insertion_point;
                     e.height = data.text_data.height;
                     e.rotation = data.text_data.rotation;
+                    // Carry the full text geometry the reader parsed — same as
+                    // ATTRIB. Without these the attribute reverts to
+                    // left/baseline default width/oblique/style and, crucially,
+                    // loses its flags, so a CONSTANT attribute (whose value is
+                    // drawn straight from the block, with no ATTRIB) is treated
+                    // as a plain template and never rendered.
+                    e.horizontal_alignment = match data.text_data.horizontal_alignment {
+                        1 => HorizontalAlignment::Center,
+                        2 => HorizontalAlignment::Right,
+                        3 => HorizontalAlignment::Aligned,
+                        4 => HorizontalAlignment::Middle,
+                        5 => HorizontalAlignment::Fit,
+                        _ => HorizontalAlignment::Left,
+                    };
+                    e.vertical_alignment = match data.text_data.vertical_alignment {
+                        1 => VerticalAlignment::Bottom,
+                        2 => VerticalAlignment::Middle,
+                        3 => VerticalAlignment::Top,
+                        _ => VerticalAlignment::Baseline,
+                    };
+                    e.alignment_point = if data.text_data.horizontal_alignment != 0
+                        || data.text_data.vertical_alignment != 0
+                    {
+                        data.text_data.alignment_point
+                    } else {
+                        crate::types::Vector3::ZERO
+                    };
+                    e.width_factor = data.text_data.width_factor;
+                    e.oblique_angle = data.text_data.oblique_angle;
+                    e.normal = data.text_data.normal;
+                    e.text_style = maps.style_name(data.text_data.style_handle);
+                    e.flags = AttributeFlags::from_bits(data.flags as i32);
+                    e.text_generation_flags = data.text_data.generation;
+                    e.field_length = data.field_length;
+                    e.lock_position = data.lock_position;
                     let _ = document.add_entity(EntityType::AttributeDefinition(e));
                 }
                 OBJ_ATTRIB => {
