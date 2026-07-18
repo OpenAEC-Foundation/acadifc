@@ -2308,6 +2308,15 @@ impl DwgDocumentBuilder {
                     e.oblique_angle = data.text_data.oblique_angle;
                     e.normal = data.text_data.normal;
                     e.text_style = maps.style_name(data.text_data.style_handle);
+                    // Carry the flag byte the reader parsed. Dropping it left
+                    // `flags.invisible` false, so an attribute tagged invisible
+                    // (ATTMODE 1 should hide it) was still drawn. Also carry the
+                    // text-generation (backward / upside-down), field length and
+                    // lock-position, which were likewise being discarded.
+                    e.flags = AttributeFlags::from_bits(data.flags as i32);
+                    e.text_generation_flags = data.text_data.generation;
+                    e.field_length = data.field_length;
+                    e.lock_position = data.lock_position;
                     // Collect pending — will be attached to parent INSERT
                     // after Pass 2 (owner_handle = INSERT handle).
                     pending_attributes
