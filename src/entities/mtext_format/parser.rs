@@ -947,7 +947,17 @@ impl MTextParser {
                     let (prefix, num) = match part.chars().next() {
                         Some('c') | Some('C') => (b'c', &part[1..]),
                         Some('r') | Some('R') => (b'r', &part[1..]),
-                        Some('d') | Some('D') => (b'D', &part[1..]),
+                        // A decimal stop names its alignment character right
+                        // after `D` (`.` or `,`); the position follows it, so
+                        // `D.2` is a decimal stop at 2 (aligning on `.`), not 0.2.
+                        Some('d') | Some('D') => {
+                            let rest = &part[1..];
+                            (
+                                b'D',
+                                rest.strip_prefix(|c: char| c == '.' || c == ',')
+                                    .unwrap_or(rest),
+                            )
+                        }
                         _ => (0, part),
                     };
                     if let Ok(v) = num.trim().parse::<f64>() {
@@ -1767,10 +1777,12 @@ mod tests {
 
     #[test]
     fn test_parse_paragraph_decimal_tab_stop() {
+        // `D.2` = decimal stop at 2 aligning on `.` — the `.` is the alignment
+        // character, not part of the position.
         let doc = parse_mtext("{\\ptD.2;Text}", false);
         assert_eq!(
             doc.paragraphs[0].properties.tab_stops,
-            vec![TabStop::Decimal(0.2)]
+            vec![TabStop::Decimal(2.0)]
         );
     }
 
