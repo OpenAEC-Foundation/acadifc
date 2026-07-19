@@ -1103,16 +1103,37 @@ impl MTextDocument {
             }
         }
 
-        // Height — only emit when changed
+        // Height — only emit when changed. A relative `\H…x;` MULTIPLIES the
+        // current height: the parser compounds it (`\H0.2x;\H1.25x;` →
+        // Factor(0.25)) and stores the cumulative factor. So the serializer must
+        // emit the RATIO from the running height to the target, NOT the stored
+        // cumulative factor — writing `\H0.25x;` there would compound a second
+        // time on re-parse (0.25 × current), shrinking the height on every
+        // round-trip until the text collapses toward zero.
         if props.height != current_props.height {
-            match props.height {
-                Some(MTextScalar::Factor(v)) => {
-                    write!(result, "\\H{}x;", v).ok();
+            match (&current_props.height, &props.height) {
+                // Factor → Factor: emit target/current so re-parse multiplies
+                // back to exactly `target`.
+                (Some(MTextScalar::Factor(c)), Some(MTextScalar::Factor(t)))
+                    if c.abs() > 1e-12 =>
+                {
+                    write!(result, "\\H{}x;", t / c).ok();
                 }
-                Some(MTextScalar::Absolute(v)) => {
-                    write!(result, "\\H{};", v).ok();
+                // Fresh factor over the implicit 1.0.
+                (None, Some(MTextScalar::Factor(t))) => {
+                    write!(result, "\\H{}x;", t).ok();
                 }
-                None => {}
+                // Absolute always resets — no compounding, emit it directly.
+                (_, Some(MTextScalar::Absolute(t))) => {
+                    write!(result, "\\H{};", t).ok();
+                }
+                // Factor reached from an absolute (or a zero current) can't be
+                // expressed by a relative code; emit it as a fresh factor. This
+                // mix does not arise from parsed input.
+                (_, Some(MTextScalar::Factor(t))) => {
+                    write!(result, "\\H{}x;", t).ok();
+                }
+                (_, None) => {}
             }
         }
 
@@ -1182,6 +1203,38 @@ impl Default for MTextDocument {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::entities::mtext_format::parse_mtext;
+
+    /// Relative `\H…x;` heights compound, so serialize→parse must reproduce the
+    /// SAME cumulative factors. Regression for the bug where the serializer
+    /// re-emitted the stored cumulative factor as a relative code, compounding
+    /// it a second time and shrinking the text toward zero on every round-trip
+    /// (budweiser2018.dwg handle 50019 rendered its editor preview at collapsed
+    /// / huge sizes because of this).
+    #[test]
+    fn relative_height_round_trips() {
+        let src = "{\\H0.2x;a\\H1.25x;b\\H0.8x;c}";
+        let factors = |v: &str| -> Vec<f64> {
+            parse_mtext(v, true)
+                .paragraphs
+                .iter()
+                .flat_map(|p| p.spans.iter())
+                .filter_map(|s| match s.properties.height {
+                    Some(MTextScalar::Factor(f)) => Some(f),
+                    _ => None,
+                })
+                .collect()
+        };
+        let f0 = factors(src);
+        assert_eq!(f0, vec![0.2, 0.25, 0.2], "parse compounds: {f0:?}");
+        // Round-trip repeatedly — factors must stay put, not decay.
+        let mut v = parse_mtext(src, true).to_mtext_string();
+        for _ in 0..3 {
+            let f = factors(&v);
+            assert_eq!(f, f0, "height decayed on round-trip: {f:?} (value {v:?})");
+            v = parse_mtext(&v, true).to_mtext_string();
+        }
+    }
 
     #[test]
     fn test_special_char_to_char() {
