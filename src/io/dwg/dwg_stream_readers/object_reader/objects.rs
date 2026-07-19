@@ -415,6 +415,40 @@ pub fn read_block_representation_data(reader: &mut DwgMergedReader) -> crate::ty
     crate::types::Handle::from(reader.read_handle()) // H block (3, 340)
 }
 
+/// Decoded leading portion of an `AcDbField`.
+pub struct FieldReadData {
+    /// Evaluator id (DXF 1) — `"AcVar"`, `"AcDiesel"`, `"AcExpr"`, `"AcObjProp"`.
+    pub id: String,
+    /// Field-code / template string (DXF 2).
+    pub code: String,
+    /// Referenced-object handles (DXF 331), targeted by `%<\_ObjIdx N>%` markers
+    /// in an `AcObjProp` field. Empty for most fields.
+    pub objects: Vec<u64>,
+}
+
+/// Read the leading `AcDbField` data: evaluator id (T, 1), field-code string
+/// (T, 2), and the referenced-object handle vector (needed by `AcObjProp`). The
+/// value data set and cached value string are left unread — the caller
+/// preserves the whole record verbatim and recovers the container→child
+/// structure from object owners.
+pub fn read_field(reader: &mut DwgMergedReader) -> FieldReadData {
+    let id = reader.read_variable_text();
+    let code = reader.read_variable_text();
+    let num_childs = safe_count(reader.read_bit_long());
+    let num_objects = safe_count(reader.read_bit_long());
+    // Object-specific handles follow the common owner/reactor/xdict handles in
+    // the handle stream: the child fields first (recovered instead from object
+    // owners, so skipped here), then the referenced objects.
+    for _ in 0..num_childs {
+        let _ = reader.read_handle();
+    }
+    let mut objects = Vec::with_capacity(num_objects.max(0) as usize);
+    for _ in 0..num_objects {
+        objects.push(reader.read_handle());
+    }
+    FieldReadData { id, code, objects }
+}
+
 /// Read the PlotSettings data portion (shared by Layout and standalone PlotSettings).
 pub fn read_plot_settings_data(reader: &mut DwgMergedReader, version: DwgVersion) -> PlotSettingsData {
     let page_name = reader.read_variable_text();

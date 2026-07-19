@@ -900,6 +900,45 @@ pub struct Preview {
     pub data: Vec<u8>,
 }
 
+/// A decoded `AcDbField` definition (a dynamic text field).
+///
+/// `evaluator` is the field's evaluator id (DXF 1) — e.g. `"AcVar"` or
+/// `"AcDiesel"`. `code` is the field-code string (DXF 2): for a *leaf* field it
+/// is the expression to evaluate (e.g. `\AcDiesel $(getvar,"cdate")`); for a
+/// *container* field it is the display template with `%<\_FldIdx N>%` markers
+/// that reference child fields. Child fields are the fields whose `owner` is
+/// this field's handle.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct FieldDef {
+    pub handle: Handle,
+    pub owner: Handle,
+    pub evaluator: String,
+    pub code: String,
+    /// Referenced-object handles targeted by `%<\_ObjIdx N>%` markers in an
+    /// `AcObjProp` field code. Empty for other field kinds.
+    pub objects: Vec<Handle>,
+}
+
+/// Document summary information (the DWG `SummaryInfo` section — the same
+/// properties AutoCAD's DWGPROPS dialog edits). Backs the Document-category
+/// dynamic-text fields (Author, Title, Subject, Keywords, Comments,
+/// HyperlinkBase, RevisionNumber) plus arbitrary custom properties.
+#[derive(Debug, Clone, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct SummaryInfo {
+    pub title: String,
+    pub subject: String,
+    pub author: String,
+    pub keywords: String,
+    pub comments: String,
+    pub last_saved_by: String,
+    pub revision_number: String,
+    pub hyperlink_base: String,
+    /// Custom document properties as `(name, value)` pairs.
+    pub custom_properties: Vec<(String, String)>,
+}
+
 /// A CAD document containing all drawing data
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -986,6 +1025,23 @@ pub struct CadDocument {
     /// objects stay verbatim as `ObjectType::Unknown`.
     pub block_representations: HashMap<Handle, Handle>,
 
+    /// AcDbField definitions, keyed by field-object handle. A *side* view: the
+    /// FIELD objects stay verbatim in `objects` as `ObjectType::Unknown` for DWG
+    /// round-trip, while this exposes the evaluator id and field-code string so
+    /// a consumer can (re-)evaluate dynamic text fields without decoding the raw
+    /// object stream. The container→child link is recovered from each field's
+    /// `owner` (a child field is owned by its container field).
+    pub fields: HashMap<Handle, FieldDef>,
+
+    /// Document summary information (Author, Title, Subject, …) from the DWG
+    /// SummaryInfo section. Backs the Document-category dynamic-text fields.
+    pub summary_info: SummaryInfo,
+
+    /// Filesystem path the document was read from, when known (set by the DWG /
+    /// DXF file readers). Backs the `Filename` / `FilePath` dynamic-text fields.
+    /// `None` for documents built in memory or read from a bare stream.
+    pub source_path: Option<String>,
+
     /// DGN line-style definitions (`AcDbLSDefinition`), keyed by handle. Present
     /// for drawings converted from MicroStation DGN, whose custom linetypes are
     /// empty in the standard `LTYPE` table and defined here instead. Read-side
@@ -1061,6 +1117,9 @@ impl CadDocument {
             block_visibility_params: HashMap::new(),
             context_scales: HashMap::new(),
             block_representations: HashMap::new(),
+            fields: HashMap::new(),
+            summary_info: SummaryInfo::default(),
+            source_path: None,
             dgn_ls_definitions: HashMap::new(),
             dgn_ls_components: HashMap::new(),
             eed_by_handle: HashMap::new(),

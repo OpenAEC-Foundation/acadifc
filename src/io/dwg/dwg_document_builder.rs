@@ -3340,6 +3340,37 @@ impl DwgDocumentBuilder {
                         },
                     );
                 }
+                OBJ_FIELD => {
+                    // Decode the evaluator id + field-code + referenced-object
+                    // handles into the side map; keep the object verbatim as
+                    // Unknown for round-trip.
+                    let data = objects::read_field(&mut reader);
+                    document.fields.insert(
+                        Handle::from(handle),
+                        crate::document::FieldDef {
+                            handle: Handle::from(handle),
+                            owner: owner_handle,
+                            evaluator: data.id,
+                            code: data.code,
+                            objects: data.objects.into_iter().map(Handle::from).collect(),
+                        },
+                    );
+                    let type_name = format!("DWG_OBJ_{}", type_code);
+                    let raw_handle_bits = reader.get_handle_bits();
+                    let raw_data = reader.raw_merged_data();
+                    document.objects.insert(
+                        Handle::from(handle),
+                        crate::objects::ObjectType::Unknown {
+                            type_name,
+                            handle: Handle::from(handle),
+                            owner: owner_handle,
+                            raw_dxf_codes: None,
+                            raw_dwg_data: Some(raw_data),
+                            raw_dwg_handle_bits: raw_handle_bits,
+                            raw_dwg_version: Some(document.version),
+                        },
+                    );
+                }
                 _ => {
                     // Annotative object-context leaves (*OBJECTCONTEXTDATA) carry
                     // their annotation scale as the FIRST object-specific handle

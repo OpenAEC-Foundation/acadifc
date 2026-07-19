@@ -500,32 +500,93 @@ fn section_name_from_field(name_buf: &[u8; 64]) -> String {
 ///
 /// Reads DWG binary files and provides access to all internal
 /// integrity checksums including the AC1021 Header CRC-64.
+/// Read one `T16` string (2-byte character-count prefix). R2007+ stores the
+/// characters as UTF-16LE; earlier versions as one byte per character.
+fn read_t16(cur: &mut &[u8], utf16: bool) -> String {
+    if cur.len() < 2 {
+        *cur = &[];
+        return String::new();
+    }
+    let count = u16::from_le_bytes([cur[0], cur[1]]) as usize;
+    *cur = &cur[2..];
+    if utf16 {
+        let bytes = count.saturating_mul(2).min(cur.len());
+        let units: Vec<u16> = cur[..bytes]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        *cur = &cur[bytes..];
+        String::from_utf16_lossy(&units)
+            .trim_end_matches('\0')
+            .to_string()
+    } else {
+        let bytes = count.min(cur.len());
+        let s = String::from_utf8_lossy(&cur[..bytes]).into_owned();
+        *cur = &cur[bytes..];
+        s.trim_end_matches('\0').to_string()
+    }
+}
+
+/// Parse the decompressed `AcDb:SummaryInfo` section (R2004+): eight fixed
+/// strings, three 8-byte timers, then the custom-property pairs.
+fn parse_summary_info(buf: &[u8], utf16: bool) -> crate::document::SummaryInfo {
+    let mut cur: &[u8] = buf;
+    let mut si = crate::document::SummaryInfo {
+        title: read_t16(&mut cur, utf16),
+        subject: read_t16(&mut cur, utf16),
+        author: read_t16(&mut cur, utf16),
+        keywords: read_t16(&mut cur, utf16),
+        comments: read_t16(&mut cur, utf16),
+        last_saved_by: read_t16(&mut cur, utf16),
+        revision_number: read_t16(&mut cur, utf16),
+        hyperlink_base: read_t16(&mut cur, utf16),
+        custom_properties: Vec::new(),
+    };
+    // TDINDWG, TDCREATE, TDUPDATE — each a TIMERLL (2×u32 = 8 bytes).
+    if cur.len() >= 24 {
+        cur = &cur[24..];
+    }
+    if cur.len() >= 2 {
+        let n = u16::from_le_bytes([cur[0], cur[1]]) as usize;
+        cur = &cur[2..];
+        for _ in 0..n.min(256) {
+            let tag = read_t16(&mut cur, utf16);
+            let val = read_t16(&mut cur, utf16);
+            if tag.is_empty() && val.is_empty() {
+                break;
+            }
+            si.custom_properties.push((tag, val));
+        }
+    }
+    si
+}
+
 pub struct DwgReader<R: Read + Seek> {
     stream: R,
     /// Options controlling read behaviour.
     pub options: DwgReadOptions,
     /// Notifications collected during reading
     pub notifications: NotificationCollection,
+    /// Source path, when opened from a file — copied onto the document so the
+    /// `Filename` / `FilePath` fields can resolve.
+    source_path: Option<String>,
 }
 
 impl DwgReader<File> {
     /// Open a DWG file from a filesystem path.
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, DxfError> {
-        let file = File::open(path)?;
-        Ok(Self {
-            stream: file,
-            options: DwgReadOptions::default(),
-            notifications: NotificationCollection::new(),
-        })
+        Self::from_file_with_options(path, DwgReadOptions::default())
     }
 
     /// Open a DWG file from a filesystem path with custom options.
     pub fn from_file_with_options<P: AsRef<Path>>(path: P, options: DwgReadOptions) -> Result<Self, DxfError> {
+        let path = path.as_ref();
         let file = File::open(path)?;
         Ok(Self {
             stream: file,
             options,
             notifications: NotificationCollection::new(),
+            source_path: Some(path.to_string_lossy().into_owned()),
         })
     }
 }
@@ -537,6 +598,7 @@ impl<R: Read + Seek> DwgReader<R> {
             stream,
             options: DwgReadOptions::default(),
             notifications: NotificationCollection::new(),
+            source_path: None,
         }
     }
 
@@ -546,6 +608,7 @@ impl<R: Read + Seek> DwgReader<R> {
             stream,
             options,
             notifications: NotificationCollection::new(),
+            source_path: None,
         }
     }
 
@@ -716,6 +779,19 @@ impl<R: Read + Seek> DwgReader<R> {
                     }
                 }
             }
+        }
+
+        // Record the source path (Filename / FilePath fields) when opened from a
+        // file rather than a bare stream.
+        document.source_path = self.source_path.clone();
+
+        // Document summary information (Author/Title/Subject/… → the
+        // Document-category dynamic-text fields).
+        if let Ok(buf) = self.get_section_buffer("AcDb:SummaryInfo", &info) {
+            let utf16 = crate::io::dwg::dwg_version::DwgVersion::from_dxf_version(dxf_version)
+                .map(|v| v.r2007_plus())
+                .unwrap_or(true);
+            document.summary_info = parse_summary_info(&buf, utf16);
         }
 
         // Transfer reader notifications to the document so callers can

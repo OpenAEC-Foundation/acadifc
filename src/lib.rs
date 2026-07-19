@@ -136,6 +136,7 @@ pub mod document;
 pub mod io;
 pub mod xdata;
 pub mod objects;
+pub mod fields;
 
 // Re-export commonly used types
 pub use error::{DxfError, Result};
