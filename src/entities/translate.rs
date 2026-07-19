@@ -522,6 +522,18 @@ impl EntityType {
             EntityType::Seqend(e) => translate_seqend(e, offset),
             EntityType::Ole2Frame(e) => translate_ole2frame(e, offset),
             EntityType::PolygonMesh(e) => translate_polygon_mesh(e, offset),
+            EntityType::Light(e) => {
+                e.position = Vector3::new(
+                    e.position.x + offset.x,
+                    e.position.y + offset.y,
+                    e.position.z + offset.z,
+                );
+                e.target = Vector3::new(
+                    e.target.x + offset.x,
+                    e.target.y + offset.y,
+                    e.target.z + offset.z,
+                );
+            }
             EntityType::Unknown(e) => translate_unknown(e, offset),
         }
     }

@@ -2254,6 +2254,7 @@ fn get_common_mut(entity: &mut EntityType) -> &mut EntityCommon {
         EntityType::Wipeout(e) => &mut e.common,
         EntityType::Shape(e) => &mut e.common,
         EntityType::Underlay(e) => &mut e.common,
+        EntityType::Light(e) => &mut e.common,
         EntityType::Seqend(e) => &mut e.common,
         EntityType::Ole2Frame(e) => &mut e.common,
         EntityType::PolygonMesh(e) => &mut e.common,

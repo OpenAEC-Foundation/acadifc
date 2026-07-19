@@ -53,6 +53,7 @@ pub mod underlay;
 pub mod seqend;
 pub mod ole2frame;
 pub mod polygon_mesh;
+pub mod light;
 pub mod unknown_entity;
 pub mod explode;
 pub mod translate;
@@ -132,6 +133,7 @@ pub use ole2frame::{Ole2Frame, OleObjectType};
 pub use polygon_mesh::{
     PolygonMesh as PolygonMeshEntity, PolygonMeshVertex, PolygonMeshFlags, SurfaceSmoothType,
 };
+pub use light::Light;
 pub use unknown_entity::UnknownEntity;
 
 /// Base trait for all CAD entities
@@ -443,6 +445,8 @@ pub enum EntityType {
     Ole2Frame(Ole2Frame),
     /// Polygon mesh (3D surface mesh)
     PolygonMesh(PolygonMeshEntity),
+    /// Light entity (point / spot / distant light source)
+    Light(Light),
     /// Unknown / unsupported entity type (common fields only)
     Unknown(UnknownEntity),
 }
@@ -494,6 +498,7 @@ impl EntityType {
             EntityType::Seqend(e) => e,
             EntityType::Ole2Frame(e) => e,
             EntityType::PolygonMesh(e) => e,
+            EntityType::Light(e) => e,
             EntityType::Unknown(e) => e,
         }
     }
@@ -544,6 +549,7 @@ impl EntityType {
             EntityType::Seqend(e) => e,
             EntityType::Ole2Frame(e) => e,
             EntityType::PolygonMesh(e) => e,
+            EntityType::Light(e) => e,
             EntityType::Unknown(e) => e,
         }
     }
@@ -594,6 +600,7 @@ impl EntityType {
             EntityType::Seqend(e) => &e.common,
             EntityType::Ole2Frame(e) => &e.common,
             EntityType::PolygonMesh(e) => &e.common,
+            EntityType::Light(e) => &e.common,
             EntityType::Unknown(e) => &e.common,
         }
     }
@@ -644,6 +651,7 @@ impl EntityType {
             EntityType::Seqend(e) => &mut e.common,
             EntityType::Ole2Frame(e) => &mut e.common,
             EntityType::PolygonMesh(e) => &mut e.common,
+            EntityType::Light(e) => &mut e.common,
             EntityType::Unknown(e) => &mut e.common,
         }
     }

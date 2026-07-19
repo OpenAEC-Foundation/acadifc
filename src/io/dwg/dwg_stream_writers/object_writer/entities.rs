@@ -79,6 +79,17 @@ impl<'a> DwgObjectWriter<'a> {
             }
             EntityType::Underlay(e) => self.write_underlay(e),
             EntityType::Table(e) => self.write_table(e),
+            EntityType::Light(e) => {
+                // Round-trip the light verbatim from its preserved raw bytes
+                // (only position/aim were decoded, for the glyph). Same policy
+                // as Surface / Unknown: keep it only when the encoding family
+                // matches, otherwise drop rather than corrupt.
+                if let Some(ref raw_data) = e.raw_dwg_data {
+                    if self.raw_passthrough_compatible(e.dwg_source_version) {
+                        self.register_raw_object(e.common.handle, raw_data, e.dwg_handle_bits);
+                    }
+                }
+            }
             EntityType::Unknown(e) => {
                 // Write raw DWG data verbatim only when the target matches the
                 // source encoding family; otherwise drop rather than corrupt.

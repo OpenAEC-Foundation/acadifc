@@ -715,6 +715,7 @@ impl DwgDocumentBuilder {
                     view.lens_length = data.lens_length;
                     view.front_clip = data.front_clip;
                     view.back_clip = data.back_clip;
+                    view.perspective = data.perspective;
                     let _ = document.views.remove(&data.name);
                     let _ = document.views.add(view);
                 }
@@ -1455,6 +1456,23 @@ impl DwgDocumentBuilder {
                     e.thickness = data.thickness;
                     e.normal = data.normal;
                     let _ = document.add_entity(EntityType::Circle(e));
+                }
+                OBJ_LIGHT => {
+                    let data = entities::read_light(&mut reader);
+                    let mut e = Light::new();
+                    e.common = entity_common;
+                    e.name = data.name;
+                    e.light_type = data.light_type;
+                    e.position = data.position;
+                    e.target = data.target;
+                    // Preserve the raw record verbatim so write-back keeps the
+                    // full photometric body (no native light encoder yet), just
+                    // like the Surface / Unknown arms below.
+                    e.dwg_type_code = type_code;
+                    e.dwg_handle_bits = reader.get_handle_bits();
+                    e.raw_dwg_data = Some(reader.raw_merged_data());
+                    e.dwg_source_version = Some(document.version);
+                    let _ = document.add_entity(EntityType::Light(e));
                 }
                 OBJ_ARC => {
                     let data = entities::read_arc(&mut reader);

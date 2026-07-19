@@ -1111,6 +1111,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             // DXF surface export not yet supported; skip rather than emit
             // malformed geometry.
             EntityType::Surface(_) => Ok(()),
+            // Light glyphs are preserved via the DWG raw record; there is no
+            // native DXF encoder, so skip on DXF write (same as Surface).
+            EntityType::Light(_) => Ok(()),
             EntityType::Table(e) => self.write_acad_table(e, owner),
             EntityType::Tolerance(e) => self.write_tolerance(e, owner),
             EntityType::PolyfaceMesh(e) => self.write_polyface_mesh(e, owner),

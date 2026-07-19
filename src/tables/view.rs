@@ -29,6 +29,9 @@ pub struct View {
     pub back_clip: f64,
     /// Twist angle
     pub twist_angle: f64,
+    /// Perspective projection flag (VIEWMODE bit 0). True for views created by
+    /// the CAMERA command; used to draw the camera display glyph.
+    pub perspective: bool,
 }
 
 impl View {
@@ -46,6 +49,7 @@ impl View {
             front_clip: 0.0,
             back_clip: 0.0,
             twist_angle: 0.0,
+            perspective: false,
         }
     }
 }

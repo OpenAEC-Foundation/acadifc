@@ -264,6 +264,15 @@ pub struct ToleranceData {
     pub dimstyle_handle: u64,
 }
 
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct LightData {
+    pub name: String,
+    pub light_type: i32,
+    pub position: Vector3,
+    pub target: Vector3,
+}
+
 // ════════════════════════════════════════════════════════════════════════
 //  Reader functions — Simple entities
 // ════════════════════════════════════════════════════════════════════════
@@ -278,6 +287,31 @@ pub fn read_point(reader: &mut DwgMergedReader) -> PointData {
         thickness,
         normal,
         x_axis_angle,
+    }
+}
+
+/// Read an `AcDbLight` body (position + aim), following the ODA field order.
+///
+/// Only the fields up to the aim target are decoded — enough to place the
+/// display glyph. The attenuation / shadow / photometric tail is left in the
+/// record buffer (the caller preserves the whole record verbatim for
+/// write-back, so nothing is lost). The common entity data has already been
+/// consumed by the caller before this runs.
+pub fn read_light(reader: &mut DwgMergedReader) -> LightData {
+    let _class_version = reader.read_bit_long(); // BL 90
+    let name = reader.read_variable_text(); // TV 1
+    let light_type = reader.read_bit_long(); // BL 70 (1 distant, 2 point, 3 spot)
+    let _status = reader.read_bit(); // B 290
+    let _light_color = reader.read_cm_color(); // CMC 63
+    let _plot_glyph = reader.read_bit(); // B 291
+    let _intensity = reader.read_bit_double(); // BD 40
+    let position = reader.read_3bit_double(); // 3BD 10
+    let target = reader.read_3bit_double(); // 3BD 11
+    LightData {
+        name,
+        light_type,
+        position,
+        target,
     }
 }
 

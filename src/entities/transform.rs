@@ -1025,6 +1025,9 @@ impl EntityType {
             EntityType::Seqend(e) => transform_seqend(e, transform),
             EntityType::Ole2Frame(e) => transform_ole2frame(e, transform),
             EntityType::PolygonMesh(e) => transform_polygon_mesh(e, transform),
+            // Lights are glyph-only; the photometric frame is not transformed
+            // (keeps the preserved raw record valid for write-back).
+            EntityType::Light(_) => {}
             EntityType::Unknown(e) => transform_unknown(e, transform),
         }
     }
