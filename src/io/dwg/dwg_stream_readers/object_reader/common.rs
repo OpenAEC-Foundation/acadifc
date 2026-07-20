@@ -195,6 +195,11 @@ pub fn dxf_name_to_type_code(dxf_name: &str) -> Option<i16> {
         "MESH" => Some(OBJ_MESH),
         "MULTILEADER" => Some(OBJ_MULTILEADER),
         "OLE2FRAME" => Some(OBJ_OLE2FRAME),
+        // AcDbViewRepBlockReference (Model Documentation drawing views, R2013+)
+        // is a subclass of AcDbBlockReference, so its record begins with the
+        // INSERT fields. Decode it as an INSERT to place the baked view
+        // geometry (the *A / *S view blocks) that the view border frames.
+        "ACDBVIEWREPBLOCKREFERENCE" => Some(OBJ_INSERT),
         // ACAD_SURFACE family (ACIS-backed graphical entities).
         "SURFACE" => Some(OBJ_SURFACE),
         "PLANESURFACE" => Some(OBJ_PLANESURFACE),
