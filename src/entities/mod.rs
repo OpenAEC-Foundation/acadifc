@@ -52,6 +52,7 @@ pub mod shape;
 pub mod underlay;
 pub mod seqend;
 pub mod ole2frame;
+pub mod ole_presentation;
 pub mod polygon_mesh;
 pub mod light;
 pub mod section_symbol;
@@ -132,6 +133,7 @@ pub use underlay::{
 };
 pub use seqend::Seqend;
 pub use ole2frame::{Ole2Frame, OleObjectType};
+pub use ole_presentation::{extract_presentation, OlePresentation};
 pub use polygon_mesh::{
     PolygonMesh as PolygonMeshEntity, PolygonMeshVertex, PolygonMeshFlags, SurfaceSmoothType,
 };
