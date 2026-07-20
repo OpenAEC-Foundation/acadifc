@@ -1065,6 +1065,10 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 | EntityType::PolygonMesh(_)
                 | EntityType::AttributeEntity(_)
                 | EntityType::Unknown(_)
+                // No DXF body is emitted for these (raw-DWG-only records), so
+                // their XDATA must not be emitted either.
+                | EntityType::SectionSymbol(_)
+                | EntityType::ViewBorder(_)
         ) {
             self.write_xdata(&entity.common().extended_data)?;
         }
@@ -1114,6 +1118,8 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             // Light glyphs are preserved via the DWG raw record; there is no
             // native DXF encoder, so skip on DXF write (same as Surface).
             EntityType::Light(_) => Ok(()),
+            // Same policy: preserved via the DWG raw record, no DXF encoder.
+            EntityType::SectionSymbol(_) | EntityType::ViewBorder(_) => Ok(()),
             EntityType::Table(e) => self.write_acad_table(e, owner),
             EntityType::Tolerance(e) => self.write_tolerance(e, owner),
             EntityType::PolyfaceMesh(e) => self.write_polyface_mesh(e, owner),

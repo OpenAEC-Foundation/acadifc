@@ -1028,6 +1028,8 @@ impl EntityType {
             // Lights are glyph-only; the photometric frame is not transformed
             // (keeps the preserved raw record valid for write-back).
             EntityType::Light(_) => {}
+            // Anchored to their drawing view (see translate).
+            EntityType::SectionSymbol(_) | EntityType::ViewBorder(_) => {}
             EntityType::Unknown(e) => transform_unknown(e, transform),
         }
     }

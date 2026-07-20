@@ -1108,11 +1108,6 @@ pub struct CadDocument {
     /// i.e. the section (result) views.
     pub section_view_reps: Vec<Handle>,
 
-    /// `AcDbViewBorder` entity handle → the view's *active* viewport entity
-    /// (the border's first object-specific handle reference). The active
-    /// viewport carries the real camera (`view_direction`, twist) for the view.
-    pub view_border_viewport: std::collections::HashMap<Handle, Handle>,
-
     /// Next handle to assign
     next_handle: u64,
 }
@@ -1156,7 +1151,6 @@ impl CadDocument {
             section_view_style: None,
             view_rep_refs: std::collections::HashMap::new(),
             section_view_reps: Vec::new(),
-            view_border_viewport: std::collections::HashMap::new(),
             // Start handle allocation above reserved table handles (0x1-0xA)
             // Table handles are well-known fixed values used by AutoCAD
             next_handle: 0x10,
@@ -1207,6 +1201,9 @@ impl CadDocument {
                 crate::entities::EntityType::Unknown(u) => u.raw_dwg_data.is_some(),
                 crate::entities::EntityType::Surface(s) => s.raw_dwg_data.is_some(),
                 crate::entities::EntityType::MultiLeader(m) => m.raw_dwg_data.is_some(),
+                crate::entities::EntityType::Light(l) => l.raw_dwg_data.is_some(),
+                crate::entities::EntityType::SectionSymbol(s) => s.raw_dwg_data.is_some(),
+                crate::entities::EntityType::ViewBorder(b) => b.raw_dwg_data.is_some(),
                 _ => false,
             };
             raw || !e.common().extended_data.raw_dwg_eed.is_empty()
@@ -2342,6 +2339,8 @@ fn get_common_mut(entity: &mut EntityType) -> &mut EntityCommon {
         EntityType::Shape(e) => &mut e.common,
         EntityType::Underlay(e) => &mut e.common,
         EntityType::Light(e) => &mut e.common,
+        EntityType::SectionSymbol(e) => &mut e.common,
+        EntityType::ViewBorder(e) => &mut e.common,
         EntityType::Seqend(e) => &mut e.common,
         EntityType::Ole2Frame(e) => &mut e.common,
         EntityType::PolygonMesh(e) => &mut e.common,

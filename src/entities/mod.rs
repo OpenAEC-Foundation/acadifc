@@ -54,7 +54,9 @@ pub mod seqend;
 pub mod ole2frame;
 pub mod polygon_mesh;
 pub mod light;
+pub mod section_symbol;
 pub mod unknown_entity;
+pub mod view_border;
 pub mod explode;
 pub mod translate;
 pub mod transform;
@@ -134,7 +136,9 @@ pub use polygon_mesh::{
     PolygonMesh as PolygonMeshEntity, PolygonMeshVertex, PolygonMeshFlags, SurfaceSmoothType,
 };
 pub use light::Light;
-pub use unknown_entity::{SectionSymbol, SectionViewStyle, UnknownEntity};
+pub use section_symbol::{SectionSymbol, SectionViewStyle};
+pub use unknown_entity::UnknownEntity;
+pub use view_border::ViewBorder;
 
 /// Base trait for all CAD entities
 pub trait Entity {
@@ -447,6 +451,8 @@ pub enum EntityType {
     PolygonMesh(PolygonMeshEntity),
     /// Light entity (point / spot / distant light source)
     Light(Light),
+    SectionSymbol(SectionSymbol),
+    ViewBorder(ViewBorder),
     /// Unknown / unsupported entity type (common fields only)
     Unknown(UnknownEntity),
 }
@@ -499,6 +505,8 @@ impl EntityType {
             EntityType::Ole2Frame(e) => e,
             EntityType::PolygonMesh(e) => e,
             EntityType::Light(e) => e,
+            EntityType::SectionSymbol(e) => e,
+            EntityType::ViewBorder(e) => e,
             EntityType::Unknown(e) => e,
         }
     }
@@ -550,6 +558,8 @@ impl EntityType {
             EntityType::Ole2Frame(e) => e,
             EntityType::PolygonMesh(e) => e,
             EntityType::Light(e) => e,
+            EntityType::SectionSymbol(e) => e,
+            EntityType::ViewBorder(e) => e,
             EntityType::Unknown(e) => e,
         }
     }
@@ -601,6 +611,8 @@ impl EntityType {
             EntityType::Ole2Frame(e) => &e.common,
             EntityType::PolygonMesh(e) => &e.common,
             EntityType::Light(e) => &e.common,
+            EntityType::SectionSymbol(e) => &e.common,
+            EntityType::ViewBorder(e) => &e.common,
             EntityType::Unknown(e) => &e.common,
         }
     }
@@ -652,6 +664,8 @@ impl EntityType {
             EntityType::Ole2Frame(e) => &mut e.common,
             EntityType::PolygonMesh(e) => &mut e.common,
             EntityType::Light(e) => &mut e.common,
+            EntityType::SectionSymbol(e) => &mut e.common,
+            EntityType::ViewBorder(e) => &mut e.common,
             EntityType::Unknown(e) => &mut e.common,
         }
     }

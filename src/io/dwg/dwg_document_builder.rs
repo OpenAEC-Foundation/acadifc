@@ -2752,10 +2752,6 @@ impl DwgDocumentBuilder {
 
                 // ── Catch-all ──────────────────────────────────────
                 _ => {
-                    let mut e = UnknownEntity::new(format!("DWG_TYPE_{}", type_code));
-                    e.common = entity_common;
-                    e.dwg_type_code = type_code;
-                    e.dwg_handle_bits = reader.get_handle_bits();
                     // Class numbers ≥500 are per-file; resolve the class name so
                     // the model-documentation decodes below are portable.
                     let cpp_class = document
@@ -2764,29 +2760,72 @@ impl DwgDocumentBuilder {
                         .find(|c| c.class_number == type_code)
                         .map(|c| c.cpp_class_name.as_str())
                         .unwrap_or("");
-                    // AcDbSectionSymbol ("SECTIONLINE"): decode the section "A-A"
-                    // mark for display. The reader is positioned at the
-                    // class-specific data (common entity data already consumed),
-                    // so the geometry reads cleanly from here. Raw bytes below
-                    // still drive write-back — this only adds display data.
-                    if cpp_class == "AcDbSectionSymbol" {
-                        e.section_symbol = decode_section_symbol(&mut reader);
-                    }
-                    // AcDbViewBorder ("DRAWINGVIEW"): its first object-specific
-                    // handle reference is the view's *active* viewport (the one
-                    // carrying the real camera). Recorded so section marks can
-                    // derive their viewing direction from the view graph.
-                    if cpp_class == "AcDbViewBorder" {
-                        let vp = reader.read_handle();
-                        if vp != 0 {
-                            document
-                                .view_border_viewport
-                                .insert(Handle::from(handle), Handle::from(vp));
+                    match cpp_class {
+                        // AcDbSectionSymbol ("SECTIONLINE"): decode the section
+                        // "A-A" mark for display. The reader is positioned at
+                        // the class-specific data (common entity data already
+                        // consumed), so the geometry reads cleanly from here.
+                        // The raw bytes still drive verbatim write-back.
+                        "AcDbSectionSymbol" => {
+                            let mut e = decode_section_symbol(&mut reader)
+                                .unwrap_or_else(SectionSymbol::new);
+                            e.common = entity_common;
+                            e.dwg_type_code = type_code;
+                            e.dwg_handle_bits = reader.get_handle_bits();
+                            e.raw_dwg_data = Some(reader.raw_merged_data());
+                            e.dwg_source_version = Some(document.version);
+                            let _ = document.add_entity(EntityType::SectionSymbol(e));
+                        }
+                        // AcDbViewBorder ("DRAWINGVIEW"): the view's paper
+                        // rectangle / scale, and — as the first object-specific
+                        // handle — the view's *active* viewport (the one
+                        // carrying the real camera), the last hop of the
+                        // section-mark viewing-direction chain.
+                        "AcDbViewBorder" => {
+                            let mut e = ViewBorder::new();
+                            e.common = entity_common;
+                            e.active_viewport = Handle::from(reader.read_handle());
+                            // Paper placement: a version BL then a raw-double
+                            // run — rectangle min/max corners, the view scale
+                            // denominator, a reserved zero, and the view centre
+                            // (redundantly the rectangle midpoint, which
+                            // cross-validates the corner reads).
+                            let _ver = reader.read_bit_long();
+                            let min_x = reader.read_raw_double();
+                            let min_y = reader.read_raw_double();
+                            let max_x = reader.read_raw_double();
+                            let max_y = reader.read_raw_double();
+                            let scale = reader.read_raw_double();
+                            let _reserved = reader.read_raw_double();
+                            let cx = reader.read_raw_double();
+                            let cy = reader.read_raw_double();
+                            let all = [min_x, min_y, max_x, max_y, scale, cx, cy];
+                            if all.iter().all(|v| v.is_finite() && v.abs() < 1.0e9)
+                                && min_x < max_x
+                                && min_y < max_y
+                            {
+                                e.min = [min_x, min_y];
+                                e.max = [max_x, max_y];
+                                e.center = [cx, cy];
+                                e.scale = scale;
+                            }
+                            e.dwg_type_code = type_code;
+                            e.dwg_handle_bits = reader.get_handle_bits();
+                            e.raw_dwg_data = Some(reader.raw_merged_data());
+                            e.dwg_source_version = Some(document.version);
+                            let _ = document.add_entity(EntityType::ViewBorder(e));
+                        }
+                        _ => {
+                            let mut e =
+                                UnknownEntity::new(format!("DWG_TYPE_{}", type_code));
+                            e.common = entity_common;
+                            e.dwg_type_code = type_code;
+                            e.dwg_handle_bits = reader.get_handle_bits();
+                            e.raw_dwg_data = Some(reader.raw_merged_data());
+                            e.dwg_source_version = Some(document.version);
+                            let _ = document.add_entity(EntityType::Unknown(e));
                         }
                     }
-                    e.raw_dwg_data = Some(reader.raw_merged_data());
-                    e.dwg_source_version = Some(document.version);
-                    let _ = document.add_entity(EntityType::Unknown(e));
                 }
             }
         } else if !is_table_type(type_code) {
@@ -3952,6 +3991,7 @@ fn decode_section_symbol(
         label,
         style_handle,
         view_rep_handle,
+        ..SectionSymbol::new()
     })
 }
 

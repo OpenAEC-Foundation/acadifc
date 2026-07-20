@@ -534,6 +534,10 @@ impl EntityType {
                     e.target.z + offset.z,
                 );
             }
+            // Section marks / view borders are anchored to their drawing
+            // view; the preserved raw record is re-emitted verbatim, so a
+            // display-only move would silently revert on save.
+            EntityType::SectionSymbol(_) | EntityType::ViewBorder(_) => {}
             EntityType::Unknown(e) => translate_unknown(e, offset),
         }
     }
