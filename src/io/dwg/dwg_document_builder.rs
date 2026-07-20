@@ -2756,6 +2756,14 @@ impl DwgDocumentBuilder {
                     e.common = entity_common;
                     e.dwg_type_code = type_code;
                     e.dwg_handle_bits = reader.get_handle_bits();
+                    // AcDbSectionSymbol (class 825): decode the section "A-A" mark
+                    // for display. The reader is positioned at the class-specific
+                    // data (common entity data already consumed), so the geometry
+                    // reads cleanly from here. Raw bytes below still drive
+                    // write-back — this only adds a display representation.
+                    if type_code == 825 {
+                        e.section_symbol = decode_section_symbol(&mut reader);
+                    }
                     e.raw_dwg_data = Some(reader.raw_merged_data());
                     e.dwg_source_version = Some(document.version);
                     let _ = document.add_entity(EntityType::Unknown(e));
@@ -3782,6 +3790,96 @@ impl DwgDocumentBuilder {
 
 /// Build a [`Matrix4`](crate::types::Matrix4) from 12 doubles holding a 3×4
 /// transform in row-major order (3 rows of 4: `[R | t]`); bottom row implied.
+/// Decode an `AcDbSectionSymbol` (DWG class 825) into its display geometry.
+///
+/// `reader` must be positioned at the class-specific data (i.e. after
+/// `read_common_entity_data`). The section-symbol serialization is undocumented,
+/// so rather than parse every field we locate the two cut-line endpoints
+/// structurally: each is a 2-D point stored as **two consecutive full IEEE
+/// doubles** (BD prefix `00`) 66 bits apart. The variable-length header and the
+/// lone signed "tick" doubles between/after the ends have no such paired
+/// neighbour, so scanning for the first two full-BD *pairs* in a plausible
+/// coordinate range reliably isolates the endpoints regardless of the header
+/// field layout. The identifier string ("A") comes from the string stream.
+///
+/// Returns `None` if the record is too short or no endpoint pair is found; the
+/// caller then keeps the entity as a plain unknown (raw bytes preserved).
+fn decode_section_symbol(
+    reader: &mut crate::io::dwg::dwg_stream_readers::merged_reader::DwgMergedReader,
+) -> Option<SectionSymbol> {
+    let start = reader.position_in_bits() as usize;
+    let full = reader.raw_merged_data();
+    let total = full.len() * 8;
+    let bit = |off: usize| -> u8 { (full[off / 8] >> (7 - off % 8)) & 1 };
+    // Read a full-precision BD (2-bit prefix `00` then 64 IEEE bits) at bit `b`.
+    // Byte reconstruction matches the bit reader (MSB-first 8-bit groups).
+    let read_bd_full = |b: usize| -> Option<f64> {
+        if b + 66 > total || bit(b) != 0 || bit(b + 1) != 0 {
+            return None;
+        }
+        let mut by = [0u8; 8];
+        for k in 0..8 {
+            let mut v = 0u8;
+            for j in 0..8 {
+                v = (v << 1) | bit(b + 2 + k * 8 + j);
+            }
+            by[k] = v;
+        }
+        Some(f64::from_le_bytes(by))
+    };
+    // A drawing coordinate: finite, non-trivial magnitude, not padding. Both
+    // components of a real endpoint clear this (a mantissa window that lands in
+    // range by chance is usually paired with a 0.0 padding double, which fails).
+    let coord = |v: f64| v.is_finite() && v.abs() > 1e-6 && v.abs() < 5.0e6;
+    // First bit position where two full-BDs 66 bits apart are both real
+    // coordinates — i.e. a 2-D (X, Y) endpoint.
+    let find_point = |from: usize| -> Option<(usize, f64, f64)> {
+        let mut b = from;
+        while b + 132 <= total {
+            if let (Some(x), Some(y)) = (read_bd_full(b), read_bd_full(b + 66)) {
+                if coord(x) && coord(y) {
+                    return Some((b, x, y));
+                }
+            }
+            b += 1;
+        }
+        None
+    };
+    // A lone in-range full-BD (a signed tick length) in [from, to); returns its
+    // value and end bit so the caller can resume the scan past it.
+    let find_tick = |from: usize, to: usize| -> (f64, usize) {
+        let mut b = from;
+        while b + 66 <= to.min(total) {
+            if let Some(v) = read_bd_full(b) {
+                if v.abs() > 1e-9 && v.abs() < 1.0e5 {
+                    return (v, b + 66);
+                }
+            }
+            b += 1;
+        }
+        (0.0, from)
+    };
+
+    let (a_bit, ax, ay) = find_point(start)?;
+    let after_a = a_bit + 132;
+    // The tick sits between the two ends; search for END-B only *past* it so a
+    // window inside the tick double's mantissa can't masquerade as an endpoint.
+    let (tick_a, past_tick_a) = find_tick(after_a, after_a + 200);
+    let (b_bit, bx, by) = find_point(past_tick_a.max(after_a))?;
+    let after_b = b_bit + 132;
+    let (tick_b, _) = find_tick(after_b, total);
+    // Identifier from the string stream (first variable text of the record).
+    let label = reader.read_variable_text();
+
+    Some(SectionSymbol {
+        end_a: [ax, ay],
+        end_b: [bx, by],
+        tick_a,
+        tick_b,
+        label,
+    })
+}
+
 /// DWG stores the spatial-filter transforms row-major (unlike DXF code 40,
 /// which is column-major).
 fn matrix_from_row_major(v: &[f64; 12]) -> crate::types::Matrix4 {

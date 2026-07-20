@@ -16,6 +16,32 @@
 use crate::entities::{Entity, EntityCommon};
 use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transform, Transparency, Vector3};
 
+/// Decoded geometry of an `AcDbSectionSymbol` (DWG class 825, "SECTIONLINE").
+///
+/// The section "A-A" cut mark drawn on a Model-Documentation base view. The
+/// full object is still preserved verbatim in
+/// [`raw_dwg_data`](UnknownEntity::raw_dwg_data) for lossless write-back; this
+/// is the minimal geometry the editor needs to *display* the mark (matching how
+/// [`Light`](crate::entities::Light) keeps decoded position + raw bytes).
+///
+/// Both endpoints are 2-D points in the layout's paper space. `tick_*` is the
+/// signed extension length past each end (sign = extension direction along the
+/// cut line). `label` is the section identifier (e.g. `"A"`).
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct SectionSymbol {
+    /// First cut-line endpoint (paper-space X, Y).
+    pub end_a: [f64; 2],
+    /// Second cut-line endpoint (paper-space X, Y).
+    pub end_b: [f64; 2],
+    /// Signed extension length past `end_a` along the cut line.
+    pub tick_a: f64,
+    /// Signed extension length past `end_b` along the cut line.
+    pub tick_b: f64,
+    /// Section identifier text (drawn at each end).
+    pub label: String,
+}
+
 /// An entity whose type is not directly supported by the library.
 ///
 /// Preserves the DXF/DWG type name and common entity properties.
@@ -54,6 +80,11 @@ pub struct UnknownEntity {
     /// DWG version `raw_dwg_data` was read from (drop on incompatible cross-version save).
     #[cfg_attr(feature = "serde", serde(skip))]
     pub dwg_source_version: Option<crate::types::DxfVersion>,
+    /// Decoded `AcDbSectionSymbol` geometry (DWG class 825), when this unknown
+    /// entity is a Model-Documentation section mark. `None` for every other
+    /// unknown type. The raw bytes above still drive write-back; this only
+    /// enables display.
+    pub section_symbol: Option<SectionSymbol>,
 }
 
 impl UnknownEntity {
@@ -67,6 +98,7 @@ impl UnknownEntity {
             dwg_handle_bits: 0,
             raw_dxf_codes: None,
             dwg_source_version: None,
+            section_symbol: None,
         }
     }
 }

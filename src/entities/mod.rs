@@ -134,7 +134,7 @@ pub use polygon_mesh::{
     PolygonMesh as PolygonMeshEntity, PolygonMeshVertex, PolygonMeshFlags, SurfaceSmoothType,
 };
 pub use light::Light;
-pub use unknown_entity::UnknownEntity;
+pub use unknown_entity::{SectionSymbol, UnknownEntity};
 
 /// Base trait for all CAD entities
 pub trait Entity {
