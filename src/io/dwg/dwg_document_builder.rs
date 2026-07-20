@@ -2756,13 +2756,33 @@ impl DwgDocumentBuilder {
                     e.common = entity_common;
                     e.dwg_type_code = type_code;
                     e.dwg_handle_bits = reader.get_handle_bits();
-                    // AcDbSectionSymbol (class 825): decode the section "A-A" mark
-                    // for display. The reader is positioned at the class-specific
-                    // data (common entity data already consumed), so the geometry
-                    // reads cleanly from here. Raw bytes below still drive
-                    // write-back — this only adds a display representation.
-                    if type_code == 825 {
+                    // Class numbers ≥500 are per-file; resolve the class name so
+                    // the model-documentation decodes below are portable.
+                    let cpp_class = document
+                        .classes
+                        .iter()
+                        .find(|c| c.class_number == type_code)
+                        .map(|c| c.cpp_class_name.as_str())
+                        .unwrap_or("");
+                    // AcDbSectionSymbol ("SECTIONLINE"): decode the section "A-A"
+                    // mark for display. The reader is positioned at the
+                    // class-specific data (common entity data already consumed),
+                    // so the geometry reads cleanly from here. Raw bytes below
+                    // still drive write-back — this only adds display data.
+                    if cpp_class == "AcDbSectionSymbol" {
                         e.section_symbol = decode_section_symbol(&mut reader);
+                    }
+                    // AcDbViewBorder ("DRAWINGVIEW"): its first object-specific
+                    // handle reference is the view's *active* viewport (the one
+                    // carrying the real camera). Recorded so section marks can
+                    // derive their viewing direction from the view graph.
+                    if cpp_class == "AcDbViewBorder" {
+                        let vp = reader.read_handle();
+                        if vp != 0 {
+                            document
+                                .view_border_viewport
+                                .insert(Handle::from(handle), Handle::from(vp));
+                        }
                     }
                     e.raw_dwg_data = Some(reader.raw_merged_data());
                     e.dwg_source_version = Some(document.version);
@@ -3617,6 +3637,53 @@ impl DwgDocumentBuilder {
                     let raw_handle_bits = reader.get_handle_bits();
                     let raw_data = reader.raw_merged_data();
 
+                    // Model-documentation view graph, recorded so section marks
+                    // can derive their viewing direction from real file data:
+                    // - AcDbViewRep: keep its object-specific handle references
+                    //   (they include the view's border entity).
+                    // - AcDbViewRepSectionDefinition: its owner is the section
+                    //   (result) view's AcDbViewRep.
+                    match class_name.as_deref() {
+                        Some("ACDBVIEWREP") => {
+                            let mut hs: Vec<Handle> = Vec::new();
+                            for _ in 0..20 {
+                                let h = reader.read_handle();
+                                hs.push(Handle::from(h));
+                            }
+                            while hs.last().map(|h| h.value()) == Some(0) {
+                                hs.pop();
+                            }
+                            document.view_rep_refs.insert(Handle::from(handle), hs);
+                        }
+                        Some("ACDBVIEWREPSECTIONDEFINITION") => {
+                            let owner = Handle::from(non_entity_data.owner_handle);
+                            if owner.value() != 0
+                                && !document.section_view_reps.contains(&owner)
+                            {
+                                document.section_view_reps.push(owner);
+                            }
+                        }
+                        _ => {}
+                    }
+
+                    // AcDbSectionViewStyle: decode the display fields (arrow
+                    // size, label height, line/arrow visibility) that drive the
+                    // section-mark renderer. The reader sits at the class-specific
+                    // data (common non-entity data already consumed); the raw bytes
+                    // above still drive verbatim write-back. Keep the first found —
+                    // a drawing normally has a single active section-view style.
+                    if class_name.as_deref() == Some("ACDBSECTIONVIEWSTYLE")
+                        && document.section_view_style.is_none()
+                    {
+                        let r2018 = self
+                            .obj_reader
+                            .version()
+                            .r2018_plus(self.obj_reader.dxf_version());
+                        if let Some(svs) = decode_section_view_style(&mut reader, r2018) {
+                            document.section_view_style = Some(svs);
+                        }
+                    }
+
                     // DGN line-style objects (AcDbLS*): decode the header + the
                     // component tree (handle references) into typed side tables
                     // for rendering. Identified by class name so it is not tied to
@@ -3870,6 +3937,12 @@ fn decode_section_symbol(
     let (tick_b, _) = find_tick(after_b, total);
     // Identifier from the string stream (first variable text of the record).
     let label = reader.read_variable_text();
+    // Object-specific handle references (the common entity handles were already
+    // consumed): the section-view style, then the parent view's AcDbViewRep.
+    // The handle cursor is independent of the data/string cursors, so these
+    // reads don't disturb the geometry above.
+    let style_handle = reader.read_handle();
+    let view_rep_handle = reader.read_handle();
 
     Some(SectionSymbol {
         end_a: [ax, ay],
@@ -3877,6 +3950,96 @@ fn decode_section_symbol(
         tick_a,
         tick_b,
         label,
+        style_handle,
+        view_rep_handle,
+    })
+}
+
+/// Decode the display fields of an `AcDbSectionViewStyle` (DWG class 795).
+///
+/// `reader` must be positioned at the class-specific data (after
+/// `read_common_non_entity_data`). Fields are read in LibreDWG `dwg2.spec` order
+/// (cross-validated against a real sample): the `AcDbModelDocViewStyle` base
+/// (version, description, modified-flag), then the section-view fields through
+/// `arrow_symbol_extension_length`. The DATA-stream reads and the interleaved
+/// handle reads use independent cursors, so reading the two null arrow-symbol
+/// handles in place keeps the DATA cursor aligned. R2013 files have no R2018+
+/// base fields.
+///
+/// Returns the fields the renderer needs; the caller keeps the raw record for
+/// verbatim write-back.
+fn decode_section_view_style(
+    reader: &mut crate::io::dwg::dwg_stream_readers::merged_reader::DwgMergedReader,
+    r2018_plus: bool,
+) -> Option<SectionViewStyle> {
+    // AcDbModelDocViewStyle base.
+    let _mdoc_class_version = reader.read_bit_short();
+    let _desc = reader.read_variable_text();
+    let _is_modified = reader.read_bit();
+    // R2018+ added a display name and a style-flags word to the base class.
+    if r2018_plus {
+        let _display_name = reader.read_variable_text();
+        let _viewstyle_flags = reader.read_bit_long();
+    }
+    // AcDbSectionViewStyle.
+    let _class_version = reader.read_bit_short();
+    let flags = reader.read_bit_long();
+    let _identifier_color = reader.read_cm_color();
+    let identifier_height = reader.read_bit_double();
+    // Handle stream (independent cursor), in order: identifier_style, then the
+    // two arrow-symbol handles. A null (0) arrow handle means the default arrow.
+    let _identifier_style = reader.read_handle();
+    let arrow_start = reader.read_handle();
+    let arrow_end = reader.read_handle();
+    let _arrow_color = reader.read_cm_color();
+    let arrow_size = reader.read_bit_double();
+    let _exclude = reader.read_variable_text();
+    let arrow_extension = reader.read_bit_double();
+    // Continue through the DATA stream (LibreDWG order) to the late-stored
+    // placement fields: identifier_position/offset and arrow_position are
+    // physically at the record's tail, after the plane/bend/end/view-label
+    // and hatch groups.
+    let _plane_linewt = reader.read_bit_long();
+    let _plane_color = reader.read_cm_color();
+    let _bend_linewt = reader.read_bit_long();
+    let _bend_color = reader.read_cm_color();
+    let _bend_line_length = reader.read_bit_double();
+    let end_line_length = reader.read_bit_double();
+    let _viewlabel_color = reader.read_cm_color();
+    let _viewlabel_height = reader.read_bit_double();
+    let _viewlabel_attachment = reader.read_bit_long();
+    let _viewlabel_offset = reader.read_bit_double();
+    let _viewlabel_alignment = reader.read_bit_long();
+    let _hatch_color = reader.read_cm_color();
+    let _hatch_bg_color = reader.read_cm_color();
+    let _hatch_scale = reader.read_bit_double();
+    let _hatch_transparency = reader.read_bit_long();
+    let _unknown_b1 = reader.read_bit();
+    let _unknown_b2 = reader.read_bit();
+    let identifier_position = reader.read_bit_long();
+    let identifier_offset = reader.read_bit_double();
+    let arrow_position = reader.read_bit_long();
+    let end_line_overshoot = reader.read_bit_double();
+
+    // Sanity gate: a valid style has finite sizes.
+    if !identifier_height.is_finite() || !arrow_size.is_finite() || !arrow_extension.is_finite() {
+        return None;
+    }
+    Some(SectionViewStyle {
+        show_arrows: flags & 0x02 != 0,
+        show_plane_line: flags & 0x08 != 0,
+        show_end_lines: flags & 0x20 != 0,
+        arrow_size,
+        arrow_extension,
+        label_height: identifier_height,
+        label_offset: if identifier_offset.is_finite() { identifier_offset } else { 0.0 },
+        label_position: identifier_position,
+        arrow_position,
+        end_line_length: if end_line_length.is_finite() { end_line_length } else { 0.0 },
+        end_line_overshoot: if end_line_overshoot.is_finite() { end_line_overshoot } else { 0.0 },
+        arrow_start_handle: arrow_start,
+        arrow_end_handle: arrow_end,
+        arrow_is_default: arrow_start == 0 && arrow_end == 0,
     })
 }
 

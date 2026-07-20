@@ -1089,6 +1089,30 @@ pub struct CadDocument {
     /// read artifact; empty for new/DXF documents.
     pub(crate) acis_sab_handles: Vec<Handle>,
 
+    /// Section-view style (`AcDbSectionViewStyle`) display fields, decoded from
+    /// the DWG for rendering section marks (arrow size, label height, …). A file
+    /// normally has one; the first decoded is kept. `None` for new/DXF documents
+    /// or files without section views.
+    pub section_view_style: Option<crate::entities::SectionViewStyle>,
+
+    /// Model-documentation drawing-view graph, decoded from the DWG so section
+    /// marks can derive their true viewing direction. Empty for new/DXF files.
+    ///
+    /// `AcDbViewRep` handle → its object-specific handle references (they
+    /// include the view's `AcDbViewBorder` entity, its template viewport, its
+    /// block reference, and — for the parent of a section — the section
+    /// symbol).
+    pub view_rep_refs: std::collections::HashMap<Handle, Vec<Handle>>,
+
+    /// `AcDbViewRep` handles that own an `AcDbViewRepSectionDefinition` —
+    /// i.e. the section (result) views.
+    pub section_view_reps: Vec<Handle>,
+
+    /// `AcDbViewBorder` entity handle → the view's *active* viewport entity
+    /// (the border's first object-specific handle reference). The active
+    /// viewport carries the real camera (`view_direction`, twist) for the view.
+    pub view_border_viewport: std::collections::HashMap<Handle, Handle>,
+
     /// Next handle to assign
     next_handle: u64,
 }
@@ -1129,6 +1153,10 @@ impl CadDocument {
             dwg_source_version: None,
             preview: None,
             acis_sab_handles: Vec::new(),
+            section_view_style: None,
+            view_rep_refs: std::collections::HashMap::new(),
+            section_view_reps: Vec::new(),
+            view_border_viewport: std::collections::HashMap::new(),
             // Start handle allocation above reserved table handles (0x1-0xA)
             // Table handles are well-known fixed values used by AutoCAD
             next_handle: 0x10,

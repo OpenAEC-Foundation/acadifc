@@ -40,6 +40,59 @@ pub struct SectionSymbol {
     pub tick_b: f64,
     /// Section identifier text (drawn at each end).
     pub label: String,
+    /// The symbol's `AcDbSectionViewStyle` handle (first object-specific
+    /// handle reference). `0` when unavailable.
+    pub style_handle: u64,
+    /// The parent view's `AcDbViewRep` handle (second object-specific handle
+    /// reference) — the drawing view the cut line is sketched on. `0` when
+    /// unavailable.
+    pub view_rep_handle: u64,
+}
+
+/// Display-relevant fields of an `AcDbSectionViewStyle` (DWG class 825's style,
+/// "ACDBSECTIONVIEWSTYLE"), the named style that controls how a section mark is
+/// drawn. Only the fields the editor needs to render the mark faithfully are
+/// kept; the full object is preserved verbatim for write-back.
+///
+/// Cross-validated against LibreDWG `dwg2.spec` and a real AutoCAD sample.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct SectionViewStyle {
+    /// Whether direction arrowheads are drawn (style `flags` bit 0x02).
+    pub show_arrows: bool,
+    /// Whether the full cutting-plane line is drawn through the view (`flags`
+    /// bit 0x08). Off = the familiar "broken" section line: only the end
+    /// segments are drawn.
+    pub show_plane_line: bool,
+    /// Whether the end (and bend) line segments are drawn (`flags` bit 0x20).
+    pub show_end_lines: bool,
+    /// Arrowhead size (`arrow_symbol_size`).
+    pub arrow_size: f64,
+    /// How far the arrow extends past the cut line (`arrow_symbol_extension_length`).
+    pub arrow_extension: f64,
+    /// Section identifier ("A") text height (`identifier_height`).
+    pub label_height: f64,
+    /// Gap between the cut line and the identifier text (`identifier_offset`).
+    pub label_offset: f64,
+    /// Identifier placement enum (`identifier_position`), raw value.
+    pub label_position: i32,
+    /// Arrow placement enum (`arrow_position`), raw value.
+    pub arrow_position: i32,
+    /// End-segment length (`end_line_length`) — with the overshoot this equals
+    /// the symbol's per-end tick.
+    pub end_line_length: f64,
+    /// Extension of the end segment beyond the arrow anchor (`end_line_overshoot`).
+    pub end_line_overshoot: f64,
+    /// Arrowhead block-record handles for the start / end of the section line
+    /// (`arrow_start_symbol` / `arrow_end_symbol`). `0` (null) selects the
+    /// built-in default arrow — the same ClosedFilled block dimensions and
+    /// leaders default to.
+    pub arrow_start_handle: u64,
+    /// See [`arrow_start_handle`](Self::arrow_start_handle).
+    pub arrow_end_handle: u64,
+    /// True when both arrow symbol handles are null, i.e. the built-in default
+    /// (solid/filled) arrowhead is used rather than a custom arrow block.
+    pub arrow_is_default: bool,
 }
 
 /// An entity whose type is not directly supported by the library.
