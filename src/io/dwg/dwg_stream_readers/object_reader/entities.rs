@@ -2956,9 +2956,12 @@ pub fn read_ole2frame(reader: &mut DwgMergedReader, version: DwgVersion) -> Ole2
     } else {
         0
     };
-    // OLE binary data can be very large (embedded images/documents),
-    // so don't use safe_count (100 KB cap). Use a generous 10 MB cap instead.
-    let data_len = (reader.read_bit_long().max(0) as usize).min(10_000_000);
+    // OLE binary data can be very large (embedded images/documents), so
+    // don't use safe_count (100 KB cap). Bound the declared length by what's
+    // actually left in the object stream instead of an arbitrary cap — a
+    // 10 MB ceiling used to truncate big embedded pictures mid-stream.
+    let declared = reader.read_bit_long().max(0) as usize;
+    let data_len = declared.min(reader.remaining_bytes());
     let data = reader.read_bytes(data_len);
     let trailing_byte = if version.r2000_plus() {
         reader.read_byte()

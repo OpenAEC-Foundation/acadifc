@@ -222,6 +222,10 @@ impl DwgMergedReader {
     pub fn read_bit(&mut self) -> bool { self.main.read_bit() }
     pub fn read_byte(&mut self) -> u8 { self.main.read_byte() }
     pub fn read_bytes(&mut self, length: usize) -> Vec<u8> { self.main.read_bytes(length) }
+    /// Bytes left in the main data stream from the current position.
+    pub fn remaining_bytes(&self) -> usize {
+        self.main.data_len().saturating_sub(self.main.position())
+    }
     pub fn read_bit_short(&mut self) -> i16 { self.main.read_bit_short() }
     pub fn read_bit_long(&mut self) -> i32 { self.main.read_bit_long() }
     pub fn read_bit_long_long(&mut self) -> i64 { self.main.read_bit_long_long() }
