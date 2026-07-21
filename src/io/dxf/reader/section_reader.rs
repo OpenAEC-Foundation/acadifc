@@ -225,7 +225,7 @@ impl<'a> SectionReader<'a> {
                 "$STEPSIZE" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_double() { hdr.step_size = v; } } }
                 "$LENSLENGTH" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_double() { hdr.lens_length = v; } } }
                 "$CAMERAHEIGHT" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_double() { hdr.camera_height = v; } } }
-                "$CAMERADISPLAY" => { if let Some(p) = self.reader.read_pair()? { hdr.camera_display = p.as_i16() == Some(1); } }
+                "$CAMERADISPLAY" => { if let Some(p) = self.reader.read_pair()? { hdr.camera_display = p.as_bool() == Some(true); } }
 
                 // ── Current Entity Settings ──
                 "$CECOLOR" => {
@@ -237,11 +237,11 @@ impl<'a> SectionReader<'a> {
                 "$CEPSNTYPE" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_i16() { hdr.current_plotstyle_type = v; } } }
                 "$ENDCAPS" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_i16() { hdr.end_caps = v; } } }
                 "$JOINSTYLE" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_i16() { hdr.join_style = v; } } }
-                "$LWDISPLAY" => { if let Some(p) = self.reader.read_pair()? { hdr.lineweight_display = p.as_i16() == Some(1); } }
-                "$XEDIT" => { if let Some(p) = self.reader.read_pair()? { hdr.xedit = p.as_i16() == Some(1); } }
-                "$EXTNAMES" => { if let Some(p) = self.reader.read_pair()? { hdr.extended_names = p.as_i16() == Some(1); } }
-                "$PSTYLEMODE" => { if let Some(p) = self.reader.read_pair()? { hdr.plotstyle_mode = p.as_i16() == Some(1); } }
-                "$OLESTARTUP" => { if let Some(p) = self.reader.read_pair()? { hdr.ole_startup = p.as_i16() == Some(1); } }
+                "$LWDISPLAY" => { if let Some(p) = self.reader.read_pair()? { hdr.lineweight_display = p.as_bool() == Some(true); } }
+                "$XEDIT" => { if let Some(p) = self.reader.read_pair()? { hdr.xedit = p.as_bool() == Some(true); } }
+                "$EXTNAMES" => { if let Some(p) = self.reader.read_pair()? { hdr.extended_names = p.as_bool() == Some(true); } }
+                "$PSTYLEMODE" => { if let Some(p) = self.reader.read_pair()? { hdr.plotstyle_mode = p.as_bool() == Some(true); } }
+                "$OLESTARTUP" => { if let Some(p) = self.reader.read_pair()? { hdr.ole_startup = p.as_bool() == Some(true); } }
 
                 // ── Dimension Variables ──
                 "$DIMSCALE" => { if let Some(p) = self.reader.read_pair()? { if let Some(v) = p.as_double() { hdr.dim_scale = v; } } }

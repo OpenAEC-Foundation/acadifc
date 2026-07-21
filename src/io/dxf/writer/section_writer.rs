@@ -179,6 +179,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
         // === Drawing modes ===
         self.write_header_variable("$ORTHOMODE", |w| w.write_i16(70, if hdr.ortho_mode { 1 } else { 0 }))?;
+        self.write_header_variable("$OSMODE", |w| w.write_i16(70, hdr.object_snap_mode as i16))?;
         self.write_header_variable("$REGENMODE", |w| w.write_i16(70, if hdr.regen_mode { 1 } else { 0 }))?;
         self.write_header_variable("$FILLMODE", |w| w.write_i16(70, if hdr.fill_mode { 1 } else { 0 }))?;
         self.write_header_variable("$QTEXTMODE", |w| w.write_i16(70, if hdr.quick_text_mode { 1 } else { 0 }))?;
@@ -197,6 +198,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.write_header_variable("$CELWEIGHT", |w| w.write_i16(370, hdr.current_line_weight))?;
         self.write_header_variable("$CELTSCALE", |w| w.write_double(40, hdr.current_entity_linetype_scale))?;
         self.write_header_variable("$DISPSILH", |w| w.write_i16(70, if hdr.display_silhouette { 1 } else { 0 }))?;
+        self.write_header_variable("$LWDISPLAY", |w| w.write_bool(290, hdr.lineweight_display))?;
 
         // === Units ===
         self.write_header_variable("$LUNITS", |w| w.write_i16(70, hdr.linear_unit_format))?;
