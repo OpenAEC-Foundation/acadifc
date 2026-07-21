@@ -1307,6 +1307,40 @@ impl DwgDocumentBuilder {
                 } else {
                     crate::tables::BlockRecord::paper_space()
                 };
+                // The captured handle may be POISON: a damaged file can point
+                // its Layout at an object that is not a block record at all
+                // (seen in the wild: BLOCK_CONTROL.model_space NULL and the
+                // "Model" Layout pointing at the LAYER_CONTROL handle).
+                // Synthesizing the record under that handle duplicates it in
+                // the object stream on the next save — AutoCAD/ODA then follow
+                // the handle, find the layer table, and abort the whole file.
+                // Allocate a fresh handle instead and re-point the header and
+                // the owning Layout at it.
+                let collides = document.objects.contains_key(&h)
+                    || document.layers.handle() == h
+                    || document.line_types.handle() == h
+                    || document.text_styles.handle() == h
+                    || document.dim_styles.handle() == h
+                    || document.layers.iter().any(|l| l.handle == h)
+                    || document.get_entity(h).is_some();
+                let h = if collides {
+                    let fresh = document.allocate_handle();
+                    if is_model {
+                        document.header.model_space_block_handle = fresh;
+                    } else {
+                        document.header.paper_space_block_handle = fresh;
+                    }
+                    for obj in document.objects.values_mut() {
+                        if let crate::objects::ObjectType::Layout(l) = obj {
+                            if l.block_record == h {
+                                l.block_record = fresh;
+                            }
+                        }
+                    }
+                    fresh
+                } else {
+                    h
+                };
                 br.handle = h;
                 br.block_entity_handle = document.allocate_handle();
                 br.block_end_handle = document.allocate_handle();
