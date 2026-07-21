@@ -179,6 +179,7 @@ impl Entity for Text {
                 self.insertion_point.z,
             ),
         )
+        .ocs_to_wcs(self.normal)
     }
 
     fn translate(&mut self, offset: Vector3) {

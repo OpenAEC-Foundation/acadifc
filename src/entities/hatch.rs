@@ -642,7 +642,9 @@ impl Entity for Hatch {
         if all_points.is_empty() {
             BoundingBox3D::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 0.0, 0.0))
         } else {
-            BoundingBox3D::from_points(&all_points).unwrap_or_else(|| BoundingBox3D::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 0.0, 0.0)))
+            BoundingBox3D::from_points(&all_points)
+                .unwrap_or_else(|| BoundingBox3D::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 0.0, 0.0)))
+                .ocs_to_wcs(self.normal)
         }
     }
 

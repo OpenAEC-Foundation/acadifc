@@ -8,6 +8,16 @@ use crate::types::{Matrix3, Transform, Vector3};
 
 // ── Point ────────────────────────────────────────────────────────────────────
 
+
+/// Map a WCS displacement into a planar entity's OCS frame. ARC / CIRCLE /
+/// TEXT / SOLID / LWPOLYLINE / ... store their coordinates in OCS, so adding
+/// a raw world offset moves a mirrored entity (normal 0,0,-1) the wrong way.
+/// `arbitrary_axis` of the default +Z normal is the identity, so ordinary
+/// entities are unaffected.
+fn ocs_offset(normal: Vector3, offset: Vector3) -> Vector3 {
+    Matrix3::arbitrary_axis(normal).transpose() * offset
+}
+
 pub(crate) fn translate_point(e: &mut Point, offset: Vector3) {
     e.location = e.location + offset;
 }
@@ -22,13 +32,13 @@ pub(crate) fn translate_line(e: &mut Line, offset: Vector3) {
 // ── Circle ───────────────────────────────────────────────────────────────────
 
 pub(crate) fn translate_circle(e: &mut Circle, offset: Vector3) {
-    e.center = e.center + offset;
+    e.center = e.center + ocs_offset(e.normal, offset);
 }
 
 // ── Arc ──────────────────────────────────────────────────────────────────────
 
 pub(crate) fn translate_arc(e: &mut Arc, offset: Vector3) {
-    e.center = e.center + offset;
+    e.center = e.center + ocs_offset(e.normal, offset);
 }
 
 // ── Ellipse ──────────────────────────────────────────────────────────────────
@@ -48,6 +58,7 @@ pub(crate) fn translate_polyline(e: &mut Polyline, offset: Vector3) {
 // ── Polyline2D ───────────────────────────────────────────────────────────────
 
 pub(crate) fn translate_polyline2d(e: &mut Polyline2D, offset: Vector3) {
+    let offset = ocs_offset(e.normal, offset);
     for vertex in &mut e.vertices {
         vertex.location = vertex.location + offset;
     }
@@ -64,6 +75,7 @@ pub(crate) fn translate_polyline3d(e: &mut Polyline3D, offset: Vector3) {
 // ── LwPolyline ───────────────────────────────────────────────────────────────
 
 pub(crate) fn translate_lwpolyline(e: &mut LwPolyline, offset: Vector3) {
+    let offset = ocs_offset(e.normal, offset);
     for vertex in &mut e.vertices {
         vertex.location.x += offset.x;
         vertex.location.y += offset.y;
@@ -74,6 +86,7 @@ pub(crate) fn translate_lwpolyline(e: &mut LwPolyline, offset: Vector3) {
 // ── Text ─────────────────────────────────────────────────────────────────────
 
 pub(crate) fn translate_text(e: &mut Text, offset: Vector3) {
+    let offset = ocs_offset(e.normal, offset);
     e.insertion_point = e.insertion_point + offset;
     if let Some(ref mut align) = e.alignment_point {
         *align = *align + offset;
@@ -208,6 +221,7 @@ pub(crate) fn translate_hatch(e: &mut Hatch, offset: Vector3) {
 // ── Solid ────────────────────────────────────────────────────────────────────
 
 pub(crate) fn translate_solid(e: &mut Solid, offset: Vector3) {
+    let offset = ocs_offset(e.normal, offset);
     e.first_corner = e.first_corner + offset;
     e.second_corner = e.second_corner + offset;
     e.third_corner = e.third_corner + offset;
@@ -274,6 +288,7 @@ pub(crate) fn translate_viewport(e: &mut Viewport, offset: Vector3) {
 // ── AttributeDefinition ──────────────────────────────────────────────────────
 
 pub(crate) fn translate_attribute_definition(e: &mut AttributeDefinition, offset: Vector3) {
+    let offset = ocs_offset(e.normal, offset);
     e.insertion_point = e.insertion_point + offset;
     e.alignment_point = e.alignment_point + offset;
 }
@@ -281,6 +296,7 @@ pub(crate) fn translate_attribute_definition(e: &mut AttributeDefinition, offset
 // ── AttributeEntity ──────────────────────────────────────────────────────────
 
 pub(crate) fn translate_attribute_entity(e: &mut AttributeEntity, offset: Vector3) {
+    let offset = ocs_offset(e.normal, offset);
     e.insertion_point = e.insertion_point + offset;
     e.alignment_point = e.alignment_point + offset;
 }
@@ -434,7 +450,7 @@ pub(crate) fn translate_wipeout(e: &mut Wipeout, offset: Vector3) {
 // ── Shape ────────────────────────────────────────────────────────────────────
 
 pub(crate) fn translate_shape(e: &mut Shape, offset: Vector3) {
-    e.insertion_point = e.insertion_point + offset;
+    e.insertion_point = e.insertion_point + ocs_offset(e.normal, offset);
 }
 
 // ── Underlay ─────────────────────────────────────────────────────────────────

@@ -374,7 +374,7 @@ impl Entity for Shape {
 
     fn bounding_box(&self) -> BoundingBox3D {
         let (min, max) = self.approximate_bounds();
-        BoundingBox3D::new(min, max)
+        BoundingBox3D::new(min, max).ocs_to_wcs(self.normal)
     }
 
     fn translate(&mut self, offset: Vector3) {

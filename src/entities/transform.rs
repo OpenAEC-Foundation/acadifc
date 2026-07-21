@@ -78,6 +78,17 @@ pub(crate) fn is_reflecting(transform: &Transform) -> bool {
 
 // ── Point ────────────────────────────────────────────────────────────────────
 
+/// OCS→WCS and WCS→(new)OCS mappers for a planar entity whose stored
+/// coordinates live in the OCS of `old_normal`. Mirrors `transform_insert`:
+/// map to world, transform there, map back into the transformed normal's
+/// frame. Both are the identity for the default +Z normal.
+fn ocs_pair(old_normal: Vector3, new_normal: Vector3) -> (Matrix3, Matrix3) {
+    (
+        Matrix3::arbitrary_axis(old_normal),
+        Matrix3::arbitrary_axis(new_normal).transpose(),
+    )
+}
+
 pub(crate) fn transform_point(e: &mut Point, transform: &Transform) {
     e.location = transform.apply(e.location);
     e.normal = transform.apply_rotation(e.normal).normalize();
@@ -94,14 +105,18 @@ pub(crate) fn transform_line(e: &mut Line, transform: &Transform) {
 // ── Circle ───────────────────────────────────────────────────────────────────
 
 pub(crate) fn transform_circle(e: &mut Circle, transform: &Transform) {
-    e.center = transform.apply(e.center);
+    // `center` is stored in OCS — transform in world, store back in the new
+    // normal's OCS (see `ocs_pair`).
+    let new_normal = transform.apply_rotation(e.normal).normalize();
+    let (ocs, new_t) = ocs_pair(e.normal, new_normal);
+    e.center = new_t * transform.apply(ocs * e.center);
 
     let unit_x = Vector3::new(1.0, 0.0, 0.0);
     let transformed_unit = transform.apply_rotation(unit_x);
     let scale_factor = transformed_unit.length();
     e.radius *= scale_factor;
 
-    e.normal = transform.apply_rotation(e.normal).normalize();
+    e.normal = new_normal;
 }
 
 // ── Arc ──────────────────────────────────────────────────────────────────────
@@ -112,14 +127,17 @@ pub(crate) fn transform_arc(e: &mut Arc, transform: &Transform) {
     // recompute the angles in the new plane. (Translating alone leaves the
     // angles unchanged, as before.)
     let ocs = Matrix3::arbitrary_axis(e.normal);
+    // `center` is stored in OCS — lift it (and the endpoints derived from it)
+    // to world before transforming.
+    let center_w = ocs * e.center;
     let endpoint = |ang: f64| {
         let local = Vector3::new(e.radius * ang.cos(), e.radius * ang.sin(), 0.0);
-        e.center + ocs * local
+        center_w + ocs * local
     };
     let ws = transform.apply(endpoint(e.start_angle));
     let we = transform.apply(endpoint(e.end_angle));
 
-    let new_center = transform.apply(e.center);
+    let new_center = transform.apply(center_w);
     let scale_factor = transform.apply_rotation(Vector3::new(1.0, 0.0, 0.0)).length();
     let new_normal = transform.apply_rotation(e.normal).normalize();
 
@@ -139,7 +157,8 @@ pub(crate) fn transform_arc(e: &mut Arc, transform: &Transform) {
         e.start_angle = a_start;
         e.end_angle = a_end;
     }
-    e.center = new_center;
+    // Store the world-space centre back in the NEW normal's OCS.
+    e.center = new_ocs_t * new_center;
     e.radius *= scale_factor;
     e.normal = new_normal;
 }
@@ -164,14 +183,19 @@ pub(crate) fn transform_polyline(e: &mut Polyline, transform: &Transform) {
 
 pub(crate) fn transform_polyline2d(e: &mut Polyline2D, transform: &Transform) {
     let flip = is_reflecting(transform);
+    // Vertices are stored in OCS — transform in world, store back in the new
+    // normal's OCS.
+    let new_normal = transform.apply_rotation(e.normal).normalize();
+    let (ocs, new_t) = ocs_pair(e.normal, new_normal);
     for vertex in &mut e.vertices {
-        vertex.location = transform.apply(vertex.location);
+        vertex.location = new_t * transform.apply(ocs * vertex.location);
         if flip {
             // Bulge encodes the arc's side/direction in the plane; a
             // reflection reverses it.
             vertex.bulge = -vertex.bulge;
         }
     }
+    e.normal = new_normal;
 }
 
 // ── Polyline3D ───────────────────────────────────────────────────────────────
@@ -186,11 +210,17 @@ pub(crate) fn transform_polyline3d(e: &mut Polyline3D, transform: &Transform) {
 
 pub(crate) fn transform_lwpolyline(e: &mut LwPolyline, transform: &Transform) {
     let flip = is_reflecting(transform);
+    // Vertices + elevation are stored in OCS — transform in world, store back
+    // in the new normal's OCS.
+    let new_normal = transform.apply_rotation(e.normal).normalize();
+    let (ocs, new_t) = ocs_pair(e.normal, new_normal);
+    let mut new_elevation = e.elevation;
     for vertex in &mut e.vertices {
         let pt3d = Vector3::new(vertex.location.x, vertex.location.y, e.elevation);
-        let transformed = transform.apply(pt3d);
-        vertex.location.x = transformed.x;
-        vertex.location.y = transformed.y;
+        let l = new_t * transform.apply(ocs * pt3d);
+        vertex.location.x = l.x;
+        vertex.location.y = l.y;
+        new_elevation = l.z;
         if flip {
             // Bulge encodes the arc's side/direction in the plane; a
             // reflection reverses it. Without this, exploding a mirrored
@@ -198,25 +228,29 @@ pub(crate) fn transform_lwpolyline(e: &mut LwPolyline, transform: &Transform) {
             vertex.bulge = -vertex.bulge;
         }
     }
-    if !e.vertices.is_empty() {
-        let pt3d = Vector3::new(0.0, 0.0, e.elevation);
-        e.elevation = transform.apply(pt3d).z;
+    if e.vertices.is_empty() {
+        let l = new_t * transform.apply(ocs * Vector3::new(0.0, 0.0, e.elevation));
+        new_elevation = l.z;
     }
-    e.normal = transform.apply_rotation(e.normal).normalize();
+    e.elevation = new_elevation;
+    e.normal = new_normal;
 }
 
 // ── Text ─────────────────────────────────────────────────────────────────────
 
 pub(crate) fn transform_text(e: &mut Text, transform: &Transform) {
-    e.insertion_point = transform.apply(e.insertion_point);
+    // Insertion / alignment points are stored in OCS.
+    let new_normal = transform.apply_rotation(e.normal).normalize();
+    let (ocs, new_t) = ocs_pair(e.normal, new_normal);
+    e.insertion_point = new_t * transform.apply(ocs * e.insertion_point);
     if let Some(ref mut align) = e.alignment_point {
-        *align = transform.apply(*align);
+        *align = new_t * transform.apply(ocs * *align);
     }
     let unit_x = Vector3::new(1.0, 0.0, 0.0);
     let transformed_unit = transform.apply_rotation(unit_x);
     let scale_factor = transformed_unit.length();
     e.height *= scale_factor;
-    e.normal = transform.apply_rotation(e.normal).normalize();
+    e.normal = new_normal;
 }
 
 // ── MText ────────────────────────────────────────────────────────────────────
@@ -542,11 +576,14 @@ pub(crate) fn transform_hatch(e: &mut Hatch, transform: &Transform) {
 // ── Solid ────────────────────────────────────────────────────────────────────
 
 pub(crate) fn transform_solid(e: &mut Solid, transform: &Transform) {
-    e.first_corner = transform.apply(e.first_corner);
-    e.second_corner = transform.apply(e.second_corner);
-    e.third_corner = transform.apply(e.third_corner);
-    e.fourth_corner = transform.apply(e.fourth_corner);
-    e.normal = transform.apply_rotation(e.normal).normalize();
+    // Corners are stored in OCS.
+    let new_normal = transform.apply_rotation(e.normal).normalize();
+    let (ocs, new_t) = ocs_pair(e.normal, new_normal);
+    e.first_corner = new_t * transform.apply(ocs * e.first_corner);
+    e.second_corner = new_t * transform.apply(ocs * e.second_corner);
+    e.third_corner = new_t * transform.apply(ocs * e.third_corner);
+    e.fourth_corner = new_t * transform.apply(ocs * e.fourth_corner);
+    e.normal = new_normal;
 }
 
 // ── Face3D ───────────────────────────────────────────────────────────────────
@@ -694,9 +731,12 @@ pub(crate) fn transform_attribute_definition(
     e: &mut AttributeDefinition,
     transform: &Transform,
 ) {
-    e.insertion_point = transform.apply(e.insertion_point);
-    e.alignment_point = transform.apply(e.alignment_point);
-    e.normal = transform.apply_rotation(e.normal).normalize();
+    // Insertion / alignment points are stored in OCS.
+    let new_normal = transform.apply_rotation(e.normal).normalize();
+    let (ocs, new_t) = ocs_pair(e.normal, new_normal);
+    e.insertion_point = new_t * transform.apply(ocs * e.insertion_point);
+    e.alignment_point = new_t * transform.apply(ocs * e.alignment_point);
+    e.normal = new_normal;
 
     let unit_x = Vector3::new(1.0, 0.0, 0.0);
     let transformed_unit = transform.apply_rotation(unit_x);
@@ -707,9 +747,12 @@ pub(crate) fn transform_attribute_definition(
 // ── AttributeEntity ──────────────────────────────────────────────────────────
 
 pub(crate) fn transform_attribute_entity(e: &mut AttributeEntity, transform: &Transform) {
-    e.insertion_point = transform.apply(e.insertion_point);
-    e.alignment_point = transform.apply(e.alignment_point);
-    e.normal = transform.apply_rotation(e.normal).normalize();
+    // Insertion / alignment points are stored in OCS.
+    let new_normal = transform.apply_rotation(e.normal).normalize();
+    let (ocs, new_t) = ocs_pair(e.normal, new_normal);
+    e.insertion_point = new_t * transform.apply(ocs * e.insertion_point);
+    e.alignment_point = new_t * transform.apply(ocs * e.alignment_point);
+    e.normal = new_normal;
 
     let unit_x = Vector3::new(1.0, 0.0, 0.0);
     let transformed_unit = transform.apply_rotation(unit_x);
@@ -919,12 +962,15 @@ pub(crate) fn transform_wipeout(e: &mut Wipeout, transform: &Transform) {
 // ── Shape ────────────────────────────────────────────────────────────────────
 
 pub(crate) fn transform_shape(e: &mut Shape, transform: &Transform) {
-    e.insertion_point = transform.apply(e.insertion_point);
+    // Insertion point is stored in OCS.
+    let new_normal = transform.apply_rotation(e.normal).normalize();
+    let (ocs, new_t) = ocs_pair(e.normal, new_normal);
+    e.insertion_point = new_t * transform.apply(ocs * e.insertion_point);
     let unit_x = Vector3::new(1.0, 0.0, 0.0);
     let transformed_unit = transform.apply_rotation(unit_x);
     let scale_factor = transformed_unit.length();
     e.size *= scale_factor;
-    e.normal = transform.apply_rotation(e.normal).normalize();
+    e.normal = new_normal;
 }
 
 // ── Underlay ─────────────────────────────────────────────────────────────────

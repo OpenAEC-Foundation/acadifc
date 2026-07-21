@@ -182,7 +182,7 @@ impl Entity for LwPolyline {
             .iter()
             .map(|v| Vector3::new(v.location.x, v.location.y, self.elevation))
             .collect();
-        BoundingBox3D::from_points(&points).unwrap()
+        BoundingBox3D::from_points(&points).unwrap().ocs_to_wcs(self.normal)
     }
 
     fn translate(&mut self, offset: Vector3) {

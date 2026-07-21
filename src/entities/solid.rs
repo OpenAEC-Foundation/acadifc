@@ -152,7 +152,9 @@ impl Entity for Solid {
     }
 
     fn bounding_box(&self) -> BoundingBox3D {
-        BoundingBox3D::from_points(&self.corners()).unwrap_or_else(|| BoundingBox3D::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 0.0, 0.0)))
+        BoundingBox3D::from_points(&self.corners())
+            .unwrap_or_else(|| BoundingBox3D::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 0.0, 0.0)))
+            .ocs_to_wcs(self.normal)
     }
 
     fn translate(&mut self, offset: Vector3) {

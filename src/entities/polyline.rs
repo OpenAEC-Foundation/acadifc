@@ -376,7 +376,7 @@ impl Entity for Polyline2D {
         }
 
         let points: Vec<Vector3> = self.vertices.iter().map(|v| v.location).collect();
-        BoundingBox3D::from_points(&points).unwrap()
+        BoundingBox3D::from_points(&points).unwrap().ocs_to_wcs(self.normal)
     }
 
     fn translate(&mut self, offset: Vector3) {

@@ -129,6 +129,7 @@ impl Entity for Circle {
                 self.center.z,
             ),
         )
+        .ocs_to_wcs(self.normal)
     }
 
     fn translate(&mut self, offset: Vector3) {

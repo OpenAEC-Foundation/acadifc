@@ -131,6 +131,37 @@ impl BoundingBox3D {
         BoundingBox3D { min, max }
     }
 
+    /// Map a box computed in an entity's OCS frame to WCS via the arbitrary
+    /// axis algorithm. Planar entities (ARC / CIRCLE / LWPOLYLINE / SOLID /
+    /// TEXT ...) store their coordinates in OCS; a bounding box built from
+    /// those raw values lands on the wrong side of the drawing for mirrored
+    /// entities (normal 0,0,-1), breaking culling, snap pre-filters and
+    /// zoom-extents. Maps all 8 corners and re-extents, so it stays a valid
+    /// AABB for tilted normals too. Identity for the default +Z normal.
+    pub fn ocs_to_wcs(self, normal: Vector3) -> Self {
+        if (normal.x, normal.y, normal.z) == (0.0, 0.0, 1.0) {
+            return self;
+        }
+        let m = crate::types::Matrix3::arbitrary_axis(normal);
+        let (lo, hi) = (self.min, self.max);
+        let mut min = Vector3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+        let mut max = Vector3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for &x in &[lo.x, hi.x] {
+            for &y in &[lo.y, hi.y] {
+                for &z in &[lo.z, hi.z] {
+                    let w = m.transform_point(Vector3::new(x, y, z));
+                    min.x = min.x.min(w.x);
+                    min.y = min.y.min(w.y);
+                    min.z = min.z.min(w.z);
+                    max.x = max.x.max(w.x);
+                    max.y = max.y.max(w.y);
+                    max.z = max.z.max(w.z);
+                }
+            }
+        }
+        BoundingBox3D { min, max }
+    }
+
     /// Create a bounding box from a single point
     pub fn from_point(point: Vector3) -> Self {
         BoundingBox3D {

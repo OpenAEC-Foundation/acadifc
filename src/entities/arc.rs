@@ -178,6 +178,7 @@ impl Entity for Arc {
                 self.center.z,
             ),
         )
+        .ocs_to_wcs(self.normal)
     }
 
     fn translate(&mut self, offset: Vector3) {

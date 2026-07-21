@@ -11,20 +11,13 @@ use crate::types::{Transform, Vector3};
 // ── Arc ──────────────────────────────────────────────────────────────────────
 
 pub(crate) fn mirror_arc(e: &mut Arc, transform: &Transform) {
-    let start_pt = e.start_point();
-    let end_pt = e.end_point();
-
+    // transform_arc handles reflection itself: it transforms the true
+    // endpoints, recomputes the angles in the (possibly new) OCS frame and
+    // swaps start/end to keep the arc CCW. The old post-processing here
+    // recomputed the angles in raw-field space — mixing the OCS-stored
+    // centre with world-space points — which broke any arc whose normal
+    // isn't +Z.
     super::transform::transform_arc(e, transform);
-
-    let mirrored_start = transform.apply(end_pt);
-    let mirrored_end = transform.apply(start_pt);
-
-    e.start_angle = crate::types::normalize_angle(
-        (mirrored_start.y - e.center.y).atan2(mirrored_start.x - e.center.x),
-    );
-    e.end_angle = crate::types::normalize_angle(
-        (mirrored_end.y - e.center.y).atan2(mirrored_end.x - e.center.x),
-    );
 }
 
 // ── Ellipse ──────────────────────────────────────────────────────────────────
