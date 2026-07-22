@@ -3804,7 +3804,11 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
         self.writer.write_string(301, "}")?; // End CONTEXT_DATA
 
-        // Main properties (order must match reference: 340,90,170,91,341,171,290,291,41,342,42,172,343,173,95,174,175,92,292,93,10,43,176,293,271,273,272,295)
+        // Main properties — the code map mirrors AutoCAD's own DXF output
+        // (verified against an R2018 sample): 170 is the leader PATH type and
+        // 172 the content type; 342 the arrow block, 343 the text style, 344
+        // the block content. The old map wrote the content type at 170, which
+        // AutoCAD reads as the path type (an MText leader became "spline").
 
         // Style handle
         if let Some(h) = mleader.style_handle {
@@ -3814,8 +3818,8 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // Property override flags
         self.writer.write_i32(90, mleader.property_override_flags.bits() as i32)?;
 
-        // Content type
-        self.writer.write_i16(170, mleader.content_type as i16)?;
+        // Leader path type
+        self.writer.write_i16(170, mleader.path_type as i16)?;
 
         // Leader line color
         self.write_color_i32(91, mleader.line_color)?;
@@ -3842,26 +3846,26 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // Dogleg length
         self.writer.write_double(41, mleader.dogleg_length)?;
 
-        // Text style handle
-        if let Some(h) = mleader.text_style_handle {
-            self.writer.write_handle(342, h)?;
+        // Arrowhead block handle
+        if let Some(h) = mleader.arrowhead_handle {
+            if h != Handle::NULL {
+                self.writer.write_handle(342, h)?;
+            }
         }
 
         // Arrowhead size
         self.writer.write_double(42, mleader.arrowhead_size)?;
 
-        // Text left attachment type
-        self.writer.write_i16(172, mleader.text_left_attachment as i16)?;
+        // Content type
+        self.writer.write_i16(172, mleader.content_type as i16)?;
 
-        // Block content handle
-        if let Some(h) = mleader.block_content_handle {
+        // Text style handle
+        if let Some(h) = mleader.text_style_handle {
             self.writer.write_handle(343, h)?;
         }
 
-        // Text right attachment type
-        self.writer.write_i16(173, mleader.text_right_attachment as i16)?;
-
-        // Text right attachment (i32 duplicate for compatibility)
+        // Text left / right attachment types
+        self.writer.write_i16(173, mleader.text_left_attachment as i16)?;
         self.writer.write_i32(95, mleader.text_right_attachment as i32)?;
 
         // Text angle type
@@ -3875,6 +3879,11 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
         // Text frame
         self.writer.write_bool(292, mleader.text_frame)?;
+
+        // Block content handle
+        if let Some(h) = mleader.block_content_handle {
+            self.writer.write_handle(344, h)?;
+        }
 
         // Block content color
         self.write_color_i32(93, mleader.block_content_color)?;
@@ -3894,11 +3903,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // Text align in IPE
         self.writer.write_i16(271, mleader.text_align_in_ipe)?;
 
-        // Text bottom attachment type
-        self.writer.write_i16(273, mleader.text_bottom_attachment as i16)?;
-
-        // Text top attachment type
-        self.writer.write_i16(272, mleader.text_top_attachment as i16)?;
+        // Text bottom / top attachment types
+        self.writer.write_i16(272, mleader.text_bottom_attachment as i16)?;
+        self.writer.write_i16(273, mleader.text_top_attachment as i16)?;
 
         // Extend leader to text
         self.writer.write_bool(295, mleader.extend_leader_to_text)?;

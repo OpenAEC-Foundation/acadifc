@@ -5577,9 +5577,17 @@ impl<'a> SectionReader<'a> {
         Ok(Some(leader))
     }
 
-    /// Read a MULTILEADER entity (basic property reader)
+    /// Read a MULTILEADER entity. The geometry/content lives in the nested
+    /// `300 CONTEXT_DATA{ … 302 LEADER{ … 304 LEADER_LINE{ … }}}` sections —
+    /// they reuse the entity-level group codes, so each nesting level is
+    /// parsed by its own loop (letting them fall through the entity match
+    /// used to leave the context empty: no leader lines, no text — invisible
+    /// multileaders from DXF while the same drawing's DWG was fine).
+    /// Code mapping mirrors `write_multileader` for round-trip fidelity.
     fn read_multileader(&mut self) -> Result<Option<MultiLeader>> {
+        use crate::entities::multileader as mlt;
         let mut ml = MultiLeader::new();
+        let mut block_scale = PointReader::new();
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 { self.reader.push_back(pair); break; }
@@ -5587,33 +5595,272 @@ impl<'a> SectionReader<'a> {
                 8 => ml.common.layer = pair.value_string.clone(),
                 62 => { if let Some(v) = pair.as_i16() { ml.common.color = Color::from_index(v); } }
                 370 => { if let Some(v) = pair.as_i16() { ml.common.line_weight = LineWeight::from_value(v); } }
+                270 => {} // class version
+                300 if pair.value_string.starts_with("CONTEXT_DATA") => {
+                    self.read_mleader_context(&mut ml.context)?;
+                }
                 340 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { ml.style_handle = Some(Handle::new(h)); } }
-                170 => {
+                90 => {
+                    if let Some(v) = pair.as_i32() {
+                        ml.property_override_flags =
+                            mlt::MultiLeaderPropertyOverrideFlags::from_bits_truncate(v as u32);
+                    }
+                }
+                170 => { if let Some(v) = pair.as_i16() { ml.path_type = mlt::MultiLeaderPathType::from(v); } }
+                91 => { if let Some(v) = pair.as_i32() { ml.line_color = color_from_i32(v); } }
+                341 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { ml.line_type_handle = Some(Handle::new(h)); } }
+                171 => { if let Some(v) = pair.as_i16() { ml.line_weight = LineWeight::from_value(v); } }
+                290 => { if let Some(v) = pair.as_bool() { ml.enable_landing = v; } }
+                291 => { if let Some(v) = pair.as_bool() { ml.enable_dogleg = v; } }
+                41 => { if let Some(v) = pair.as_double() { ml.dogleg_length = v; } }
+                342 => {
+                    if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) {
+                        if h != 0 { ml.arrowhead_handle = Some(Handle::new(h)); }
+                    }
+                }
+                42 => { if let Some(v) = pair.as_double() { ml.arrowhead_size = v; } }
+                172 => {
                     if let Some(v) = pair.as_i16() {
                         ml.content_type = match v {
-                            1 => crate::entities::multileader::LeaderContentType::Block,
-                            2 => crate::entities::multileader::LeaderContentType::MText,
-                            _ => crate::entities::multileader::LeaderContentType::None,
+                            1 => mlt::LeaderContentType::Block,
+                            2 => mlt::LeaderContentType::MText,
+                            _ => mlt::LeaderContentType::None,
                         };
                     }
                 }
-                91 => { if let Some(v) = pair.as_i32() { ml.line_color = Color::from_index(v as i16); } }
-                40 => { if let Some(v) = pair.as_double() { ml.dogleg_length = v; } }
-                41 => { if let Some(v) = pair.as_double() { ml.arrowhead_size = v; } }
+                343 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { ml.text_style_handle = Some(Handle::new(h)); } }
+                173 => { if let Some(v) = pair.as_i16() { ml.text_left_attachment = mlt::TextAttachmentType::from(v); } }
+                95 => { if let Some(v) = pair.as_i32() { ml.text_right_attachment = mlt::TextAttachmentType::from(v as i16); } }
+                174 => { if let Some(v) = pair.as_i16() { ml.text_angle_type = mlt::TextAngleType::from(v); } }
+                175 => { if let Some(v) = pair.as_i16() { ml.text_alignment = mlt::TextAlignmentType::from(v); } }
+                92 => { if let Some(v) = pair.as_i32() { ml.text_color = color_from_i32(v); } }
+                292 => { if let Some(v) = pair.as_bool() { ml.text_frame = v; } }
+                344 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { ml.block_content_handle = Some(Handle::new(h)); } }
+                93 => { if let Some(v) = pair.as_i32() { ml.block_content_color = color_from_i32(v); } }
+                10 | 20 | 30 => { block_scale.add_coordinate(&pair); }
+                43 => { if let Some(v) = pair.as_double() { ml.block_rotation = v; } }
+                176 => { if let Some(v) = pair.as_i16() { ml.block_connection_type = mlt::BlockContentConnectionType::from(v); } }
+                293 => { if let Some(v) = pair.as_bool() { ml.enable_annotation_scale = v; } }
+                271 => { if let Some(v) = pair.as_i16() { ml.text_align_in_ipe = v; } }
+                272 => { if let Some(v) = pair.as_i16() { ml.text_bottom_attachment = mlt::TextAttachmentType::from(v); } }
+                273 => { if let Some(v) = pair.as_i16() { ml.text_top_attachment = mlt::TextAttachmentType::from(v); } }
+                295 => { if let Some(v) = pair.as_bool() { ml.extend_leader_to_text = v; } }
+                // Lenient extras some exporters emit at entity level.
                 44 => { if let Some(v) = pair.as_double() { ml.text_height = v; } }
                 45 => { if let Some(v) = pair.as_double() { ml.scale_factor = v; } }
-                174 => { if let Some(v) = pair.as_i16() { ml.text_left_attachment = crate::entities::multileader::TextAttachmentType::from(v); } }
-                175 => { if let Some(v) = pair.as_i16() { ml.text_right_attachment = crate::entities::multileader::TextAttachmentType::from(v); } }
-                176 => { if let Some(v) = pair.as_i16() { ml.text_angle_type = crate::entities::multileader::TextAngleType::from(v); } }
-                291 => { if let Some(v) = pair.as_bool() { ml.enable_dogleg = v; } }
-                290 => { if let Some(v) = pair.as_bool() { ml.enable_landing = v; } }
-                292 => { if let Some(v) = pair.as_bool() { ml.text_frame = v; } }
-                293 => { if let Some(v) = pair.as_bool() { ml.enable_annotation_scale = v; } }
                 _ => { self.try_read_common_entity_code(&pair, &mut ml.common)?; }
             }
         }
 
+        if let Some(s) = block_scale.get_point() {
+            ml.block_scale = s;
+        }
         Ok(Some(ml))
+    }
+
+    /// Read a MULTILEADER `CONTEXT_DATA{ … }` section (up to its closing
+    /// `301 }`), including nested `302 LEADER{ … }` roots.
+    fn read_mleader_context(
+        &mut self,
+        ctx: &mut crate::entities::multileader::MultiLeaderAnnotContext,
+    ) -> Result<()> {
+        use crate::entities::multileader as mlt;
+        let mut content_base = PointReader::new();
+        let mut text_normal = PointReader::new();
+        let mut text_location = PointReader::new();
+        let mut text_direction = PointReader::new();
+        let mut block_normal = PointReader::new();
+        let mut block_location = PointReader::new();
+        let mut block_scale = PointReader::new();
+        let mut base_point = PointReader::new();
+        let mut base_direction = PointReader::new();
+        let mut base_vertical = PointReader::new();
+
+        while let Some(pair) = self.reader.read_pair()? {
+            if pair.code == 0 {
+                // Malformed: entity ended inside the section.
+                self.reader.push_back(pair);
+                break;
+            }
+            match pair.code {
+                301 => break, // "}"
+                302 if pair.value_string.starts_with("LEADER") => {
+                    let root = self.read_mleader_leader_root()?;
+                    ctx.leader_roots.push(root);
+                }
+                40 => { if let Some(v) = pair.as_double() { ctx.scale_factor = v; } }
+                10 | 20 | 30 => { content_base.add_coordinate(&pair); }
+                41 => { if let Some(v) = pair.as_double() { ctx.text_height = v; } }
+                140 => { if let Some(v) = pair.as_double() { ctx.arrowhead_size = v; } }
+                145 => { if let Some(v) = pair.as_double() { ctx.landing_gap = v; } }
+                174 => { if let Some(v) = pair.as_i16() { ctx.text_left_attachment = mlt::TextAttachmentType::from(v); } }
+                175 => { if let Some(v) = pair.as_i16() { ctx.text_right_attachment = mlt::TextAttachmentType::from(v); } }
+                176 => { if let Some(v) = pair.as_i16() { ctx.block_connection_type = mlt::BlockContentConnectionType::from(v); } }
+                177 => { if let Some(v) = pair.as_i16() { ctx.text_attachment_point = mlt::TextAttachmentPointType::from(v); } }
+                290 => { if let Some(v) = pair.as_bool() { ctx.has_text_contents = v; } }
+                304 => ctx.text_string = pair.value_string.clone(),
+                11 | 21 | 31 => { text_normal.add_coordinate(&pair); }
+                340 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { ctx.text_style_handle = Some(Handle::new(h)); } }
+                12 | 22 | 32 => { text_location.add_coordinate(&pair); }
+                13 | 23 | 33 => { text_direction.add_coordinate(&pair); }
+                42 => { if let Some(v) = pair.as_double() { ctx.text_rotation = v; } }
+                43 => { if let Some(v) = pair.as_double() { ctx.text_width = v; } }
+                44 => { if let Some(v) = pair.as_double() { ctx.text_boundary_height = v; } }
+                45 => { if let Some(v) = pair.as_double() { ctx.line_spacing_factor = v; } }
+                170 => { if let Some(v) = pair.as_i16() { ctx.line_spacing_style = crate::entities::LineSpacingStyle::from(v); } }
+                90 => { if let Some(v) = pair.as_i32() { ctx.text_color = color_from_i32(v); } }
+                171 => { if let Some(v) = pair.as_i16() { ctx.text_alignment = mlt::TextAlignmentType::from(v); } }
+                172 => { if let Some(v) = pair.as_i16() { ctx.text_flow_direction = mlt::FlowDirectionType::from(v); } }
+                91 => { if let Some(v) = pair.as_i32() { ctx.background_fill_color = color_from_i32(v); } }
+                141 => { if let Some(v) = pair.as_double() { ctx.background_scale_factor = v; } }
+                92 => { if let Some(v) = pair.as_i32() { ctx.background_transparency = v; } }
+                291 => { if let Some(v) = pair.as_bool() { ctx.background_fill_enabled = v; } }
+                292 => { if let Some(v) = pair.as_bool() { ctx.word_break = v; } }
+                173 => { if let Some(v) = pair.as_i16() { ctx.column_type = v; } }
+                293 => { if let Some(v) = pair.as_bool() { ctx.column_flow_reversed = v; } }
+                142 => { if let Some(v) = pair.as_double() { ctx.column_width = v; } }
+                143 => { if let Some(v) = pair.as_double() { ctx.column_gutter = v; } }
+                144 => { if let Some(v) = pair.as_double() { ctx.column_sizes.push(v); } }
+                294 => { if let Some(v) = pair.as_bool() { ctx.text_height_automatic = v; } }
+                295 => { if let Some(v) = pair.as_bool() { ctx.background_mask_fill_on = v; } }
+                296 => { if let Some(v) = pair.as_bool() { ctx.has_block_contents = v; } }
+                341 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { ctx.block_content_handle = Some(Handle::new(h)); } }
+                14 | 24 | 34 => { block_normal.add_coordinate(&pair); }
+                15 | 25 | 35 => { block_location.add_coordinate(&pair); }
+                16 | 26 | 36 => { block_scale.add_coordinate(&pair); }
+                46 => { if let Some(v) = pair.as_double() { ctx.block_rotation = v; } }
+                93 => { if let Some(v) = pair.as_i32() { ctx.block_content_color = color_from_i32(v); } }
+                47 => { /* block transform matrix values — derived, skipped */ }
+                110 | 120 | 130 => { base_point.add_coordinate(&pair); }
+                111 | 121 | 131 => { base_direction.add_coordinate(&pair); }
+                112 | 122 | 132 => { base_vertical.add_coordinate(&pair); }
+                297 => { if let Some(v) = pair.as_bool() { ctx.normal_reversed = v; } }
+                273 => { if let Some(v) = pair.as_i16() { ctx.text_top_attachment = mlt::TextAttachmentType::from(v); } }
+                272 => { if let Some(v) = pair.as_i16() { ctx.text_bottom_attachment = mlt::TextAttachmentType::from(v); } }
+                _ => {}
+            }
+        }
+
+        if let Some(p) = content_base.get_point() { ctx.content_base_point = p; }
+        if let Some(p) = text_normal.get_point() { ctx.text_normal = p; }
+        if let Some(p) = text_location.get_point() { ctx.text_location = p; }
+        if let Some(p) = text_direction.get_point() { ctx.text_direction = p; }
+        if let Some(p) = block_normal.get_point() { ctx.block_content_normal = p; }
+        if let Some(p) = block_location.get_point() { ctx.block_content_location = p; }
+        if let Some(p) = block_scale.get_point() { ctx.block_content_scale = p; }
+        if let Some(p) = base_point.get_point() { ctx.base_point = p; }
+        if let Some(p) = base_direction.get_point() { ctx.base_direction = p; }
+        if let Some(p) = base_vertical.get_point() { ctx.base_vertical = p; }
+        Ok(())
+    }
+
+    /// Read one `LEADER{ … }` root (up to its closing `303 }`), including
+    /// nested `304 LEADER_LINE{ … }` lines.
+    fn read_mleader_leader_root(
+        &mut self,
+    ) -> Result<crate::entities::multileader::LeaderRoot> {
+        use crate::entities::multileader::{LeaderRoot, StartEndPointPair};
+        let mut root = LeaderRoot::new(0);
+        let mut connection = PointReader::new();
+        let mut direction = PointReader::new();
+        // Break start/end pairs arrive as repeated 12/13 triples.
+        let mut break_start = PointReader::new();
+        let mut break_end = PointReader::new();
+
+        while let Some(pair) = self.reader.read_pair()? {
+            if pair.code == 0 {
+                self.reader.push_back(pair);
+                break;
+            }
+            match pair.code {
+                303 => break, // "}"
+                304 if pair.value_string.starts_with("LEADER_LINE") => {
+                    let line = self.read_mleader_leader_line(root.lines.len() as i32)?;
+                    root.lines.push(line);
+                }
+                290 => { if let Some(v) = pair.as_bool() { root.content_valid = v; } }
+                291 => { if let Some(v) = pair.as_bool() { root.unknown = v; } }
+                10 | 20 | 30 => { connection.add_coordinate(&pair); }
+                11 | 21 | 31 => { direction.add_coordinate(&pair); }
+                90 => { if let Some(v) = pair.as_i32() { root.leader_index = v; } }
+                40 => { if let Some(v) = pair.as_double() { root.landing_distance = v; } }
+                12 | 22 | 32 => { break_start.add_coordinate(&pair); }
+                13 | 23 | 33 => { break_end.add_coordinate(&pair); }
+                271 => {
+                    if let Some(v) = pair.as_i16() {
+                        root.text_attachment_direction =
+                            crate::entities::multileader::TextAttachmentDirectionType::from(v);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(p) = connection.get_point() { root.connection_point = p; }
+        if let Some(p) = direction.get_point() { root.direction = p; }
+        if let (Some(s), Some(e)) = (break_start.get_point(), break_end.get_point()) {
+            root.break_points.push(StartEndPointPair { start_point: s, end_point: e });
+        }
+        Ok(root)
+    }
+
+    /// Read one `LEADER_LINE{ … }` (up to its closing `305 }`). The vertex
+    /// list arrives as repeated 10/20/30 triples.
+    fn read_mleader_leader_line(
+        &mut self,
+        index: i32,
+    ) -> Result<crate::entities::multileader::LeaderLine> {
+        use crate::entities::multileader as mlt;
+        let mut line = mlt::LeaderLine::from_points(index, Vec::new());
+
+        while let Some(pair) = self.reader.read_pair()? {
+            if pair.code == 0 {
+                self.reader.push_back(pair);
+                break;
+            }
+            match pair.code {
+                305 => break, // "}"
+                10 => {
+                    if let Some(v) = pair.as_double() {
+                        line.points.push(Vector3::new(v, 0.0, 0.0));
+                    }
+                }
+                20 => {
+                    if let (Some(v), Some(p)) = (pair.as_double(), line.points.last_mut()) {
+                        p.y = v;
+                    }
+                }
+                30 => {
+                    if let (Some(v), Some(p)) = (pair.as_double(), line.points.last_mut()) {
+                        p.z = v;
+                    }
+                }
+                91 => { if let Some(v) = pair.as_i32() { line.index = v; } }
+                170 => { if let Some(v) = pair.as_i16() { line.path_type = mlt::MultiLeaderPathType::from(v); } }
+                92 => { if let Some(v) = pair.as_i32() { line.line_color = color_from_i32(v); } }
+                340 => {
+                    if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) {
+                        if h != 0 { line.line_type_handle = Some(Handle::new(h)); }
+                    }
+                }
+                171 => { if let Some(v) = pair.as_i16() { line.line_weight = LineWeight::from_value(v); } }
+                40 => { if let Some(v) = pair.as_double() { line.arrowhead_size = v; } }
+                341 => {
+                    if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) {
+                        if h != 0 { line.arrowhead_handle = Some(Handle::new(h)); }
+                    }
+                }
+                93 => {
+                    if let Some(v) = pair.as_i32() {
+                        line.override_flags =
+                            mlt::LeaderLinePropertyOverrideFlags::from_bits_truncate(v as u32);
+                    }
+                }
+                271 => { if let Some(v) = pair.as_i16() { line.break_info_count = v as i32; } }
+                _ => {}
+            }
+        }
+        Ok(line)
     }
 
     /// Read an MLINE entity
@@ -6547,6 +6794,22 @@ impl<'a> SectionReader<'a> {
         }
 
         Ok(Some(dv))
+    }
+}
+
+/// Decode a colour stored as a raw i32 (MULTILEADER's 90/91/92/93 codes) —
+/// the inverse of the writer's `write_color_i32`: 0 = ByBlock, 256 = ByLayer,
+/// 1–255 = ACI index, anything else = packed 24-bit RGB.
+fn color_from_i32(v: i32) -> Color {
+    match v {
+        0 => Color::ByBlock,
+        256 => Color::ByLayer,
+        1..=255 => Color::from_index(v as i16),
+        _ => Color::Rgb {
+            r: ((v >> 16) & 0xFF) as u8,
+            g: ((v >> 8) & 0xFF) as u8,
+            b: (v & 0xFF) as u8,
+        },
     }
 }
 
