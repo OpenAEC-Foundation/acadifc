@@ -3702,6 +3702,8 @@ pub struct AcisEntityData {
     pub point: Vector3,
     /// Whether the entity has a history handle (3DSOLID only, R2007+).
     pub has_history: bool,
+    /// ISOLINES display setting from the wireframe section.
+    pub isolines: i32,
     /// Wireframe edges for visualization.
     pub wires: Vec<Wire>,
     /// Silhouette data for viewports.
@@ -3797,6 +3799,7 @@ pub fn read_acis_entity(
                 version: acis_version,
                 point: crate::types::Vector3::ZERO,
                 has_history: false,
+                isolines: 0,
                 wires: Vec::new(),
                 silhouettes: Vec::new(),
                 revision: AcisRevision::default(),
@@ -3804,43 +3807,61 @@ pub fn read_acis_entity(
         }
     }
 
-    // Wireframe data (version=1 SAT only; version=2 SAB returns early above)
+    // Wireframe data (version=1 SAT and AcDs-backed empty bodies; version=2
+    // inline SAB returns early above). Layout verified bit-level against an
+    // AutoCAD-authored AC1032 sample (the wireframe `point` decodes to the
+    // body's exact bounding-box centre only under this alignment):
+    //   B wireframe_data_present
+    //   if set: 3BD point (unconditional - no point_present bit),
+    //           BL isolines, B isoline_present,
+    //           if set: BL num_wires, wires..., BL num_silhouettes, sils...
+    // AutoCAD writes isoline_present=1 with zero counts when there is no
+    // wire cache.
     let wireframe_present = reader.read_bit();
     let mut point = Vector3::ZERO;
+    let mut isolines: i32 = 0;
     let mut wires = Vec::new();
+    let mut silhouettes = Vec::new();
 
     if wireframe_present {
         point = reader.read_3bit_double();
-        let raw_isolines = reader.read_bit_long();
-        let num_isolines = safe_count(raw_isolines);
-        for _ in 0..num_isolines {
-            wires.push(read_wire(reader));
-        }
-    }
-
-    // Silhouettes (inside wireframe section per LibreDWG)
-    let mut silhouettes = Vec::new();
-    if wireframe_present {
-        let num_silhouettes = safe_count(reader.read_bit_long());
-        for _ in 0..num_silhouettes {
-            let viewport_id = reader.read_bit_long() as i64;
-            let view_direction = reader.read_3bit_double();
-            let up_vector = reader.read_3bit_double();
-            let target = reader.read_3bit_double();
-            let is_perspective = reader.read_bit();
+        isolines = reader.read_bit_long();
+        let isoline_present = reader.read_bit();
+        if isoline_present {
             let num_wires = safe_count(reader.read_bit_long());
-            let mut sil_wires = Vec::with_capacity(num_wires as usize);
             for _ in 0..num_wires {
-                sil_wires.push(read_wire(reader));
+                wires.push(read_wire(reader));
             }
-            silhouettes.push(Silhouette {
-                viewport_id,
-                view_direction,
-                up_vector,
-                target,
-                is_perspective,
-                wires: sil_wires,
-            });
+            let num_silhouettes = safe_count(reader.read_bit_long());
+            for _ in 0..num_silhouettes {
+                let viewport_id = reader.read_bit_long() as i64;
+                let target = reader.read_3bit_double();
+                let view_direction = reader.read_3bit_double();
+                let up_vector = reader.read_3bit_double();
+                let is_perspective = reader.read_bit();
+                // R2007+: a has-wires bit gates the silhouette's wire list.
+                let has_sil_wires = if version.r2007_plus() {
+                    reader.read_bit()
+                } else {
+                    true
+                };
+                let mut sil_wires = Vec::new();
+                if has_sil_wires {
+                    let num_sw = safe_count(reader.read_bit_long());
+                    sil_wires.reserve(num_sw as usize);
+                    for _ in 0..num_sw {
+                        sil_wires.push(read_wire(reader));
+                    }
+                }
+                silhouettes.push(Silhouette {
+                    viewport_id,
+                    view_direction,
+                    up_vector,
+                    target,
+                    is_perspective,
+                    wires: sil_wires,
+                });
+            }
         }
     }
 
@@ -3883,6 +3904,7 @@ pub fn read_acis_entity(
         version: acis_version,
         point,
         has_history: false,
+        isolines,
         wires,
         silhouettes,
         revision,
@@ -3890,11 +3912,14 @@ pub fn read_acis_entity(
 }
 
 /// Read a single wire struct from the DWG stream.
+/// Field order/types per LibreDWG `Dwg_3DSOLID_wire`:
+/// RC type, BLd selection_marker, BS color, BLd acis_index, BL num_points,
+/// 3BD points…, B transform_present [+ axes/translation/scale/flags].
 fn read_wire(reader: &mut DwgMergedReader) -> Wire {
-    let acis_index = reader.read_bit_long();
     let wire_type_raw = reader.read_byte();
     let selection_marker = reader.read_bit_long();
-    let color_val = reader.read_bit_long();
+    let color_val = reader.read_bit_short() as i32;
+    let acis_index = reader.read_bit_long();
     let num_pts = safe_count(reader.read_bit_long());
     let mut pts = Vec::with_capacity(num_pts as usize);
     for _ in 0..num_pts {

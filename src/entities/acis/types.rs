@@ -1438,7 +1438,23 @@ impl SatDocument {
         let Some(rec) = self.records.iter().find(|r| r.entity_type == "transform") else {
             return IDENTITY;
         };
-        let v: Vec<f64> = rec.tokens.iter().filter_map(|t| t.as_float()).take(13).collect();
+        // SAT text tokenizes the 13-number payload (3×3 matrix, translation,
+        // scale) as individual floats, but the SAB reader groups the matrix
+        // rows and the translation into `Position` triplets — flatten both.
+        let mut v: Vec<f64> = Vec::with_capacity(13);
+        for tok in &rec.tokens {
+            if v.len() >= 13 {
+                break;
+            }
+            match tok {
+                SatToken::Position(x, y, z) => v.extend([*x, *y, *z]),
+                _ => {
+                    if let Some(f) = tok.as_float() {
+                        v.push(f);
+                    }
+                }
+            }
+        }
         if v.len() < 13 {
             return IDENTITY;
         }

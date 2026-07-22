@@ -396,22 +396,49 @@ fn acds_apply(entity: &mut crate::entities::EntityType, blob: Vec<u8>) -> bool {
     match entity {
         EntityType::Solid3D(s) => {
             acds_fill(&mut s.acis_data, blob);
-            if let Some(p) = s.acis_data.placement_origin() {
-                s.point_of_reference = p;
+            // The inline wireframe anchor (bbox centre) is the preferred
+            // reference point; fall back to the SAB placement translation
+            // only when the file carried none.
+            if s.point_of_reference == crate::types::Vector3::ZERO {
+                if let Some(p) = s
+                    .acis_data
+                    .geometry_centre()
+                    .or_else(|| s.acis_data.placement_origin())
+                {
+                    s.point_of_reference = p;
+                }
             }
             true
         }
         EntityType::Region(r) => {
             acds_fill(&mut r.acis_data, blob);
-            if let Some(p) = r.acis_data.placement_origin() {
-                r.point_of_reference = p;
+            // The inline wireframe anchor (bbox centre) is the preferred
+            // reference point; fall back to the SAB placement translation
+            // only when the file carried none.
+            if r.point_of_reference == crate::types::Vector3::ZERO {
+                if let Some(p) = r
+                    .acis_data
+                    .geometry_centre()
+                    .or_else(|| r.acis_data.placement_origin())
+                {
+                    r.point_of_reference = p;
+                }
             }
             true
         }
         EntityType::Body(b) => {
             acds_fill(&mut b.acis_data, blob);
-            if let Some(p) = b.acis_data.placement_origin() {
-                b.point_of_reference = p;
+            // The inline wireframe anchor (bbox centre) is the preferred
+            // reference point; fall back to the SAB placement translation
+            // only when the file carried none.
+            if b.point_of_reference == crate::types::Vector3::ZERO {
+                if let Some(p) = b
+                    .acis_data
+                    .geometry_centre()
+                    .or_else(|| b.acis_data.placement_origin())
+                {
+                    b.point_of_reference = p;
+                }
             }
             true
         }

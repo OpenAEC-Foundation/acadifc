@@ -3408,11 +3408,11 @@ impl<'a> DwgObjectWriter<'a> {
         let sab_written = if acds {
             // AC1027+: ACIS data is stored in the AcDsPrototype_1b section.
             // Entity stream writes acis_empty=true with no inline data.
-            self.write_acis_empty();
+            self.write_acis_empty(e.point_of_reference, e.acis_data.wireframe_isolines);
             self.queue_sab_entry(&e.acis_data, e.common.handle);
             false
         } else {
-            self.write_acis_data(&e.acis_data, &e.wires, &e.silhouettes)
+            self.write_acis_data(e.point_of_reference, &e.acis_data, &e.wires, &e.silhouettes)
         };
 
         // SAB binary path already wrote trailing fields; skip for SAT/empty.
@@ -3446,11 +3446,11 @@ impl<'a> DwgObjectWriter<'a> {
 
         let acds = self.needs_acds_section();
         let sab_written = if acds {
-            self.write_acis_empty();
+            self.write_acis_empty(e.point_of_reference, e.acis_data.wireframe_isolines);
             self.queue_sab_entry(&e.acis_data, e.common.handle);
             false
         } else {
-            self.write_acis_data(&e.acis_data, &e.wires, &e.silhouettes)
+            self.write_acis_data(e.point_of_reference, &e.acis_data, &e.wires, &e.silhouettes)
         };
 
         // SAB binary path already wrote trailing fields; skip for SAT/empty.
@@ -3484,11 +3484,11 @@ impl<'a> DwgObjectWriter<'a> {
 
         let acds = self.needs_acds_section();
         let sab_written = if acds {
-            self.write_acis_empty();
+            self.write_acis_empty(e.point_of_reference, e.acis_data.wireframe_isolines);
             self.queue_sab_entry(&e.acis_data, e.common.handle);
             false
         } else {
-            self.write_acis_data(&e.acis_data, &e.wires, &e.silhouettes)
+            self.write_acis_data(e.point_of_reference, &e.acis_data, &e.wires, &e.silhouettes)
         };
 
         // SAB binary path already wrote trailing fields; skip for SAT/empty.
@@ -3520,9 +3520,16 @@ impl<'a> DwgObjectWriter<'a> {
     /// For R2013 and later, ACIS data lives in the AcDsPrototype_1b section.
     /// The entity stream simply indicates "no inline data":
     ///   acis_empty = true (B), wireframe_present = false (B).
-    fn write_acis_empty(&mut self) {
+    fn write_acis_empty(&mut self, point: Vector3, isolines: i32) {
         self.writer.write_bit(true); // acis_empty = true (no inline data)
-        self.writer.write_bit(false); // wireframe_present = false
+        // AutoCAD still writes the wireframe stub: anchor point (bbox
+        // centre), ISOLINES, isoline_present=1 with zero wire/sil counts.
+        self.writer.write_bit(true); // wireframe_data_present
+        self.writer.write_3bit_double(point);
+        self.writer.write_bit_long(if isolines > 0 { isolines } else { 4 });
+        self.writer.write_bit(true); // isoline_present
+        self.writer.write_bit_long(0); // num_wires
+        self.writer.write_bit_long(0); // num_silhouettes
     }
 
     /// Write the R2013+ modeler-geometry revision block (`COMMON_3DSOLID`).
@@ -3564,6 +3571,7 @@ impl<'a> DwgObjectWriter<'a> {
     /// Returns `false` for SAT (version 1); the caller writes trailing fields.
     fn write_acis_data(
         &mut self,
+        point: Vector3,
         acis: &AcisData,
         wires: &[Wire],
         silhouettes: &[Silhouette],
@@ -3633,30 +3641,53 @@ impl<'a> DwgObjectWriter<'a> {
         }
 
         // â”€â”€ COMMON_3DSOLID: Wireframe data (always present) â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        let wireframe_present = has_data && !wires.is_empty();
+        // Wireframe section (mirrors the reader; layout verified against an
+        // AutoCAD-authored AC1032 sample): B wireframe_data_present; if set:
+        // 3BD point (unconditional), BL isolines, B isoline_present; then
+        // BL num_wires, wires..., BL num_silhouettes, sils....
+        let wireframe_present = has_data;
         self.writer.write_bit(wireframe_present);
 
         if wireframe_present {
-            // Point of reference (first wire's anchor â€” use first wire's first point or ZERO)
-            let point = wires
-                .first()
-                .and_then(|w| w.points.first().copied())
-                .unwrap_or(Vector3::ZERO);
-            self.writer.write_3bit_double(point);
+            // Wireframe anchor: the entity's stored reference point (bbox
+            // centre in AutoCAD-authored files), falling back to the first
+            // wire vertex.
+            let anchor = if point != Vector3::ZERO {
+                point
+            } else {
+                wires
+                    .first()
+                    .and_then(|w| w.points.first().copied())
+                    .unwrap_or(Vector3::ZERO)
+            };
+            self.writer.write_3bit_double(anchor);
+            let iso = if acis.wireframe_isolines > 0 {
+                acis.wireframe_isolines
+            } else {
+                4
+            };
+            self.writer.write_bit_long(iso);
+            self.writer.write_bit(true); // isoline_present (AutoCAD: 1 even with zero counts)
 
             self.writer.write_bit_long(wires.len() as i32);
             for wire in wires {
                 self.write_wire(wire);
             }
 
-            // Silhouettes (inside wireframe section per LibreDWG)
             self.writer.write_bit_long(silhouettes.len() as i32);
             for sil in silhouettes {
                 self.writer.write_bit_long(sil.viewport_id as i32);
+                self.writer.write_3bit_double(sil.target);
                 self.writer.write_3bit_double(sil.view_direction);
                 self.writer.write_3bit_double(sil.up_vector);
-                self.writer.write_3bit_double(sil.target);
                 self.writer.write_bit(sil.is_perspective);
+                // R2007+: has-wires bit gates the silhouette wire list.
+                if self.version.r2007_plus() {
+                    self.writer.write_bit(!sil.wires.is_empty());
+                    if sil.wires.is_empty() {
+                        continue;
+                    }
+                }
                 self.writer.write_bit_long(sil.wires.len() as i32);
                 for wire in &sil.wires {
                     self.write_wire(wire);
@@ -3670,17 +3701,19 @@ impl<'a> DwgObjectWriter<'a> {
     }
 
     /// Write a single wire struct (shared by wires and silhouette wires).
+    /// Field order/types per LibreDWG `Dwg_3DSOLID_wire` (mirrors the reader):
+    /// RC type, BLd selection_marker, BS color, BLd acis_index, BL num_points.
     fn write_wire(&mut self, wire: &Wire) {
-        self.writer.write_bit_long(wire.acis_index);
         self.writer.write_byte(wire.wire_type as u8);
         self.writer.write_bit_long(wire.selection_marker);
-        let color_val: i32 = match wire.color {
+        let color_val: i16 = match wire.color {
             crate::types::Color::ByLayer => 256,
             crate::types::Color::ByBlock => 0,
-            crate::types::Color::Index(idx) => idx as i32,
+            crate::types::Color::Index(idx) => idx as i16,
             _ => 256,
         };
-        self.writer.write_bit_long(color_val);
+        self.writer.write_bit_short(color_val);
+        self.writer.write_bit_long(wire.acis_index);
         self.writer.write_bit_long(wire.points.len() as i32);
         for pt in &wire.points {
             self.writer.write_3bit_double(*pt);

@@ -282,6 +282,10 @@ pub struct AcisData {
     pub is_binary: bool,
     /// R2013+ modeler-geometry revision block (preserved for round-trip).
     pub revision: AcisRevision,
+    /// ISOLINES display setting from the DWG wireframe section (preserved
+    /// for round-trip; 0 when the entity carried no wireframe data).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub wireframe_isolines: i32,
 }
 
 impl AcisData {
@@ -293,6 +297,7 @@ impl AcisData {
             sab_data: Vec::new(),
             is_binary: false,
             revision: AcisRevision::default(),
+            wireframe_isolines: 0,
         }
     }
 
@@ -307,6 +312,7 @@ impl AcisData {
             sab_data: Vec::new(),
             is_binary: false,
             revision: AcisRevision::default(),
+            wireframe_isolines: 0,
         }
     }
 
@@ -318,6 +324,7 @@ impl AcisData {
             sab_data: sab,
             is_binary: true,
             revision: AcisRevision::default(),
+            wireframe_isolines: 0,
         }
     }
 
@@ -409,6 +416,64 @@ impl AcisData {
         }
         let (_m, t, _s) = doc.placement();
         Some(Vector3::new(t[0], t[1], t[2]))
+    }
+
+    /// The centre of the body's vertex-point bounding box, in world space
+    /// (body placement applied). `None` when the data can't be parsed or
+    /// carries no `point` records. Approximates the geometric centre well for
+    /// faceted bodies; used as the reference point when the file stores no
+    /// wireframe anchor — bodies baked at world coordinates would otherwise
+    /// report (0,0,0).
+    pub fn geometry_centre(&self) -> Option<Vector3> {
+        use crate::entities::acis::SatToken;
+        let doc = self.parse()?;
+        let (m, tr, s) = doc.placement();
+        let mut min = [f64::MAX; 3];
+        let mut max = [f64::MIN; 3];
+        let mut count = 0usize;
+        for rec in &doc.records {
+            if rec.entity_type != "point" {
+                continue;
+            }
+            // SAB tokenizes the coordinate as one Position; SAT text as three
+            // trailing floats (after the bookkeeping ints).
+            let mut p: Option<[f64; 3]> = None;
+            let mut floats: Vec<f64> = Vec::with_capacity(4);
+            for t in &rec.tokens {
+                match t {
+                    SatToken::Position(x, y, z) => p = Some([*x, *y, *z]),
+                    SatToken::Float(f) => floats.push(*f),
+                    _ => {}
+                }
+            }
+            let Some([x, y, z]) = p.or_else(|| {
+                (floats.len() >= 3).then(|| {
+                    let n = floats.len();
+                    [floats[n - 3], floats[n - 2], floats[n - 1]]
+                })
+            }) else {
+                continue;
+            };
+            // ACIS row-vector convention: world = scale·(p·M) + T.
+            let w = [
+                s * (x * m[0][0] + y * m[1][0] + z * m[2][0]) + tr[0],
+                s * (x * m[0][1] + y * m[1][1] + z * m[2][1]) + tr[1],
+                s * (x * m[0][2] + y * m[1][2] + z * m[2][2]) + tr[2],
+            ];
+            for k in 0..3 {
+                min[k] = min[k].min(w[k]);
+                max[k] = max[k].max(w[k]);
+            }
+            count += 1;
+        }
+        if count == 0 {
+            return None;
+        }
+        Some(Vector3::new(
+            (min[0] + max[0]) * 0.5,
+            (min[1] + max[1]) * 0.5,
+            (min[2] + max[2]) * 0.5,
+        ))
     }
 }
 

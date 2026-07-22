@@ -2671,10 +2671,21 @@ impl DwgDocumentBuilder {
                     e.acis_data.sab_data = data.sab_data;
                     e.acis_data.is_binary = data.is_binary;
                     e.acis_data.revision = data.revision;
+                    e.acis_data.wireframe_isolines = data.isolines;
                     // A 3D solid has no insertion point of its own; the file's
                     // point field is usually zero. Prefer the ACIS placement
                     // origin so the reference reflects where the body sits.
-                    e.point_of_reference = e.acis_data.placement_origin().unwrap_or(data.point);
+                    e.point_of_reference = if data.point != crate::types::Vector3::ZERO {
+                        // The wireframe anchor AutoCAD bakes into the file is
+                        // the body's bounding-box centre - the natural
+                        // reference point.
+                        data.point
+                    } else {
+                        e.acis_data
+                            .geometry_centre()
+                            .or_else(|| e.acis_data.placement_origin())
+                            .unwrap_or(data.point)
+                    };
                     e.wires = data.wires;
                     e.silhouettes = data.silhouettes;
 
@@ -2706,7 +2717,18 @@ impl DwgDocumentBuilder {
                     e.acis_data.sab_data = data.sab_data;
                     e.acis_data.is_binary = data.is_binary;
                     e.acis_data.revision = data.revision;
-                    e.point_of_reference = e.acis_data.placement_origin().unwrap_or(data.point);
+                    e.acis_data.wireframe_isolines = data.isolines;
+                    e.point_of_reference = if data.point != crate::types::Vector3::ZERO {
+                        // The wireframe anchor AutoCAD bakes into the file is
+                        // the body's bounding-box centre - the natural
+                        // reference point.
+                        data.point
+                    } else {
+                        e.acis_data
+                            .geometry_centre()
+                            .or_else(|| e.acis_data.placement_origin())
+                            .unwrap_or(data.point)
+                    };
                     e.wires = data.wires;
                     e.silhouettes = data.silhouettes;
                     // REGION R2007+: history_id handle (same slot as 3DSOLID).
@@ -2735,7 +2757,18 @@ impl DwgDocumentBuilder {
                     e.acis_data.sab_data = data.sab_data;
                     e.acis_data.is_binary = data.is_binary;
                     e.acis_data.revision = data.revision;
-                    e.point_of_reference = e.acis_data.placement_origin().unwrap_or(data.point);
+                    e.acis_data.wireframe_isolines = data.isolines;
+                    e.point_of_reference = if data.point != crate::types::Vector3::ZERO {
+                        // The wireframe anchor AutoCAD bakes into the file is
+                        // the body's bounding-box centre - the natural
+                        // reference point.
+                        data.point
+                    } else {
+                        e.acis_data
+                            .geometry_centre()
+                            .or_else(|| e.acis_data.placement_origin())
+                            .unwrap_or(data.point)
+                    };
                     e.wires = data.wires;
                     e.silhouettes = data.silhouettes;
                     // BODY R2007+: history_id handle (same slot as 3DSOLID).
@@ -2776,6 +2809,7 @@ impl DwgDocumentBuilder {
                     e.acis_data.sab_data = data.sab_data;
                     e.acis_data.is_binary = data.is_binary;
                     e.acis_data.revision = data.revision;
+                    e.acis_data.wireframe_isolines = data.isolines;
                     e.wires = data.wires;
                     e.silhouettes = data.silhouettes;
                     // Preserve the raw object verbatim so DWG write-back keeps
