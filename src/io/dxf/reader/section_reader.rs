@@ -1811,45 +1811,68 @@ impl<'a> SectionReader<'a> {
                 }
                 9 => {
                     if let Some(last) = linetype.elements.last_mut() {
-                        last.complex_mut().set_text(pair.value_string.clone());
+                        if last.complex.is_some() {
+                            last.complex_mut().set_text(pair.value_string.clone());
+                        }
                     }
                 }
                 44 => {
                     if let Some(last) = linetype.elements.last_mut() {
-                        if let Some(v) = pair.as_double() { last.complex_mut().offset[0] = v; }
+                        if let (Some(c), Some(v)) = (last.complex.as_mut(), pair.as_double()) {
+                            c.offset[0] = v;
+                        }
                     }
                 }
                 45 => {
                     if let Some(last) = linetype.elements.last_mut() {
-                        if let Some(v) = pair.as_double() { last.complex_mut().offset[1] = v; }
+                        if let (Some(c), Some(v)) = (last.complex.as_mut(), pair.as_double()) {
+                            c.offset[1] = v;
+                        }
                     }
                 }
                 46 => {
                     if let Some(last) = linetype.elements.last_mut() {
-                        last.complex_mut().scale = pair.value_string.parse().unwrap_or(1.0);
+                        if let Some(c) = last.complex.as_mut() {
+                            c.scale = pair.value_string.parse().unwrap_or(1.0);
+                        }
                     }
                 }
                 50 => {
                     if let Some(last) = linetype.elements.last_mut() {
-                        last.complex_mut().rotation = pair.value_string.parse().unwrap_or(0.0);
+                        if let Some(c) = last.complex.as_mut() {
+                            c.rotation = pair.value_string.parse().unwrap_or(0.0);
+                        }
                     }
                 }
+                // DXF LTYPE per-element codes: 74 = element-type FLAGS
+                // (0 = plain dash — must NOT materialize complex data, or every
+                // dashed linetype turns "complex" and renders nothing, #314),
+                // 75 = shape number. These were read swapped AND
+                // unconditionally, so AutoCAD's plain `74 0` gave every element
+                // a Shape{0} complex record.
                 74 => {
                     if let Some(last) = linetype.elements.last_mut() {
-                        last.complex_mut().set_shape_number(pair.as_i16().unwrap_or(0));
+                        if let Some(flags) = pair.as_i16() {
+                            if flags != 0 {
+                                last.complex_mut().apply_dxf_flags(flags);
+                            }
+                        }
                     }
                 }
                 75 => {
                     if let Some(last) = linetype.elements.last_mut() {
-                        if let Some(flags) = pair.as_i16() {
-                            last.complex_mut().apply_dxf_flags(flags);
+                        if last.complex.is_some() {
+                            last.complex_mut().set_shape_number(pair.as_i16().unwrap_or(0));
                         }
                     }
                 }
                 340 => {
                     if let Some(last) = linetype.elements.last_mut() {
-                        if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) {
-                            last.complex_mut().style_handle = Handle::new(h);
+                        if let (Some(c), Ok(h)) = (
+                            last.complex.as_mut(),
+                            u64::from_str_radix(&pair.value_string, 16),
+                        ) {
+                            c.style_handle = Handle::new(h);
                         }
                     }
                 }

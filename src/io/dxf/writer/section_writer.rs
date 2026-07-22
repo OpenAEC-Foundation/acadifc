@@ -501,15 +501,18 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
         for element in &ltype.elements {
             self.writer.write_double(49, element.length)?;
+            // DXF LTYPE per-element codes: 74 = element-type FLAGS
+            // (0x01=abs rot, 0x02=text, 0x04=shape; 0 = plain dash),
+            // 75 = shape number. These used to be emitted swapped — AutoCAD
+            // then read every element as complex (OCS#314).
             if let Some(c) = &element.complex {
-                // Build DXF element-type flags (code 75): 0x01=abs rot, 0x02=text, 0x04=shape
                 let mut flags: i16 = 0;
                 if c.is_absolute_rotation() { flags |= 0x01; }
                 if c.is_shape() { flags |= 0x04; }
                 else if c.is_text() { flags |= 0x02; }
 
-                self.writer.write_i16(74, c.shape_number().unwrap_or(0))?;
-                self.writer.write_i16(75, flags)?;
+                self.writer.write_i16(74, flags)?;
+                self.writer.write_i16(75, c.shape_number().unwrap_or(0))?;
                 if let Some(t) = c.text() {
                     if !t.is_empty() {
                         self.writer.write_string(9, t)?;
@@ -522,6 +525,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 if !c.style_handle.is_null() {
                     self.writer.write_handle(340, c.style_handle)?;
                 }
+            } else {
+                // Plain dash element — AutoCAD emits the zero flag word.
+                self.writer.write_i16(74, 0)?;
             }
         }
 
