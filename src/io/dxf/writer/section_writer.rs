@@ -1587,6 +1587,14 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         if mtext.rotation != 0.0 {
             self.writer.write_double(50, mtext.rotation.to_degrees())?;
         }
+        // Laid-out text extents (output-only). Skipped when never computed so
+        // files authored without layout info round-trip unchanged.
+        if mtext.extents_width > 0.0 {
+            self.writer.write_double(42, mtext.extents_width)?;
+        }
+        if mtext.extents_height > 0.0 {
+            self.writer.write_double(43, mtext.extents_height)?;
+        }
         self.writer.write_i16(73, mtext.line_spacing_style as i16)?;
         self.writer.write_double(44, mtext.line_spacing_factor)?;
         if let Some(h) = mtext.rectangle_height {

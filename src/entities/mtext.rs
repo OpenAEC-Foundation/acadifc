@@ -127,6 +127,14 @@ pub struct MText {
     pub is_annotative: bool,
     /// Column layout data (R2018+).
     pub column_data: MTextColumnData,
+    /// Horizontal extent of the laid-out text (DXF 42, output-only; DWG
+    /// "extents width"). 0 when never laid out.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub extents_width: f64,
+    /// Vertical extent of the laid-out text (DXF 43, output-only; DWG
+    /// "extents height"). 0 when never laid out.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub extents_height: f64,
 }
 
 impl MText {
@@ -157,6 +165,8 @@ impl MText {
             // default it would mark every imported MTEXT annotative.
             is_annotative: false,
             column_data: MTextColumnData::new(),
+            extents_width: 0.0,
+            extents_height: 0.0,
         }
     }
 

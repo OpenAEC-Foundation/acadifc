@@ -3442,6 +3442,16 @@ impl<'a> SectionReader<'a> {
                         mtext.rectangle_width = width;
                     }
                 }
+                42 => {
+                    if let Some(w) = pair.as_double() {
+                        mtext.extents_width = w;
+                    }
+                }
+                43 => {
+                    if let Some(h) = pair.as_double() {
+                        mtext.extents_height = h;
+                    }
+                }
                 50 => {
                     if let Some(rotation) = pair.as_double() {
                         mtext.rotation = rotation.to_radians();

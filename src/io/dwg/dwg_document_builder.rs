@@ -1778,6 +1778,8 @@ impl DwgDocumentBuilder {
                     if data.rectangle_height != 0.0 {
                         e.rectangle_height = Some(data.rectangle_height);
                     }
+                    e.extents_width = data.extents_width;
+                    e.extents_height = data.extents_height;
                     e.normal = data.normal;
                     e.attachment_point = match data.attachment_point {
                         2 => AttachmentPoint::TopCenter,

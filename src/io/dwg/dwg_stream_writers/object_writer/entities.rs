@@ -395,10 +395,10 @@ impl<'a> DwgObjectWriter<'a> {
         // Drawing dir BS 72 (unconditional â€” written for ALL versions)
         self.writer.write_bit_short(e.drawing_direction as i16);
 
-        // Extents ht BD (undocumented, not in DXF)
-        self.writer.write_bit_double(0.0);
-        // Extents wid BD (undocumented, not in DXF)
-        self.writer.write_bit_double(0.0);
+        // Extents ht BD (DXF 43, output-only)
+        self.writer.write_bit_double(e.extents_height);
+        // Extents wid BD (DXF 42, output-only)
+        self.writer.write_bit_double(e.extents_width);
 
         // Text TV 1
         self.writer.write_variable_text(&e.value);
