@@ -33,10 +33,10 @@ pub enum AttachmentPoint {
 pub enum DrawingDirection {
     /// Left to right
     LeftToRight = 1,
-    /// Top to bottom
-    TopToBottom = 2,
-    /// By style
-    ByStyle = 3,
+    /// Top to bottom (DXF 72 = 3 — the TEXT-era code set skips 2 and 4)
+    TopToBottom = 3,
+    /// By style (DXF 72 = 5)
+    ByStyle = 5,
 }
 
 /// Column layout for an [`MText`] entity (stored in R2018+ DWG, non-annotative).

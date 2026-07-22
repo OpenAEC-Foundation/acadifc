@@ -3475,8 +3475,8 @@ impl<'a> SectionReader<'a> {
                 72 => {
                     if let Some(dd) = pair.as_i16() {
                         mtext.drawing_direction = match dd {
-                            2 => DrawingDirection::TopToBottom,
-                            3 => DrawingDirection::ByStyle,
+                            3 => DrawingDirection::TopToBottom,
+                            5 => DrawingDirection::ByStyle,
                             _ => DrawingDirection::LeftToRight,
                         };
                     }

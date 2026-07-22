@@ -502,10 +502,17 @@ impl DwgObjectReader {
                 reader.set_position_in_bits(start);
                 let v_without = peek(reader, false);
                 reader.set_position_in_bits(start);
-                // Only consume the bit when reading it makes the version decode
-                // sanely and skipping it does not — otherwise leave it (matching
-                // the omitting writers), which is the safe default.
-                if plausible(v_with) && !plausible(v_without) {
+                // Decide by which offset decodes the class_version sanely.
+                // AutoCAD only ever writes 2, so an exact 2 outranks the
+                // broader 0..=10 plausibility band — a 1-bit misalignment can
+                // still decode to a "plausible" small integer (e.g. the BS
+                // '10' code = 0), which the old rule wrongly trusted.
+                let consume = if (v_with == 2) != (v_without == 2) {
+                    v_with == 2
+                } else {
+                    plausible(v_with) && !plausible(v_without)
+                };
+                if consume {
                     has_ds_data = reader.read_bit();
                 }
             } else {

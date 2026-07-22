@@ -1793,8 +1793,8 @@ impl DwgDocumentBuilder {
                         _ => AttachmentPoint::TopLeft,
                     };
                     e.drawing_direction = match data.drawing_direction {
-                        2 => DrawingDirection::TopToBottom,
-                        3 => DrawingDirection::ByStyle,
+                        3 => DrawingDirection::TopToBottom,
+                        5 => DrawingDirection::ByStyle,
                         _ => DrawingDirection::LeftToRight,
                     };
                     // Compute rotation from x_direction vector
