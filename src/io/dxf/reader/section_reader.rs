@@ -2377,6 +2377,23 @@ impl<'a> SectionReader<'a> {
 
     // ===== Common Entity/Object Code Helpers =====
 
+    /// Skip a `101 / Embedded Object` section (R2018+ MTEXT and multiline
+    /// ATTRIB/ATTDEF carry one): its codes reuse the entity's own group codes
+    /// (10/11/40/41/71/72/44/…) for column/layout data, so letting them fall
+    /// through the entity match overwrites the already-parsed insertion point,
+    /// attachment and spacing with embedded values. Consume until the next
+    /// entity (code 0) or an XDATA block (code >= 1000), leaving that pair
+    /// for the caller.
+    fn skip_embedded_object(&mut self) -> Result<()> {
+        while let Some(pair) = self.reader.read_pair()? {
+            if pair.code == 0 || pair.code >= 1000 {
+                self.reader.push_back(pair);
+                break;
+            }
+        }
+        Ok(())
+    }
+
     /// Try to read a common entity code (5, 60, 102, 330, 92, 160, 310).
     /// Returns true if the code was consumed, false if not recognized.
     fn try_read_common_entity_code(
@@ -3473,6 +3490,9 @@ impl<'a> SectionReader<'a> {
                     }
                 }
                 210 | 220 | 230 => { normal.add_coordinate(&pair); }
+                // R2018+ column/layout companion — its codes shadow the
+                // entity's own, so it must not fall through this match.
+                101 => { self.skip_embedded_object()?; }
                 _ => { self.try_read_common_entity_code(&pair, &mut mtext.common)?; }
             }
         }
@@ -4996,6 +5016,9 @@ impl<'a> SectionReader<'a> {
                         rotation = r.to_radians();
                     }
                 }
+                // Multiline attribute's embedded MTEXT (R2018+) — codes shadow
+                // the entity's own, so it must not fall through this match.
+                101 => { self.skip_embedded_object()?; }
                 _ => { self.try_read_common_entity_code(&pair, &mut common)?; }
             }
         }
@@ -5465,6 +5488,9 @@ impl<'a> SectionReader<'a> {
                         attrib.vertical_alignment = crate::entities::attribute_definition::VerticalAlignment::from_value(v);
                     }
                 }
+                // Multiline attribute's embedded MTEXT (R2018+) — codes shadow
+                // the entity's own, so it must not fall through this match.
+                101 => { self.skip_embedded_object()?; }
                 _ => { self.try_read_common_entity_code(&pair, &mut attrib.common)?; }
             }
         }
