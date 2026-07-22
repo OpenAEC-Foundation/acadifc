@@ -1721,7 +1721,10 @@ impl<'a> SectionReader<'a> {
                 2 => layer.name = pair.value_string.clone(),
                 62 => {
                     if let Some(color_index) = pair.as_i16() {
-                        layer.color = Color::from_index(color_index);
+                        // A NEGATIVE colour index is how DXF encodes an OFF
+                        // layer — code 70 has no off bit (#314).
+                        layer.flags.off = color_index < 0;
+                        layer.color = Color::from_index(color_index.abs());
                     }
                 }
                 // True color (code 420): packed 24-bit RGB, overrides the ACI
@@ -1738,7 +1741,10 @@ impl<'a> SectionReader<'a> {
                     if let Some(flags) = pair.as_i16() {
                         layer.flags.frozen = (flags & 1) != 0;
                         layer.flags.locked = (flags & 4) != 0;
-                        layer.flags.off = (flags & 2) != 0;
+                        // Bit 2 is "frozen by default in NEW viewports", NOT
+                        // off — the AEC sample's GRIDLINES layer carries it
+                        // while fully visible, and reading it as off hid every
+                        // grid line on DXF import (#314).
                         layer.flags.xref_dependent = (flags & 0x10) != 0;
                     }
                 }
