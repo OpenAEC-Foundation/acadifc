@@ -2176,13 +2176,18 @@ fn recover_roundtrip_gradients(document: &mut crate::document::CadDocument) {
             continue;
         }
         let eed = &h.common.extended_data;
+        // EED app names vary in case across versions (R14 upper-cases them:
+        // GRADIENTCOLOR1ACI vs R2000's GradientColor1ACI), so match loosely.
         let aci = |app: &str| -> Option<u8> {
-            eed.get_record(app).and_then(|r| {
-                r.values.iter().find_map(|v| match v {
-                    crate::xdata::XDataValue::Integer16(n) => Some(*n as u8),
-                    _ => None,
+            eed.records()
+                .iter()
+                .find(|r| r.application_name.eq_ignore_ascii_case(app))
+                .and_then(|r| {
+                    r.values.iter().find_map(|v| match v {
+                        crate::xdata::XDataValue::Integer16(n) => Some(*n as u8),
+                        _ => None,
+                    })
                 })
-            })
         };
         let (Some(c1), Some(c2)) = (aci("GradientColor1ACI"), aci("GradientColor2ACI")) else {
             continue;
@@ -2193,9 +2198,12 @@ fn recover_roundtrip_gradients(document: &mut crate::document::CadDocument) {
         let mut name = String::new();
         if let Some(xd) = h.common.xdictionary_handle {
             if let Some(ObjectType::Dictionary(d)) = document.objects.get(&xd) {
-                if let Some((_, xrec_h)) =
-                    d.entries.iter().find(|(k, _)| k == "ACAD_XREC_ROUNDTRIP")
-                {
+                // R14 mis-sizes dictionary key strings, leaving trailing
+                // garbage bytes ("ACAD_XREC_ROUNDTRIP\x03q0…"), so match by
+                // prefix rather than equality.
+                if let Some((_, xrec_h)) = d.entries.iter().find(|(k, _)| {
+                    k.len() >= 19 && k[..19].eq_ignore_ascii_case("ACAD_XREC_ROUNDTRIP")
+                }) {
                     if let Some(ObjectType::XRecord(xr)) = document.objects.get(xrec_h) {
                         let ascii: String = xr
                             .raw_data
