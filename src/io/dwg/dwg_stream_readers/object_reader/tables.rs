@@ -818,6 +818,68 @@ pub fn read_dimstyle(
         dimarcsym: 0, dimfxlon: false, dimtxtdirection: false,
     };
 
+    // R13/R14 only: the older DimStyle field block. Field order/types mirror
+    // the writer's r13_14_only block (matches ACadSharp). Without this the
+    // whole record was skipped, leaving DIMTAD/DIMASZ/DIMGAP at their defaults
+    // (0 / 0.18 / 0.09) — so a leader that hooks its text via DIMTAD never
+    // drew the underline. dimblk names are strings here (handles only R2000+).
+    if version.r13_14_only() {
+        ds.dimtol = reader.read_bit();
+        ds.dimlim = reader.read_bit();
+        ds.dimtih = reader.read_bit();
+        ds.dimtoh = reader.read_bit();
+        ds.dimse1 = reader.read_bit();
+        ds.dimse2 = reader.read_bit();
+        ds.dimalt = reader.read_bit();
+        ds.dimtofl = reader.read_bit();
+        ds.dimsah = reader.read_bit();
+        ds.dimtix = reader.read_bit();
+        ds.dimsoxd = reader.read_bit();
+        ds.dimaltd = reader.read_byte() as i16;
+        ds.dimzin = reader.read_byte() as i16;
+        ds.dimsd1 = reader.read_bit();
+        ds.dimsd2 = reader.read_bit();
+        ds.dimtolj = reader.read_byte() as i16;
+        ds.dimjust = reader.read_byte() as i16;
+        ds.dimfit = reader.read_byte() as i16;
+        ds.dimupt = reader.read_bit();
+        ds.dimtzin = reader.read_byte() as i16;
+        ds.dimaltz = reader.read_byte() as i16;
+        ds.dimalttz = reader.read_byte() as i16;
+        ds.dimtad = reader.read_byte() as i16;
+        ds.dimlunit = reader.read_bit_short(); // DIMUNIT (270)
+        ds.dimaunit = reader.read_bit_short();
+        ds.dimdec = reader.read_bit_short();
+        ds.dimtdec = reader.read_bit_short();
+        ds.dimaltu = reader.read_bit_short();
+        ds.dimalttd = reader.read_bit_short();
+        ds.dimscale = reader.read_bit_double();
+        ds.dimasz = reader.read_bit_double();
+        ds.dimexo = reader.read_bit_double();
+        ds.dimdli = reader.read_bit_double();
+        ds.dimexe = reader.read_bit_double();
+        ds.dimrnd = reader.read_bit_double();
+        ds.dimdle = reader.read_bit_double();
+        ds.dimtp = reader.read_bit_double();
+        ds.dimtm = reader.read_bit_double();
+        ds.dimtxt = reader.read_bit_double();
+        ds.dimcen = reader.read_bit_double();
+        ds.dimtsz = reader.read_bit_double();
+        ds.dimaltf = reader.read_bit_double();
+        ds.dimlfac = reader.read_bit_double();
+        ds.dimtvp = reader.read_bit_double();
+        ds.dimtfac = reader.read_bit_double();
+        ds.dimgap = reader.read_bit_double();
+        ds.dimpost = reader.read_variable_text();
+        ds.dimapost = reader.read_variable_text();
+        let _dimblk = reader.read_variable_text();
+        let _dimblk1 = reader.read_variable_text();
+        let _dimblk2 = reader.read_variable_text();
+        ds.dimclrd = reader.read_cm_color();
+        ds.dimclre = reader.read_cm_color();
+        ds.dimclrt = reader.read_cm_color();
+    }
+
     // R2000+
     if version.r2000_plus() {
         ds.dimpost = reader.read_variable_text();
