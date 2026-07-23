@@ -53,6 +53,10 @@ struct HandleMaps {
     text_styles: HashMap<u64, String>,
     /// handle → linetype name
     linetypes: HashMap<u64, String>,
+    /// Linetype names in table order, EXCLUDING ByBlock/ByLayer. A pre-R2018
+    /// MLINESTYLE element stores its linetype as a 0-based index into this list
+    /// (0x7FFF = ByLayer); R2018+ stores a handle instead.
+    linetype_order: Vec<String>,
     /// handle → dimension style name
     dim_styles: HashMap<u64, String>,
 }
@@ -64,6 +68,7 @@ impl HandleMaps {
             blocks: HashMap::new(),
             text_styles: HashMap::new(),
             linetypes: HashMap::new(),
+            linetype_order: Vec::new(),
             dim_styles: HashMap::new(),
         }
     }
@@ -326,6 +331,14 @@ impl DwgDocumentBuilder {
                             }
                             ParsedEntry::Ltype(h, data) => {
                                 maps.linetypes.insert(*h, data.name.clone());
+                                // Ordered list for pre-R2018 MLINESTYLE index
+                                // resolution — the special ByBlock/ByLayer are
+                                // not part of the linetype index space.
+                                if !data.name.eq_ignore_ascii_case("ByBlock")
+                                    && !data.name.eq_ignore_ascii_case("ByLayer")
+                                {
+                                    maps.linetype_order.push(data.name.clone());
+                                }
                             }
                             ParsedEntry::DimStyle(h, data) => {
                                 maps.dim_styles.insert(*h, data.name.clone());
@@ -3091,8 +3104,18 @@ impl DwgDocumentBuilder {
                                     .cloned()
                                     .unwrap_or_else(|| "BYLAYER".to_string())
                             } else {
-                                // Pre-R2018: linetype index (0 = BYLAYER)
-                                "BYLAYER".to_string()
+                                // Pre-R2018: a bit_short index into the linetypes
+                                // in table order (ByBlock/ByLayer excluded);
+                                // 0x7FFF means ByLayer.
+                                let idx = e.linetype_index_or_handle;
+                                if idx == 0x7FFF {
+                                    "ByLayer".to_string()
+                                } else {
+                                    maps.linetype_order
+                                        .get(idx as usize)
+                                        .cloned()
+                                        .unwrap_or_else(|| "BYLAYER".to_string())
+                                }
                             };
                             crate::objects::MLineStyleElement::full(e.offset, e.color, linetype)
                         })

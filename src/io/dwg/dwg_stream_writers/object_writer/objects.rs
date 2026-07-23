@@ -798,8 +798,25 @@ impl<'a> DwgObjectWriter<'a> {
                 self.writer
                     .write_handle(DwgReferenceType::HardPointer, lt_handle.value());
             } else {
-                // Before R2018: Ltindex BS (linetype index, 0 = BYLAYER)
-                self.writer.write_bit_short(0);
+                // Before R2018: bit_short index into the linetypes in table
+                // order, EXCLUDING ByBlock/ByLayer; 0x7FFF means ByLayer.
+                let idx: i16 = if elem.linetype.is_empty()
+                    || elem.linetype.eq_ignore_ascii_case("ByLayer")
+                {
+                    0x7FFF
+                } else {
+                    self.document
+                        .line_types
+                        .iter()
+                        .filter(|lt| {
+                            !lt.name.eq_ignore_ascii_case("ByBlock")
+                                && !lt.name.eq_ignore_ascii_case("ByLayer")
+                        })
+                        .position(|lt| lt.name.eq_ignore_ascii_case(&elem.linetype))
+                        .map(|p| p as i16)
+                        .unwrap_or(0x7FFF)
+                };
+                self.writer.write_bit_short(idx);
             }
         }
 
