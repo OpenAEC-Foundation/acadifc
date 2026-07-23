@@ -257,6 +257,18 @@ pub struct WipeoutVariablesData {
 //  Reader functions
 // ════════════════════════════════════════════════════════════════════════
 
+/// Dictionary keys are ASCII identifiers ([A-Z0-9_:]). R13/R14 mis-sizes the
+/// key string, appending a few control/high bytes from the following field
+/// ("ACAD_FILTER\u{80}0…"), which broke exact-name lookups (xclip filters,
+/// gradient round-trip records). The trailing garbage is always non-printable
+/// or high-bit, so cut the key at the first such byte.
+fn clean_dict_key(name: String) -> String {
+    match name.find(|c: char| (c as u32) < 0x20 || (c as u32) > 0x7e) {
+        Some(pos) => name[..pos].to_string(),
+        None => name,
+    }
+}
+
 pub fn read_dictionary(reader: &mut DwgMergedReader, version: DwgVersion) -> DictionaryData {
     let num_entries = safe_count(reader.read_bit_long());
 
@@ -269,7 +281,7 @@ pub fn read_dictionary(reader: &mut DwgMergedReader, version: DwgVersion) -> Dic
 
     let mut entries = Vec::with_capacity(num_entries as usize);
     for _ in 0..num_entries {
-        let name = reader.read_variable_text();
+        let name = clean_dict_key(reader.read_variable_text());
         let handle = reader.read_handle();
         entries.push(DictionaryEntry { name, handle });
     }
@@ -289,7 +301,7 @@ pub fn read_dictionary_with_default(reader: &mut DwgMergedReader, version: DwgVe
 
     let mut entries = Vec::with_capacity(num_entries as usize);
     for _ in 0..num_entries {
-        let name = reader.read_variable_text();
+        let name = clean_dict_key(reader.read_variable_text());
         let handle = reader.read_handle();
         entries.push(DictionaryEntry { name, handle });
     }
