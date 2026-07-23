@@ -573,6 +573,25 @@ pub(crate) fn normalize_v400_tokens(entity_type: &str, tokens: &mut Vec<SatToken
         | "straight-curve" | "ellipse-curve" | "intcurve-curve" | "bs2-curve"
         | "bs3-curve" | "exactcur-curve" => {
             tokens.insert(0, sentinel);
+            // v400 edge is `$sv $ev $coedge $curve sense` — it omits the
+            // start_param / end_param doubles that v700 carries between the
+            // vertices (`$sv sp $ev ep $coedge $curve sense`). Insert zero
+            // placeholders so the fixed-index accessors (end_vertex=3,
+            // curve=6, sense=7) read the right slots; without them a reversed
+            // coedge reads the curve pointer as its end vertex, so every face
+            // with a reversed coedge loop collapses and drops out of the mesh.
+            if entity_type == "edge" {
+                // After the leading sentinel: [sentinel, sv, ev, coedge, curve, sense].
+                if tokens.len() >= 3
+                    && matches!(tokens.get(1), Some(SatToken::Pointer(_)))
+                    && matches!(tokens.get(2), Some(SatToken::Pointer(_)))
+                {
+                    tokens.insert(2, SatToken::Float(0.0)); // start_param after sv
+                    if tokens.len() >= 5 {
+                        tokens.insert(4, SatToken::Float(0.0)); // end_param after ev
+                    }
+                }
+            }
         }
         // Sentinel at position 1
         "lump" => {
