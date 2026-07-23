@@ -3847,11 +3847,13 @@ pub fn read_acis_entity(
     }
 
     // Wireframe data (version=1 SAT and AcDs-backed empty bodies; version=2
-    // inline SAB returns early above). Layout verified bit-level against an
-    // AutoCAD-authored AC1032 sample (the wireframe `point` decodes to the
-    // body's exact bounding-box centre only under this alignment):
+    // inline SAB returns early above). Layout per LibreDWG COMMON_3DSOLID,
+    // bit-verified against an AutoCAD AC1015 (R2000) v1-SAT sample — the
+    // `point` decodes to the body's exact bounding-box centre only WITH the
+    // point_present gate (AC1032's solids are SAB and skip this path, so it
+    // was never really exercised before):
     //   B wireframe_data_present
-    //   if set: 3BD point (unconditional - no point_present bit),
+    //   if set: B point_present, [3BD point],
     //           BL isolines, B isoline_present,
     //           if set: BL num_wires, wires..., BL num_silhouettes, sils...
     // AutoCAD writes isoline_present=1 with zero counts when there is no
@@ -3863,7 +3865,11 @@ pub fn read_acis_entity(
     let mut silhouettes = Vec::new();
 
     if wireframe_present {
-        point = reader.read_3bit_double();
+        // LibreDWG COMMON_3DSOLID: a point_present bit gates the 3BD point.
+        let point_present = reader.read_bit();
+        if point_present {
+            point = reader.read_3bit_double();
+        }
         isolines = reader.read_bit_long();
         let isoline_present = reader.read_bit();
         if isoline_present {

@@ -3529,6 +3529,7 @@ impl<'a> DwgObjectWriter<'a> {
         // AutoCAD still writes the wireframe stub: anchor point (bbox
         // centre), ISOLINES, isoline_present=1 with zero wire/sil counts.
         self.writer.write_bit(true); // wireframe_data_present
+        self.writer.write_bit(true); // point_present
         self.writer.write_3bit_double(point);
         self.writer.write_bit_long(if isolines > 0 { isolines } else { 4 });
         self.writer.write_bit(true); // isoline_present
@@ -3648,9 +3649,9 @@ impl<'a> DwgObjectWriter<'a> {
         }
 
         // â”€â”€ COMMON_3DSOLID: Wireframe data (always present) â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        // Wireframe section (mirrors the reader; layout verified against an
-        // AutoCAD-authored AC1032 sample): B wireframe_data_present; if set:
-        // 3BD point (unconditional), BL isolines, B isoline_present; then
+        // Wireframe section (mirrors the reader; layout bit-verified against an
+        // AC1015 v1-SAT sample): B wireframe_data_present; if set: B
+        // point_present, 3BD point, BL isolines, B isoline_present; then
         // BL num_wires, wires..., BL num_silhouettes, sils....
         let wireframe_present = has_data;
         self.writer.write_bit(wireframe_present);
@@ -3667,6 +3668,7 @@ impl<'a> DwgObjectWriter<'a> {
                     .and_then(|w| w.points.first().copied())
                     .unwrap_or(Vector3::ZERO)
             };
+            self.writer.write_bit(true); // point_present
             self.writer.write_3bit_double(anchor);
             let iso = if acis.wireframe_isolines > 0 {
                 acis.wireframe_isolines

@@ -2672,13 +2672,11 @@ impl DwgDocumentBuilder {
                     e.acis_data.is_binary = data.is_binary;
                     e.acis_data.revision = data.revision;
                     e.acis_data.wireframe_isolines = data.isolines;
-                    // A 3D solid has no insertion point of its own; the file's
-                    // point field is usually zero. Prefer the ACIS placement
-                    // origin so the reference reflects where the body sits.
+                    // The wireframe anchor AutoCAD bakes in (point_present +
+                    // 3BD) is the body's bounding-box centre — the natural
+                    // reference point. Empty/degenerate bodies (no anchor) fall
+                    // back to the geometry centre, then the SAT placement.
                     e.point_of_reference = if data.point != crate::types::Vector3::ZERO {
-                        // The wireframe anchor AutoCAD bakes into the file is
-                        // the body's bounding-box centre - the natural
-                        // reference point.
                         data.point
                     } else {
                         e.acis_data
@@ -2718,10 +2716,11 @@ impl DwgDocumentBuilder {
                     e.acis_data.is_binary = data.is_binary;
                     e.acis_data.revision = data.revision;
                     e.acis_data.wireframe_isolines = data.isolines;
+                    // The wireframe anchor AutoCAD bakes in (point_present +
+                    // 3BD) is the body's bounding-box centre — the natural
+                    // reference point. Empty/degenerate bodies (no anchor) fall
+                    // back to the geometry centre, then the SAT placement.
                     e.point_of_reference = if data.point != crate::types::Vector3::ZERO {
-                        // The wireframe anchor AutoCAD bakes into the file is
-                        // the body's bounding-box centre - the natural
-                        // reference point.
                         data.point
                     } else {
                         e.acis_data
@@ -2758,10 +2757,11 @@ impl DwgDocumentBuilder {
                     e.acis_data.is_binary = data.is_binary;
                     e.acis_data.revision = data.revision;
                     e.acis_data.wireframe_isolines = data.isolines;
+                    // The wireframe anchor AutoCAD bakes in (point_present +
+                    // 3BD) is the body's bounding-box centre — the natural
+                    // reference point. Empty/degenerate bodies (no anchor) fall
+                    // back to the geometry centre, then the SAT placement.
                     e.point_of_reference = if data.point != crate::types::Vector3::ZERO {
-                        // The wireframe anchor AutoCAD bakes into the file is
-                        // the body's bounding-box centre - the natural
-                        // reference point.
                         data.point
                     } else {
                         e.acis_data

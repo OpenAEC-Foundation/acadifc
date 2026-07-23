@@ -639,7 +639,10 @@ impl Default for HeaderVariables {
             sort_entities: 127,
             index_control: 0,
             hide_text: 1,
-            xclip_frame: 0,
+            // AutoCAD's default: clip frames display (not plotted). Older
+            // headers (R2000) don't carry the variable at all, so the default
+            // must match what AutoCAD shows for them.
+            xclip_frame: 2,
             halo_gap: 0,
             obscured_color: 257,
             obscured_linetype: 0,
