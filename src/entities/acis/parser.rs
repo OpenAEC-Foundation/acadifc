@@ -24,18 +24,32 @@ impl SatParser {
         let header_line = lines.next_line().ok_or(SatParseError::EmptyInput)?;
         let header = Self::parse_header_line(header_line)?;
 
-        // Parse product info (line 2)
-        let product_line = lines
-            .next_line()
-            .ok_or(SatParseError::InvalidProductInfo("missing".to_string()))?;
-        let (product_id, product_version, date) =
-            Self::parse_product_line(product_line, &header.version)?;
-
-        // Parse tolerances (line 3)
-        let tol_line = lines
-            .next_line()
-            .ok_or(SatParseError::InvalidTolerances("missing".to_string()))?;
-        let (spatial_res, normal_tol, resfit_tol) = Self::parse_tolerance_line(tol_line)?;
+        // The product-id and tolerance header lines only exist from ACIS 2.0
+        // on. Pre-2.0 SAT (e.g. AutoCAD R14's ACIS 1.6, version 106) writes
+        // the version line then jumps straight to the records — consuming two
+        // phantom header lines there ate the `body` and `lump` records, so
+        // every pointer resolved two records off and the solid never meshed.
+        // A record line always carries `$` pointers; the header lines never
+        // do, so peek: `$` in the next line means the extras are absent.
+        let has_header_extras = lines
+            .peek_line()
+            .map(|l| !l.contains('$'))
+            .unwrap_or(false);
+        let (product_id, product_version, date, spatial_res, normal_tol, resfit_tol) =
+            if has_header_extras {
+                let product_line = lines
+                    .next_line()
+                    .ok_or(SatParseError::InvalidProductInfo("missing".to_string()))?;
+                let (pid, pver, date) =
+                    Self::parse_product_line(product_line, &header.version)?;
+                let tol_line = lines
+                    .next_line()
+                    .ok_or(SatParseError::InvalidTolerances("missing".to_string()))?;
+                let (sr, nt, rt) = Self::parse_tolerance_line(tol_line)?;
+                (pid, pver, date, sr, nt, rt)
+            } else {
+                (String::new(), String::new(), String::new(), 1e-6, 1e-10, None)
+            };
 
         let sat_header = SatHeader {
             version: header.version,
@@ -360,6 +374,16 @@ struct SatLines<'a> {
 impl<'a> SatLines<'a> {
     fn new(text: &'a str) -> Self {
         Self { text, pos: 0 }
+    }
+
+    /// Peek the next line without consuming it.
+    fn peek_line(&self) -> Option<&'a str> {
+        if self.pos >= self.text.len() {
+            return None;
+        }
+        let remaining = &self.text[self.pos..];
+        let end = remaining.find('\n').unwrap_or(remaining.len());
+        Some(remaining[..end].trim_end_matches('\r'))
     }
 
     /// Read the next line (up to the next newline).

@@ -410,6 +410,24 @@ impl SatRecord {
             _ => None,
         })
     }
+
+    /// Read an edge/coedge sense from token `index`, accepting both the
+    /// keyword form (`forward` / `reversed`, ACIS 4.0+) and the numeric form
+    /// pre-4.0 SAT uses (`0` = forward, `1` = reversed) — the latter tokenizes
+    /// as an Integer, so `token_string` misses it and every coedge defaults to
+    /// forward, collapsing reversed-coedge loops to a duplicate vertex.
+    pub fn token_sense(&self, index: usize) -> Sense {
+        match self.tokens.get(index) {
+            Some(SatToken::Integer(n)) => {
+                if *n != 0 {
+                    Sense::Reversed
+                } else {
+                    Sense::Forward
+                }
+            }
+            _ => self.token_string(index).map(Sense::from_str).unwrap_or_default(),
+        }
+    }
 }
 
 impl fmt::Display for SatRecord {
@@ -440,7 +458,9 @@ impl Sense {
     /// Parse from SAT token.
     pub fn from_str(s: &str) -> Self {
         match s {
-            "reversed" | "REVERSED" => Self::Reversed,
+            // Keyword form (ACIS 4.0+) and the numeric form pre-4.0 SAT uses
+            // (0 = forward, 1 = reversed).
+            "reversed" | "REVERSED" | "1" => Self::Reversed,
             _ => Self::Forward,
         }
     }
@@ -759,10 +779,7 @@ impl<'a> SatCoedge<'a> {
 
     /// Sense of this coedge relative to the edge.
     pub fn sense(&self) -> Sense {
-        self.record
-            .token_string(5)
-            .map(Sense::from_str)
-            .unwrap_or_default()
+        self.record.token_sense(5)
     }
 
     /// Pointer to the owner loop.
@@ -821,10 +838,7 @@ impl<'a> SatEdge<'a> {
 
     /// Edge sense.
     pub fn sense(&self) -> Sense {
-        self.record
-            .token_string(7)
-            .map(Sense::from_str)
-            .unwrap_or_default()
+        self.record.token_sense(7)
     }
 }
 
