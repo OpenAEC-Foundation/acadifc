@@ -3774,6 +3774,35 @@ pub fn read_acis_entity(
             }
             sat_data = String::from_utf8_lossy(&decoded).to_string();
             sat_data = crate::entities::solid3d::AcisData::strip_sat_terminator(&sat_data);
+        } else if !version.r2007_plus() {
+            // SAB binary, R2004–R2006: the bytes flow with NO length prefix
+            // ("ACIS BinaryFile…" starts right after the version BS —
+            // bit-verified on an AC1018 save). The payload is self-delimiting
+            // (End-of-ACIS-data record), so parse once to measure it and keep
+            // exactly that many bytes. What follows is NOT the documented
+            // wireframe layout (unknown trailing block); parsing it produced
+            // garbage anchors/ISOLINES, so return early like the AcDs path —
+            // the geometry centre fallback supplies the reference point.
+            is_binary = true;
+            let avail = reader.remaining_bytes();
+            let probe = reader.read_bytes(avail);
+            match crate::entities::acis::SabReader::read_with_consumed(&probe) {
+                Ok((_, used)) => sab_data = probe[..used.min(probe.len())].to_vec(),
+                Err(_) => sab_data = probe,
+            }
+            return AcisEntityData {
+                acis_empty,
+                sat_data,
+                sab_data,
+                is_binary,
+                version: acis_version,
+                point: crate::types::Vector3::ZERO,
+                has_history: false,
+                isolines: 0,
+                wires: Vec::new(),
+                silhouettes: Vec::new(),
+                revision: AcisRevision::default(),
+            };
         } else {
             // SAB binary (version=2, R2007+):
             //

@@ -493,6 +493,14 @@ pub struct SabReader;
 impl SabReader {
     /// Parse SAB binary data into a SAT document.
     pub fn read(data: &[u8]) -> Result<SatDocument, SabError> {
+        Self::read_with_consumed(data).map(|(doc, _)| doc)
+    }
+
+    /// Like [`read`](Self::read), also returning how many input bytes the
+    /// payload occupied (through the End-of-ACIS-data record). R2004–R2006
+    /// DWGs embed the SAB with no length prefix, so the caller measures the
+    /// blob by parsing it.
+    pub fn read_with_consumed(data: &[u8]) -> Result<(SatDocument, usize), SabError> {
         // Two header magics: classic ACIS ("ACIS BinaryFile", 15 bytes) and the
         // newer Autodesk ShapeManager ("ASM BinaryFile", 14 bytes) emitted by
         // AutoCAD 2013+ and carried in the AcDs data store. In both the version
@@ -556,8 +564,10 @@ impl SabReader {
             if tag == tags::ENTITY_TYPE || tag == tags::SUBTYPE {
                 let (record, new_pos) = Self::read_record(data, pos, record_index)?;
 
-                // Check for End-of-ACIS-data marker
+                // Check for End-of-ACIS-data marker — consume it so the
+                // reported length covers the full payload.
                 if record.entity_type == "End-of-ACIS-data" {
+                    pos = new_pos;
                     break;
                 }
 
@@ -594,10 +604,13 @@ impl SabReader {
             convert_sab_booleans(&record.entity_type, &mut record.tokens);
         }
 
-        Ok(SatDocument {
-            header,
-            records,
-        })
+        Ok((
+            SatDocument {
+                header,
+                records,
+            },
+            pos,
+        ))
     }
 
     fn read_record(

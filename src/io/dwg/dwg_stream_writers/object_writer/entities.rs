@@ -3590,17 +3590,19 @@ impl<'a> DwgObjectWriter<'a> {
 
             if acis.is_binary && !acis.sab_data.is_empty() {
                 // SAB binary (version 2) — write raw bytes directly.
-                // The reader computes byte count from handle_start and
-                // returns early without reading wireframe/trailing fields.
                 self.writer.write_bit_short(2_i16);
                 self.writer.write_bytes(&acis.sab_data);
-                // Trailing bits between SAB end and merged-stream flag.
-                self.writer.write_bit(false); // wireframe_present = false
                 if self.version.r2007_plus() {
+                    // R2007+: the reader computes the byte count from
+                    // handle_start and returns early, so emit the trailing
+                    // bits here and skip the shared wireframe path.
+                    self.writer.write_bit(false); // wireframe_present = false
                     self.writer.write_bit_long(0); // unknown_2007 = 0
+                    return true; // caller skips acis_empty_bit + unknown_2007
                 }
-                return true; // caller skips acis_empty_bit + unknown_2007
-            }
+                // R2004–R2006: the payload is self-delimiting; the wireframe
+                // section and trailing fields follow inline like SAT.
+            } else {
 
             // SAT text (version 1).
             self.writer.write_bit_short(1_i16);
@@ -3642,6 +3644,7 @@ impl<'a> DwgObjectWriter<'a> {
             self.writer.write_bit_long(encrypted.len() as i32);
             self.writer.write_bytes(&encrypted);
             self.writer.write_bit_long(0); // terminating empty block
+            }
         }
 
         // â”€â”€ COMMON_3DSOLID: Wireframe data (always present) â”€â”€â”€â”€â”€â”€â”€â”€â”€
