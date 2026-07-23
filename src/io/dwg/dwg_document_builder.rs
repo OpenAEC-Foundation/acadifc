@@ -2899,8 +2899,19 @@ impl DwgDocumentBuilder {
                             let _ = document.add_entity(EntityType::ViewBorder(e));
                         }
                         _ => {
-                            let mut e =
-                                UnknownEntity::new(format!("DWG_TYPE_{}", type_code));
+                            // Keep the class's real DXF name (e.g. an AEC
+                            // object's "AEC_WALL") so the entity reports its
+                            // actual type instead of a numeric placeholder;
+                            // fall back to DWG_TYPE_<code> for an unresolved
+                            // class.
+                            let name = document
+                                .classes
+                                .iter()
+                                .find(|c| c.class_number == type_code)
+                                .map(|c| c.dxf_name.clone())
+                                .filter(|n| !n.is_empty())
+                                .unwrap_or_else(|| format!("DWG_TYPE_{}", type_code));
+                            let mut e = UnknownEntity::new(name);
                             e.common = entity_common;
                             e.dwg_type_code = type_code;
                             e.dwg_handle_bits = reader.get_handle_bits();
