@@ -948,15 +948,13 @@ pub(crate) fn transform_polyface_mesh(e: &mut PolyfaceMesh, transform: &Transfor
 // ── Wipeout ──────────────────────────────────────────────────────────────────
 
 pub(crate) fn transform_wipeout(e: &mut Wipeout, transform: &Transform) {
+    // `u_vector` / `v_vector` carry both the image direction AND its size, so
+    // the linear part of the transform (rotation + scale, via `apply_rotation`)
+    // already scales them. Multiplying again by the scale factor double-scaled
+    // the mask (a 2× insert grew the wipeout 4×).
     e.insertion_point = transform.apply(e.insertion_point);
     e.u_vector = transform.apply_rotation(e.u_vector);
     e.v_vector = transform.apply_rotation(e.v_vector);
-
-    let unit_x = Vector3::new(1.0, 0.0, 0.0);
-    let transformed_unit = transform.apply_rotation(unit_x);
-    let scale_factor = transformed_unit.length();
-    e.u_vector = e.u_vector * scale_factor;
-    e.v_vector = e.v_vector * scale_factor;
 }
 
 // ── Shape ────────────────────────────────────────────────────────────────────
