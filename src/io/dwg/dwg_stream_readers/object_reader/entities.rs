@@ -3275,32 +3275,42 @@ pub fn read_multileader(
         }
     }
 
-    // num_blocklabels (BL) + block labels, then text-direction / alignment /
-    // attachment-point / scale — written for ALL versions (NOT R2010+-gated;
-    // matches AutoCAD / AcadSharp). Gating these at R2010+ dropped them from
-    // the R2018 record and AutoCAD discarded the entity.
-    let ba_count = safe_count(reader.read_bit_long());
-    let mut block_attributes = Vec::with_capacity(ba_count as usize);
-    for _ in 0..ba_count {
-        let def_handle = reader.read_handle();
-        let text = reader.read_variable_text();
-        let index = reader.read_bit_short();
-        let width = reader.read_bit_double();
-        block_attributes.push(BlockAttribute {
-            attribute_definition_handle: if def_handle != 0 {
-                Some(Handle::from(def_handle))
-            } else {
-                None
-            },
-            text,
-            index,
-            width,
-        });
+    // R2010+: num_blocklabels (BL) + block labels, then text-direction /
+    // alignment / attachment-point / scale. Bit-verified against the same
+    // drawing saved as AC1021 and AC1032: the R2007 record ends at the
+    // annotation-scale bit — reading this block there consumed string-stream
+    // bits and produced a garbage "direction negative" flag (every leader
+    // rendered upside-down) and a garbage scale. (R2018 writers DO emit it;
+    // omitting it there makes AutoCAD discard the entity.)
+    let mut block_attributes = Vec::new();
+    let mut text_direction_negative = false;
+    let mut text_align_in_ipe: i16 = 0;
+    let mut text_attachment_point: i16 = 2;
+    let mut scale_factor = 1.0f64;
+    if version.r2010_plus() {
+        let ba_count = safe_count(reader.read_bit_long());
+        block_attributes.reserve(ba_count as usize);
+        for _ in 0..ba_count {
+            let def_handle = reader.read_handle();
+            let text = reader.read_variable_text();
+            let index = reader.read_bit_short();
+            let width = reader.read_bit_double();
+            block_attributes.push(BlockAttribute {
+                attribute_definition_handle: if def_handle != 0 {
+                    Some(Handle::from(def_handle))
+                } else {
+                    None
+                },
+                text,
+                index,
+                width,
+            });
+        }
+        text_direction_negative = reader.read_bit();
+        text_align_in_ipe = reader.read_bit_short();
+        text_attachment_point = reader.read_bit_short();
+        scale_factor = reader.read_bit_double();
     }
-    let text_direction_negative = reader.read_bit();
-    let text_align_in_ipe = reader.read_bit_short();
-    let text_attachment_point = reader.read_bit_short();
-    let scale_factor = reader.read_bit_double();
 
     let mut text_attachment_direction: i16 = 0;
     let mut text_bottom_attachment: i16 = 9; // CenterOfText — matches MultiLeader::new() default

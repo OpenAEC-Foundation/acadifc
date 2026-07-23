@@ -2857,30 +2857,34 @@ impl<'a> DwgObjectWriter<'a> {
             self.writer.write_bit_long(0);
         }
 
-        // num_blocklabels (BL) + the block labels — written for ALL versions.
-        self.writer.write_bit_long(e.block_attributes.len() as i32);
-        for ba in &e.block_attributes {
-            // 330 Block Attribute definition handle (hard pointer)
-            let def = ba.attribute_definition_handle.unwrap_or(Handle::NULL);
-            self.writer.write_handle(DwgReferenceType::HardPointer, def.value());
-            // 302 Block Attribute Text String
-            self.writer.write_variable_text(&ba.text);
-            // 177 Block Attribute Index
-            self.writer.write_bit_short(ba.index);
-            // 44 Block Attribute Width
-            self.writer.write_bit_double(ba.width);
-        }
+        // R2010+: num_blocklabels (BL) + block labels, then text-direction /
+        // alignment / attachment-point / scale. The R2007 record ends at the
+        // annotation-scale bit (bit-verified against AC1021/AC1032 saves of
+        // the same drawing); R2018 REQUIRES the block — omitting it there
+        // overran the record and AutoCAD discarded the entity.
+        if self.version.r2010_plus() {
+            self.writer.write_bit_long(e.block_attributes.len() as i32);
+            for ba in &e.block_attributes {
+                // 330 Block Attribute definition handle (hard pointer)
+                let def = ba.attribute_definition_handle.unwrap_or(Handle::NULL);
+                self.writer.write_handle(DwgReferenceType::HardPointer, def.value());
+                // 302 Block Attribute Text String
+                self.writer.write_variable_text(&ba.text);
+                // 177 Block Attribute Index
+                self.writer.write_bit_short(ba.index);
+                // 44 Block Attribute Width
+                self.writer.write_bit_double(ba.width);
+            }
 
-        // Written for ALL versions (NOT R2010+-gated — that omission overran
-        // the R2018 record and AutoCAD discarded it).
-        // 294 Text Direction Negative (B)
-        self.writer.write_bit(e.text_direction_negative);
-        // 178 Text Align in IPE (BS)
-        self.writer.write_bit_short(e.text_align_in_ipe);
-        // 179 Text Attachment Point (BS)
-        self.writer.write_bit_short(e.text_attachment_point as i16);
-        // 45 ScaleFactor (BD)
-        self.writer.write_bit_double(e.scale_factor);
+            // 294 Text Direction Negative (B)
+            self.writer.write_bit(e.text_direction_negative);
+            // 178 Text Align in IPE (BS)
+            self.writer.write_bit_short(e.text_align_in_ipe);
+            // 179 Text Attachment Point (BS)
+            self.writer.write_bit_short(e.text_attachment_point as i16);
+            // 45 ScaleFactor (BD)
+            self.writer.write_bit_double(e.scale_factor);
+        }
 
         // R2010+: attachment directions — order is dir(271), bottom(272),
         // top(273) per AutoCAD (AcadSharp), NOT the dir/top/bottom of the
