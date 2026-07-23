@@ -821,6 +821,15 @@ impl<R: Read + Seek> DwgReader<R> {
             document.summary_info = parse_summary_info(&buf, utf16);
         }
 
+        // R2000/R2004 down-saved gradient hatches store their gradient in the
+        // ACAD round-trip mechanism, not the object stream (the DWG gradient
+        // block is R2004+): the two colours in EED (GradientColor1ACI /
+        // GradientColor2ACI) and the gradient type in an ACAD_XREC_ROUNDTRIP
+        // XRecord under the hatch's extension dictionary. Reconstruct the
+        // gradient so it renders as AutoCAD/ODA show it instead of a flat
+        // solid fill.
+        recover_roundtrip_gradients(&mut document);
+
         // Transfer reader notifications to the document so callers can
         // inspect them via `document.notifications`.
         document.notifications.extend(std::mem::take(&mut self.notifications));
@@ -2132,5 +2141,100 @@ mod section_name_tests {
     #[test]
     fn empty_when_first_byte_null() {
         assert_eq!(section_name_from_field(&[0u8; 64]), "");
+    }
+}
+
+
+/// Reconstruct a gradient hatch that was down-saved (R2000/R2004) as a solid
+/// fill plus round-trip metadata: the two colours live in EED
+/// (`GradientColor1ACI` / `GradientColor2ACI`) and the gradient type name in an
+/// `ACAD_XREC_ROUNDTRIP` XRecord under the hatch's extension dictionary. When a
+/// solid hatch carries this metadata but no live gradient block, rebuild
+/// `gradient_color` so it renders as the intended gradient.
+fn recover_roundtrip_gradients(document: &mut crate::document::CadDocument) {
+    use crate::entities::EntityType;
+    use crate::objects::ObjectType;
+    use crate::types::{Color, Handle};
+
+    const GRADIENT_NAMES: &[&str] = &[
+        "SPHERICAL",
+        "HEMISPHERICAL",
+        "CURVED",
+        "CYLINDER",
+        "INVSPHERICAL",
+        "INVHEMISPHERICAL",
+        "INVCURVED",
+        "INVCYLINDER",
+        "LINEAR",
+    ];
+
+    // Phase 1 — collect (immutable): which hatches need a gradient, and what.
+    let mut recovered: Vec<(Handle, u8, u8, String)> = Vec::new();
+    for e in document.entities() {
+        let EntityType::Hatch(h) = e else { continue };
+        if h.gradient_color.enabled || !h.is_solid {
+            continue;
+        }
+        let eed = &h.common.extended_data;
+        let aci = |app: &str| -> Option<u8> {
+            eed.get_record(app).and_then(|r| {
+                r.values.iter().find_map(|v| match v {
+                    crate::xdata::XDataValue::Integer16(n) => Some(*n as u8),
+                    _ => None,
+                })
+            })
+        };
+        let (Some(c1), Some(c2)) = (aci("GradientColor1ACI"), aci("GradientColor2ACI")) else {
+            continue;
+        };
+
+        // Gradient type: the trailing name string in the ACAD_XREC_ROUNDTRIP
+        // XRecord (hatch xdict → "ACAD_XREC_ROUNDTRIP" → XRecord raw_data).
+        let mut name = String::new();
+        if let Some(xd) = h.common.xdictionary_handle {
+            if let Some(ObjectType::Dictionary(d)) = document.objects.get(&xd) {
+                if let Some((_, xrec_h)) =
+                    d.entries.iter().find(|(k, _)| k == "ACAD_XREC_ROUNDTRIP")
+                {
+                    if let Some(ObjectType::XRecord(xr)) = document.objects.get(xrec_h) {
+                        let ascii: String = xr
+                            .raw_data
+                            .iter()
+                            .map(|&b| if (32..127).contains(&b) { b as char } else { ' ' })
+                            .collect();
+                        let up = ascii.to_ascii_uppercase();
+                        for cand in GRADIENT_NAMES {
+                            if up.contains(cand) {
+                                name = (*cand).to_string();
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if name.is_empty() {
+            name = "LINEAR".to_string();
+        }
+        recovered.push((e.common().handle, c1, c2, name));
+    }
+
+    // Phase 2 — apply (mutable).
+    for (handle, c1, c2, name) in recovered {
+        if let Some(EntityType::Hatch(h)) = document.get_entity_mut(handle) {
+            h.gradient_color.enabled = true;
+            h.gradient_color.is_single_color = c1 == c2;
+            h.gradient_color.colors = vec![
+                crate::entities::hatch::GradientColorEntry {
+                    value: 0.0,
+                    color: Color::from_index(c1 as i16),
+                },
+                crate::entities::hatch::GradientColorEntry {
+                    value: 1.0,
+                    color: Color::from_index(c2 as i16),
+                },
+            ];
+            h.gradient_color.name = name;
+        }
     }
 }
