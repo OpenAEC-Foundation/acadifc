@@ -821,14 +821,28 @@ impl<R: Read + Seek> DwgReader<R> {
             document.summary_info = parse_summary_info(&buf, utf16);
         }
 
-        // R2000/R2004 down-saved gradient hatches store their gradient in the
+        // R2000/R14 down-saved gradient hatches store their gradient in the
         // ACAD round-trip mechanism, not the object stream (the DWG gradient
         // block is R2004+): the two colours in EED (GradientColor1ACI /
         // GradientColor2ACI) and the gradient type in an ACAD_XREC_ROUNDTRIP
         // XRecord under the hatch's extension dictionary. Reconstruct the
         // gradient so it renders as AutoCAD/ODA show it instead of a flat
         // solid fill.
-        recover_roundtrip_gradients(&mut document);
+        //
+        // Gate strictly to pre-R2004: a native R2004+ file carries the real
+        // gradient in its hatch object (read_hatch reads `is_gradient` and the
+        // colours directly), so that flag is authoritative. Such hatches often
+        // ALSO keep stale GradientColor1/2ACI round-trip EED from an earlier
+        // edit; recovering from it would resurrect a gradient the drawing has
+        // since turned off (native `is_gradient` = 0), painting a solid-fill
+        // hatch as a spurious gradient. Only R2000/R14, whose object stream has
+        // no gradient block, need the round-trip fallback.
+        let pre_r2004 = crate::io::dwg::dwg_version::DwgVersion::from_dxf_version(dxf_version)
+            .map(|v| !v.r2004_plus())
+            .unwrap_or(false);
+        if pre_r2004 {
+            recover_roundtrip_gradients(&mut document);
+        }
 
         // Transfer reader notifications to the document so callers can
         // inspect them via `document.notifications`.
