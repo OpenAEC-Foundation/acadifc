@@ -2210,9 +2210,19 @@ pub(crate) fn recover_roundtrip_gradients(document: &mut crate::document::CadDoc
             continue;
         };
 
-        // Gradient type: the trailing name string in the ACAD_XREC_ROUNDTRIP
-        // XRecord (hatch xdict → "ACAD_XREC_ROUNDTRIP" → XRecord raw_data).
+        // A live down-saved gradient always carries an ACAD_XREC_ROUNDTRIP
+        // XRecord (under the hatch's extension dictionary) alongside the
+        // GradientColor*ACI EED. When only the EED survives — no extension
+        // dictionary, or one without that XRecord — the colours are stale
+        // metadata left behind by an edit that turned a gradient into a plain
+        // solid fill (or recoloured it). Resurrecting a gradient then paints a
+        // genuine single-colour solid hatch as a two-colour gradient, so treat
+        // the missing round-trip XRecord as proof the hatch is really solid.
+        //
+        // Gradient type: the trailing name string in that same XRecord
+        // (hatch xdict → "ACAD_XREC_ROUNDTRIP" → XRecord raw_data).
         let mut name = String::new();
+        let mut has_roundtrip = false;
         if let Some(xd) = h.common.xdictionary_handle {
             if let Some(ObjectType::Dictionary(d)) = document.objects.get(&xd) {
                 // R14 mis-sizes dictionary key strings, leaving trailing
@@ -2221,6 +2231,7 @@ pub(crate) fn recover_roundtrip_gradients(document: &mut crate::document::CadDoc
                 if let Some((_, xrec_h)) = d.entries.iter().find(|(k, _)| {
                     k.len() >= 19 && k[..19].eq_ignore_ascii_case("ACAD_XREC_ROUNDTRIP")
                 }) {
+                    has_roundtrip = true;
                     if let Some(ObjectType::XRecord(xr)) = document.objects.get(xrec_h) {
                         let ascii: String = xr
                             .raw_data
@@ -2263,6 +2274,10 @@ pub(crate) fn recover_roundtrip_gradients(document: &mut crate::document::CadDoc
                     }
                 }
             }
+        }
+        // No round-trip XRecord ⇒ the gradient EED is stale; keep it solid.
+        if !has_roundtrip {
+            continue;
         }
         if name.is_empty() {
             name = "LINEAR".to_string();
