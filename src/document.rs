@@ -19,12 +19,53 @@
 
 use crate::classes::DxfClassCollection;
 use crate::entities::{EntityCommon, EntityType};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use crate::objects::ObjectType;
 use crate::tables::*;
 use crate::types::{DxfVersion, Color, Handle, Vector2, Vector3};
 use crate::Result;
 use std::collections::HashMap;
+
+#[derive(Default)]
+struct EntityChangeRecorderInner {
+    before: HashMap<Handle, Option<Arc<EntityType>>>,
+    order: Vec<Handle>,
+}
+
+/// First-touch entity recorder used by document transactions.
+///
+/// It lives outside `CadDocument`, so serialization/equality and ordinary
+/// document clones remain pure drawing data. The active recorder is associated
+/// with a document address only for the synchronous mutation scope.
+#[derive(Default)]
+pub struct EntityChangeRecorder {
+    inner: Mutex<EntityChangeRecorderInner>,
+}
+
+impl EntityChangeRecorder {
+    fn record(&self, handle: Handle, before: Option<Arc<EntityType>>) {
+        let mut inner = self.inner.lock().unwrap_or_else(|err| err.into_inner());
+        if !inner.before.contains_key(&handle) {
+            inner.order.push(handle);
+            inner.before.insert(handle, before);
+        }
+    }
+
+    pub fn take_before_images(&self) -> Vec<(Handle, Option<Arc<EntityType>>)> {
+        let mut inner = self.inner.lock().unwrap_or_else(|err| err.into_inner());
+        let order = std::mem::take(&mut inner.order);
+        order
+            .into_iter()
+            .map(|handle| (handle, inner.before.remove(&handle).flatten()))
+            .collect()
+    }
+}
+
+thread_local! {
+    static ENTITY_CHANGE_RECORDERS:
+        std::cell::RefCell<HashMap<usize, Arc<EntityChangeRecorder>>> =
+        std::cell::RefCell::new(HashMap::new());
+}
 
 /// DWG header variables containing drawing settings
 #[derive(Debug, Clone, PartialEq)]
@@ -1116,6 +1157,115 @@ pub struct CadDocument {
 }
 
 impl CadDocument {
+    fn active_entity_change_recorder(&self) -> Option<Arc<EntityChangeRecorder>> {
+        let key = self as *const Self as usize;
+        ENTITY_CHANGE_RECORDERS.with(|recorders| recorders.borrow().get(&key).cloned())
+    }
+
+    fn record_entity_before(&self, handle: Handle, before: Option<Arc<EntityType>>) {
+        if let Some(recorder) = self.active_entity_change_recorder() {
+            recorder.record(handle, before);
+        }
+    }
+
+    /// Begin automatic first-touch recording for entity mutations performed
+    /// through this document's public mutation APIs.
+    pub fn begin_entity_change_recording(&mut self) -> Arc<EntityChangeRecorder> {
+        let key = self as *const Self as usize;
+        let recorder = Arc::new(EntityChangeRecorder::default());
+        ENTITY_CHANGE_RECORDERS.with(|recorders| {
+            recorders.borrow_mut().insert(key, Arc::clone(&recorder));
+        });
+        recorder
+    }
+
+    /// End automatic entity recording for this document.
+    pub fn end_entity_change_recording(&mut self) {
+        let key = self as *const Self as usize;
+        ENTITY_CHANGE_RECORDERS.with(|recorders| {
+            recorders.borrow_mut().remove(&key);
+        });
+    }
+
+    /// Record every currently stored entity without detaching any `Arc`.
+    /// Needed before a whole-document replacement such as CLEAR.
+    pub fn record_all_entities_for_transaction(&self) {
+        if let Some(recorder) = self.active_entity_change_recorder() {
+            for entity in &self.entities {
+                recorder.record(entity.common().handle, Some(Arc::clone(entity)));
+            }
+        }
+    }
+
+    /// Remove entity-add bookkeeping from a structure snapshot.
+    ///
+    /// `add_entity` appends the new handle to an existing block record and
+    /// advances HANDSEED. Entity undo deliberately leaves that membership
+    /// dangling while the entity is absent, so redo can restore the flat store
+    /// without re-linking. Align those intrinsic add-side fields to the after
+    /// structure; unrelated block reorders/record creation remain undoable.
+    pub fn align_added_entity_structure(before: &mut Self, after: &Self, added_handles: &[Handle]) {
+        if added_handles.is_empty() {
+            return;
+        }
+        let added: std::collections::HashSet<Handle> = added_handles.iter().copied().collect();
+        before.next_handle = after.next_handle;
+        before.header.handle_seed = after.header.handle_seed;
+        for before_record in before.block_records.iter_mut() {
+            let Some(after_record) = after
+                .block_records
+                .iter()
+                .find(|record| record.handle == before_record.handle)
+            else {
+                continue;
+            };
+            let before_without_added: Vec<Handle> = before_record
+                .entity_handles
+                .iter()
+                .copied()
+                .filter(|handle| !added.contains(handle))
+                .collect();
+            let after_without_added: Vec<Handle> = after_record
+                .entity_handles
+                .iter()
+                .copied()
+                .filter(|handle| !added.contains(handle))
+                .collect();
+            if before_without_added == after_without_added {
+                before_record.entity_handles = after_record.entity_handles.clone();
+            }
+        }
+    }
+
+    /// Clone every document component except the flat entity store/index.
+    ///
+    /// This is the structural half of a transaction snapshot: layers, tables,
+    /// block records, objects, header variables and handle allocation state are
+    /// preserved without walking or incrementing every entity `Arc`.
+    pub fn snapshot_structure(&mut self) -> Self {
+        let entities = std::mem::take(&mut self.entities);
+        let entity_index = std::mem::take(&mut self.entity_index);
+        let snapshot = self.clone();
+        self.entities = entities;
+        self.entity_index = entity_index;
+        snapshot
+    }
+
+    /// Swap a structure-only snapshot into the document while keeping the live
+    /// flat entity store/index. Returns the displaced structure as another
+    /// structure-only snapshot, so undo/redo can move the same allocation back
+    /// and forth without cloning it on every step.
+    pub fn swap_structure(&mut self, mut snapshot: Self) -> Self {
+        debug_assert!(snapshot.entities.is_empty());
+        debug_assert!(snapshot.entity_index.is_empty());
+        let entities = std::mem::take(&mut self.entities);
+        let entity_index = std::mem::take(&mut self.entity_index);
+        std::mem::swap(self, &mut snapshot);
+        self.entities = entities;
+        self.entity_index = entity_index;
+        snapshot
+    }
+
     /// Create a new empty CAD document
     pub fn new() -> Self {
         let mut doc = CadDocument {
@@ -1619,6 +1769,7 @@ impl CadDocument {
             }
             h
         };
+        self.record_entity_before(handle, None);
 
         // Default an unowned entity to model space — or paper space when it
         // carries the paper-space flag (R12 code 67 → entity_mode 1). Without
@@ -1678,12 +1829,62 @@ impl CadDocument {
             .map(|&idx| self.entities[idx].as_ref())
     }
 
+    /// Get a shared entity image without cloning its geometry.
+    ///
+    /// History/transaction users can retain this `Arc` as a before/after image.
+    /// A later [`get_entity_mut`](Self::get_entity_mut) call copy-on-writes only
+    /// that entity, leaving the retained image unchanged.
+    pub fn get_entity_arc(&self, handle: Handle) -> Option<Arc<EntityType>> {
+        let idx = *self.entity_index.get(&handle)?;
+        Some(Arc::clone(&self.entities[idx]))
+    }
+
     /// Get a mutable entity by handle. Copies just this entity out of any shared
     /// Arc (`Arc::make_mut`), so an undo snapshot that shares it keeps the old
     /// value while the live doc gets a private, mutable copy.
     pub fn get_entity_mut(&mut self, handle: Handle) -> Option<&mut EntityType> {
         let idx = *self.entity_index.get(&handle)?;
+        self.record_entity_before(handle, Some(Arc::clone(&self.entities[idx])));
         Some(Arc::make_mut(&mut self.entities[idx]))
+    }
+
+    /// Replace an existing entity with a shared image, preserving its storage
+    /// slot and block-record membership.
+    pub fn replace_entity_arc(
+        &mut self,
+        handle: Handle,
+        entity: Arc<EntityType>,
+    ) -> Option<Arc<EntityType>> {
+        if entity.common().handle != handle {
+            return None;
+        }
+        let idx = *self.entity_index.get(&handle)?;
+        self.record_entity_before(handle, Some(Arc::clone(&self.entities[idx])));
+        Some(std::mem::replace(&mut self.entities[idx], entity))
+    }
+
+    /// Restore an entity removed by [`remove_entity_arc`](Self::remove_entity_arc)
+    /// without adding its handle to a block record again.
+    ///
+    /// Removal deliberately leaves the original block-record membership in
+    /// place. Re-linking through `add_entity` would duplicate that handle and
+    /// would require an O(all block members) cleanup pass. This method restores
+    /// only the flat entity storage/index and therefore keeps the exact existing
+    /// owner membership.
+    pub fn restore_entity_arc(&mut self, entity: Arc<EntityType>) -> Option<Handle> {
+        let handle = entity.common().handle;
+        if handle.is_null() || self.entity_index.contains_key(&handle) {
+            return None;
+        }
+        self.record_entity_before(handle, None);
+        if handle.value() >= self.next_handle {
+            self.next_handle = handle.value() + 1;
+            self.header.handle_seed = self.next_handle;
+        }
+        let idx = self.entities.len();
+        self.entities.push(entity);
+        self.entity_index.insert(handle, idx);
+        Some(handle)
     }
 
     /// Explode an entity into simpler primitives, allocating valid handles.
@@ -1794,6 +1995,7 @@ impl CadDocument {
             }
             h
         };
+        self.record_entity_before(handle, None);
 
         // Set owner to the target block record
         if let Some(br) = self.block_records.get(block_name) {
@@ -1825,15 +2027,27 @@ impl CadDocument {
         Ok(handle)
     }
 
-    /// Remove an entity by handle
-    pub fn remove_entity(&mut self, handle: Handle) -> Option<EntityType> {
-        let idx = self.entity_index.remove(&handle)?;
+    /// Remove an entity by handle while retaining its shared allocation.
+    ///
+    /// The owner block record intentionally keeps the handle so an undo can
+    /// restore the flat entity storage with [`restore_entity_arc`](Self::restore_entity_arc)
+    /// without scanning or rewriting large block membership lists.
+    pub fn remove_entity_arc(&mut self, handle: Handle) -> Option<Arc<EntityType>> {
+        let idx = *self.entity_index.get(&handle)?;
+        self.record_entity_before(handle, Some(Arc::clone(&self.entities[idx])));
+        self.entity_index.remove(&handle);
         let entity = self.entities.swap_remove(idx);
         // If the swap moved an element, update its index
         if idx < self.entities.len() {
             let moved_handle = self.entities[idx].common().handle;
             self.entity_index.insert(moved_handle, idx);
         }
+        Some(entity)
+    }
+
+    /// Remove an entity by handle
+    pub fn remove_entity(&mut self, handle: Handle) -> Option<EntityType> {
+        let entity = self.remove_entity_arc(handle)?;
         // Hand back an owned entity: take it out of the Arc if we hold the last
         // reference (a snapshot may still share it), else clone.
         Some(Arc::try_unwrap(entity).unwrap_or_else(|a| (*a).clone()))
@@ -1910,6 +2124,7 @@ impl CadDocument {
         if let Some(br) = self.block_records.get_mut(&block_name) {
             br.entity_handles.push(overall_vp_handle);
         }
+        self.record_entity_before(overall_vp_handle, None);
         let idx = self.entities.len();
         self.entities.push(Arc::new(EntityType::Viewport(overall_vp)));
         self.entity_index.insert(overall_vp_handle, idx);
@@ -1953,6 +2168,11 @@ impl CadDocument {
     /// it is O(entities) deep only for bulk passes (save prep, handle reassign),
     /// not the single-entity edit path (which uses `get_entity_mut`).
     pub fn entities_mut(&mut self) -> impl Iterator<Item = &mut EntityType> {
+        if let Some(recorder) = self.active_entity_change_recorder() {
+            for entity in &self.entities {
+                recorder.record(entity.common().handle, Some(Arc::clone(entity)));
+            }
+        }
         self.entities.iter_mut().map(Arc::make_mut)
     }
 
