@@ -148,7 +148,7 @@ impl MText {
             rectangle_width: 10.0,
             rectangle_height: None,
             rotation: 0.0,
-            style: "STANDARD".to_string(),
+            style: "Standard".to_string(),
             attachment_point: AttachmentPoint::TopLeft,
             drawing_direction: DrawingDirection::LeftToRight,
             line_spacing_factor: 1.0,

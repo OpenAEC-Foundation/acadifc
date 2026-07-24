@@ -88,7 +88,7 @@ impl AttributeEntity {
             rotation: 0.0,
             width_factor: 1.0,
             oblique_angle: 0.0,
-            text_style: "STANDARD".to_string(),
+            text_style: "Standard".to_string(),
             text_generation_flags: 0,
             horizontal_alignment: HorizontalAlignment::Left,
             vertical_alignment: VerticalAlignment::Baseline,

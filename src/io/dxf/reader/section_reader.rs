@@ -13,12 +13,15 @@ use crate::xdata::{ExtendedData, ExtendedDataRecord, XDataValue};
 /// Build a [`Matrix4`] from 12 doubles holding a 4×3 transform in DXF
 /// column-major order (4 columns of 3 rows each). The implied bottom row is
 /// `[0, 0, 0, 1]`.
-fn matrix_from_column_major(v: &[f64]) -> Matrix4 {
+/// Build a 4×4 from 12 row-major values (a SPATIAL_FILTER transform is stored
+/// row-major, matching the DWG builder — reading it column-major transposed the
+/// clip and put the xclip region in the wrong place).
+fn matrix_from_row_major(v: &[f64]) -> Matrix4 {
     Matrix4 {
         m: [
-            [v[0], v[3], v[6], v[9]],
-            [v[1], v[4], v[7], v[10]],
-            [v[2], v[5], v[8], v[11]],
+            [v[0], v[1], v[2], v[3]],
+            [v[4], v[5], v[6], v[7]],
+            [v[8], v[9], v[10], v[11]],
             [0.0, 0.0, 0.0, 1.0],
         ],
     }
@@ -525,6 +528,9 @@ impl<'a> SectionReader<'a> {
         let mut xref_path = String::new();
         let mut layer = String::from("0");
         let mut handle = Handle::NULL;
+        // BLOCK entity code 70 = the authoritative block-type flags
+        // (1=anonymous, 2=has-attributes, 4=xref, 8=xref-overlay).
+        let mut block_flags: i16 = 0;
 
         let mut point_reader = PointReader::new();
 
@@ -571,6 +577,7 @@ impl<'a> SectionReader<'a> {
                         base_point = pt;
                     }
                 }
+                70 => { if let Some(v) = pair.as_i16() { block_flags = v; } }
                 _ => {}
             }
         }
@@ -620,6 +627,12 @@ impl<'a> SectionReader<'a> {
                         if let Some(block_record) = document.block_records.get_mut(&block_name) {
                             block_record.entity_handles = entity_handles;
                             block_record.xref_path = block.xref_path.clone();
+                            // Block-type flags come from the BLOCK entity's
+                            // code 70 (the BLOCK_RECORD's code 70 is units).
+                            block_record.flags.anonymous = (block_flags & 1) != 0;
+                            block_record.flags.has_attributes = (block_flags & 2) != 0;
+                            block_record.flags.is_xref = (block_flags & 4) != 0;
+                            block_record.flags.is_xref_overlay = (block_flags & 8) != 0;
                             if !handle.is_null() {
                                 block_record.block_entity_handle = handle;
                             }
@@ -1176,7 +1189,9 @@ impl<'a> SectionReader<'a> {
                         let obj = self.read_stub_object::<GeoData>()?;
                         document.objects.insert(obj.handle, ObjectType::GeoData(obj));
                     }
-                    "SPATIALFILTER" => {
+                    // AutoCAD emits the record name with an underscore; accept
+                    // both spellings so the INSERT xclip chain resolves.
+                    "SPATIAL_FILTER" | "SPATIALFILTER" => {
                         if let Some(obj) = self.read_spatial_filter()? {
                             document.objects.insert(obj.handle, ObjectType::SpatialFilter(obj));
                         }
@@ -1536,10 +1551,10 @@ impl<'a> SectionReader<'a> {
             }
         }
         if mat.len() >= 12 {
-            obj.inverse_block_transform = matrix_from_column_major(&mat[0..12]);
+            obj.inverse_block_transform = matrix_from_row_major(&mat[0..12]);
         }
         if mat.len() >= 24 {
-            obj.clip_bound_transform = matrix_from_column_major(&mat[12..24]);
+            obj.clip_bound_transform = matrix_from_row_major(&mat[12..24]);
         }
         Ok(Some(obj))
     }
@@ -1846,7 +1861,10 @@ impl<'a> SectionReader<'a> {
                 50 => {
                     if let Some(last) = linetype.elements.last_mut() {
                         if let Some(c) = last.complex.as_mut() {
-                            c.rotation = pair.value_string.parse().unwrap_or(0.0);
+                            // Stored as radians (the DWG reader + renderer treat
+                            // it so); DXF code 50 is in degrees, so convert.
+                            c.rotation =
+                                pair.value_string.parse::<f64>().unwrap_or(0.0).to_radians();
                         }
                     }
                 }
@@ -2045,16 +2063,26 @@ impl<'a> SectionReader<'a> {
                 }
                 2 => block_record.name = pair.value_string.clone(),
                 70 => {
-                    if let Some(flags) = pair.as_i16() {
-                        block_record.flags.anonymous = (flags & 1) != 0;
-                        block_record.flags.has_attributes = (flags & 2) != 0;
-                        block_record.flags.is_xref = (flags & 4) != 0;
-                        block_record.flags.is_xref_overlay = (flags & 8) != 0;
+                    // AcDbBlockTableRecord code 70 is the block INSERTION UNITS
+                    // (0=unitless, 1=in, 4=mm, 6=cm, …), NOT the block-type
+                    // flags. Those (anonymous/xref/has-attr) live on the BLOCK
+                    // entity and are read in read_block — parsing them here
+                    // spuriously marked regular blocks as xrefs (which the
+                    // renderer then fades).
+                    if let Some(v) = pair.as_i16() {
+                        block_record.units = v;
                     }
                 }
                 280 => {
-                    if let Some(units) = pair.as_i16() {
-                        block_record.units = units;
+                    // Block explodability (1 = explodable).
+                    if let Some(v) = pair.as_i16() {
+                        block_record.explodable = v != 0;
+                    }
+                }
+                281 => {
+                    // Block scalability (1 = scale uniformly).
+                    if let Some(v) = pair.as_i16() {
+                        block_record.scale_uniformly = v != 0;
                     }
                 }
                 340 => {
@@ -2421,6 +2449,52 @@ impl<'a> SectionReader<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Read an ATTRIB/ATTDEF R2018+ embedded MTEXT object (code 101 block) and
+    /// return its text. A multiline attribute keeps its real text here (the
+    /// entity's own code 1 is empty), so the caller adopts this when non-empty.
+    /// MTEXT splits long text into 250-char `3` continuation chunks ending in a
+    /// final `1` chunk; concatenate in that order.
+    fn read_attrib_embedded_text(&mut self) -> Result<String> {
+        let mut text = String::new();
+        while let Some(pair) = self.reader.read_pair()? {
+            if pair.code == 0 || pair.code >= 1000 {
+                self.reader.push_back(pair);
+                break;
+            }
+            match pair.code {
+                3 => text.push_str(&pair.value_string),
+                1 => text.push_str(&pair.value_string),
+                _ => {}
+            }
+        }
+        Ok(text)
+    }
+
+    /// Read an MTEXT R2018+ embedded object (code 101 block), extracting the
+    /// column layout. The MTEXT column data lives here rather than in the
+    /// entity's own codes; other embedded-object codes are consumed and
+    /// ignored. Stops at the next 0-code or the XDATA (>=1000) region.
+    fn read_mtext_embedded_object(&mut self) -> Result<crate::entities::mtext::MTextColumnData> {
+        let mut col = crate::entities::mtext::MTextColumnData::new();
+        while let Some(pair) = self.reader.read_pair()? {
+            if pair.code == 0 || pair.code >= 1000 {
+                self.reader.push_back(pair);
+                break;
+            }
+            match pair.code {
+                71 => { if let Some(v) = pair.as_i16() { col.column_type = v; } }
+                72 => { if let Some(v) = pair.as_i16() { col.column_count = v as i32; } }
+                73 => { if let Some(v) = pair.as_i16() { col.auto_height = v != 0; } }
+                74 => { if let Some(v) = pair.as_i16() { col.flow_reversed = v != 0; } }
+                44 => { if let Some(v) = pair.as_double() { col.width = v; } }
+                45 => { if let Some(v) = pair.as_double() { col.gutter = v; } }
+                46 => { if let Some(v) = pair.as_double() { col.heights.push(v); } }
+                _ => {}
+            }
+        }
+        Ok(col)
     }
 
     /// Try to read a common entity code (5, 60, 102, 330, 92, 160, 310).
@@ -2935,6 +3009,8 @@ impl<'a> SectionReader<'a> {
             end_width: f64,
             bulge: f64,
             tangent: f64,
+            handle: u64,
+            layer: String,
         }
 
         let mut common = EntityCommon::new();
@@ -2968,12 +3044,16 @@ impl<'a> SectionReader<'a> {
                     let mut vi3: i16 = 0;
                     let mut vi4: i16 = 0;
                     let mut vcolor: Option<Color> = None;
+                    let mut vhandle: u64 = 0;
+                    let mut vlayer = String::from("0");
                     while let Some(vpair) = self.reader.read_pair()? {
                         if vpair.code == 0 {
                             self.reader.push_back(vpair);
                             break;
                         }
                         match vpair.code {
+                            5 => { if let Some(h) = vpair.as_handle() { vhandle = h; } }
+                            8 => { vlayer = vpair.value_string.clone(); }
                             10 => { if let Some(v) = vpair.as_double() { loc.x = v; } }
                             20 => { if let Some(v) = vpair.as_double() { loc.y = v; } }
                             30 => { if let Some(v) = vpair.as_double() { loc.z = v; } }
@@ -3029,6 +3109,8 @@ impl<'a> SectionReader<'a> {
                             end_width: ew,
                             bulge,
                             tangent,
+                            handle: vhandle,
+                            layer: vlayer.clone(),
                         });
                     }
                 } else if pair.value_string == "SEQEND" {
@@ -3162,6 +3244,8 @@ impl<'a> SectionReader<'a> {
                 .map(|rv| {
                     let mut v = Vertex3DPolyline::new(rv.loc);
                     v.flags = rv.vflags as i32;
+                    v.handle = Handle::new(rv.handle);
+                    v.layer = rv.layer.clone();
                     v
                 })
                 .collect();
@@ -3530,8 +3614,9 @@ impl<'a> SectionReader<'a> {
                 }
                 210 | 220 | 230 => { normal.add_coordinate(&pair); }
                 // R2018+ column/layout companion — its codes shadow the
-                // entity's own, so it must not fall through this match.
-                101 => { self.skip_embedded_object()?; }
+                // entity's own, so it must not fall through this match. The
+                // embedded object carries the MTEXT column layout.
+                101 => { mtext.column_data = self.read_mtext_embedded_object()?; }
                 _ => { self.try_read_common_entity_code(&pair, &mut mtext.common)?; }
             }
         }
@@ -4314,6 +4399,98 @@ impl<'a> SectionReader<'a> {
                         }
                     }
                 }
+                47 => {
+                    // Pixel size (offset vector length used to bound the hatch).
+                    if let Some(v) = pair.as_double() {
+                        hatch.pixel_size = v;
+                    }
+                }
+                98 => {
+                    // Seed point count, followed by that many 10/20 point pairs.
+                    // These sit in the trailer past every boundary path, so the
+                    // 10/20 codes read here can't be confused with edge vertices.
+                    let n = pair.as_i32().unwrap_or(0).max(0);
+                    for _ in 0..n {
+                        let mut x = 0.0;
+                        let mut y = 0.0;
+                        if let Some(p) = self.reader.read_pair()? {
+                            if p.code == 10 {
+                                x = p.as_double().unwrap_or(0.0);
+                            } else {
+                                self.reader.push_back(p);
+                                break;
+                            }
+                        }
+                        if let Some(p) = self.reader.read_pair()? {
+                            if p.code == 20 {
+                                y = p.as_double().unwrap_or(0.0);
+                            } else {
+                                self.reader.push_back(p);
+                            }
+                        }
+                        hatch.seed_points.push(Vector2::new(x, y));
+                    }
+                }
+                450 => {
+                    // Gradient fill definition (codes 450-470). Parse the block
+                    // inline; a non-gradient code ends it and is pushed back for
+                    // the outer loop. Each colour is a 463 (value) plus a 63
+                    // (ACI) and/or 421 (24-bit RGB) — RGB wins when both appear.
+                    hatch.gradient_color.enabled = pair.as_i32().unwrap_or(0) != 0;
+                    while let Some(gp) = self.reader.read_pair()? {
+                        match gp.code {
+                            451 => hatch.gradient_color.reserved = gp.as_i32().unwrap_or(0),
+                            452 => {
+                                hatch.gradient_color.is_single_color =
+                                    gp.as_i16().unwrap_or(0) != 0
+                            }
+                            453 => { /* colour count — inferred from 463 entries */ }
+                            460 => {
+                                if let Some(v) = gp.as_double() {
+                                    hatch.gradient_color.angle = v;
+                                }
+                            }
+                            461 => {
+                                if let Some(v) = gp.as_double() {
+                                    hatch.gradient_color.shift = v;
+                                }
+                            }
+                            462 => {
+                                if let Some(v) = gp.as_double() {
+                                    hatch.gradient_color.color_tint = v;
+                                }
+                            }
+                            463 => {
+                                let value = gp.as_double().unwrap_or(0.0);
+                                hatch.gradient_color.colors.push(GradientColorEntry {
+                                    value,
+                                    color: Color::ByLayer,
+                                });
+                            }
+                            63 => {
+                                if let (Some(entry), Ok(aci)) = (
+                                    hatch.gradient_color.colors.last_mut(),
+                                    gp.value_string.trim().parse::<i16>(),
+                                ) {
+                                    entry.color = Color::from_index(aci);
+                                }
+                            }
+                            421 => {
+                                if let (Some(entry), Ok(rgb)) = (
+                                    hatch.gradient_color.colors.last_mut(),
+                                    gp.value_string.trim().parse::<i32>(),
+                                ) {
+                                    entry.color = Color::from_true_color_value(rgb);
+                                }
+                            }
+                            470 => hatch.gradient_color.name = gp.value_string.clone(),
+                            _ => {
+                                self.reader.push_back(gp);
+                                break;
+                            }
+                        }
+                    }
+                }
                 _ => { self.try_read_common_entity_code(&pair, &mut hatch.common)?; }
             }
         }
@@ -5027,6 +5204,9 @@ impl<'a> SectionReader<'a> {
         let mut layer = String::from("0");
         let mut color = Color::ByLayer;
         let mut common = EntityCommon::new();
+        let mut lock_position = false;
+        // Code 280 appears twice: first the version byte, then lock-position.
+        let mut seen_version = false;
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 {
@@ -5055,9 +5235,21 @@ impl<'a> SectionReader<'a> {
                         rotation = r.to_radians();
                     }
                 }
-                // Multiline attribute's embedded MTEXT (R2018+) — codes shadow
-                // the entity's own, so it must not fall through this match.
-                101 => { self.skip_embedded_object()?; }
+                280 => {
+                    if !seen_version {
+                        seen_version = true;
+                    } else if let Some(v) = pair.as_i16() {
+                        lock_position = v != 0;
+                    }
+                }
+                // Multiline attribute-definition embedded MTEXT (R2018+) —
+                // carries the real default text when the own code 1 is empty.
+                101 => {
+                    let t = self.read_attrib_embedded_text()?;
+                    if !t.is_empty() {
+                        default_value = t;
+                    }
+                }
                 _ => { self.try_read_common_entity_code(&pair, &mut common)?; }
             }
         }
@@ -5066,6 +5258,7 @@ impl<'a> SectionReader<'a> {
         attdef.insertion_point = insertion_point.get_point().unwrap_or(Vector3::zero());
         attdef.height = height;
         attdef.rotation = rotation;
+        attdef.lock_position = lock_position;
         attdef.common.layer = layer;
         // True color from code 420 overrides ACI
         if common.color.is_true_color() {
@@ -5201,6 +5394,16 @@ impl<'a> SectionReader<'a> {
                 10 | 20 | 30 => { insertion_point.add_coordinate(&pair); }
                 11 | 21 | 31 => { u_vector.add_coordinate(&pair); }
                 12 | 22 | 32 => { v_vector.add_coordinate(&pair); }
+                71 => {
+                    if let Some(v) = pair.as_i16() {
+                        wipeout.clip_type = crate::entities::wipeout::WipeoutClipType::from(v);
+                    }
+                }
+                91 => {
+                    // Boundary vertex count precedes the 14/24 pairs; drop the
+                    // default-seeded corners so the file's vertices don't append.
+                    wipeout.clip_boundary_vertices.clear();
+                }
                 14 => {
                     if let Some(x) = pair.as_double() {
                         wipeout.clip_boundary_vertices.push(Vector2::new(x, 0.0));
@@ -5495,10 +5698,21 @@ impl<'a> SectionReader<'a> {
         let mut attrib = AttributeEntity::new(String::new(), String::new());
         let mut insertion_point = PointReader::new();
         let mut alignment_point = PointReader::new();
+        // Code 280 appears twice: first the version byte, then lock-position.
+        let mut seen_attrib_version = false;
+        // Code 71 means different things by subclass: AcDbText → text
+        // generation flags (2=backward, 4=upside-down); AcDbAttribute → the
+        // MTEXT flag (2=multiline). Conflating them mirrored multiline text.
+        let mut in_attribute_subclass = false;
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 { self.reader.push_back(pair); break; }
             match pair.code {
+                100 => {
+                    if pair.value_string == "AcDbAttribute" {
+                        in_attribute_subclass = true;
+                    }
+                }
                 8 => attrib.common.layer = pair.value_string.clone(),
                 62 => { if let Some(v) = pair.as_i16() { attrib.common.color = Color::from_index(v); } }
                 370 => { if let Some(v) = pair.as_i16() { attrib.common.line_weight = LineWeight::from_value(v); } }
@@ -5516,7 +5730,22 @@ impl<'a> SectionReader<'a> {
                         attrib.flags = crate::entities::attribute_definition::AttributeFlags::from_bits(v as i32);
                     }
                 }
-                71 => { if let Some(v) = pair.as_i16() { attrib.text_generation_flags = v; } }
+                71 => {
+                    if let Some(v) = pair.as_i16() {
+                        if in_attribute_subclass {
+                            // AcDbAttribute: MTEXT flag, not generation flags.
+                            use crate::entities::attribute_definition::MTextFlag;
+                            attrib.mtext_flag = match v {
+                                2 => MTextFlag::MultiLine,
+                                4 => MTextFlag::ConstantMultiLine,
+                                _ => MTextFlag::SingleLine,
+                            };
+                            attrib.is_multiline = !matches!(attrib.mtext_flag, MTextFlag::SingleLine);
+                        } else {
+                            attrib.text_generation_flags = v;
+                        }
+                    }
+                }
                 72 => {
                     if let Some(v) = pair.as_i16() {
                         attrib.horizontal_alignment = crate::entities::attribute_definition::HorizontalAlignment::from_value(v);
@@ -5527,9 +5756,22 @@ impl<'a> SectionReader<'a> {
                         attrib.vertical_alignment = crate::entities::attribute_definition::VerticalAlignment::from_value(v);
                     }
                 }
-                // Multiline attribute's embedded MTEXT (R2018+) — codes shadow
-                // the entity's own, so it must not fall through this match.
-                101 => { self.skip_embedded_object()?; }
+                280 => {
+                    // First 280 is the version byte; the second is lock-position.
+                    if !seen_attrib_version {
+                        seen_attrib_version = true;
+                    } else if let Some(v) = pair.as_i16() {
+                        attrib.lock_position = v != 0;
+                    }
+                }
+                // Multiline attribute's embedded MTEXT (R2018+) — carries the
+                // real text; the entity's own code 1 is empty in that case.
+                101 => {
+                    let t = self.read_attrib_embedded_text()?;
+                    if !t.is_empty() {
+                        attrib.value = t;
+                    }
+                }
                 _ => { self.try_read_common_entity_code(&pair, &mut attrib.common)?; }
             }
         }
@@ -5680,7 +5922,9 @@ impl<'a> SectionReader<'a> {
                 43 => { if let Some(v) = pair.as_double() { ml.block_rotation = v; } }
                 176 => { if let Some(v) = pair.as_i16() { ml.block_connection_type = mlt::BlockContentConnectionType::from(v); } }
                 293 => { if let Some(v) = pair.as_bool() { ml.enable_annotation_scale = v; } }
-                271 => { if let Some(v) = pair.as_i16() { ml.text_align_in_ipe = v; } }
+                // Entity-level 271 is the text attachment DIRECTION
+                // (0=horizontal, 1=vertical), not text-align-in-place-edit.
+                271 => { if let Some(v) = pair.as_i16() { ml.text_attachment_direction = mlt::TextAttachmentDirectionType::from(v); } }
                 272 => { if let Some(v) = pair.as_i16() { ml.text_bottom_attachment = mlt::TextAttachmentType::from(v); } }
                 273 => { if let Some(v) = pair.as_i16() { ml.text_top_attachment = mlt::TextAttachmentType::from(v); } }
                 295 => { if let Some(v) = pair.as_bool() { ml.extend_leader_to_text = v; } }
@@ -5735,7 +5979,7 @@ impl<'a> SectionReader<'a> {
                 174 => { if let Some(v) = pair.as_i16() { ctx.text_left_attachment = mlt::TextAttachmentType::from(v); } }
                 175 => { if let Some(v) = pair.as_i16() { ctx.text_right_attachment = mlt::TextAttachmentType::from(v); } }
                 176 => { if let Some(v) = pair.as_i16() { ctx.block_connection_type = mlt::BlockContentConnectionType::from(v); } }
-                177 => { if let Some(v) = pair.as_i16() { ctx.text_attachment_point = mlt::TextAttachmentPointType::from(v); } }
+                177 => { /* reserved constant (0), NOT the text attachment anchor — derived from geometry post-loop */ }
                 290 => { if let Some(v) = pair.as_bool() { ctx.has_text_contents = v; } }
                 304 => ctx.text_string = pair.value_string.clone(),
                 11 | 21 | 31 => { text_normal.add_coordinate(&pair); }
@@ -5748,7 +5992,18 @@ impl<'a> SectionReader<'a> {
                 45 => { if let Some(v) = pair.as_double() { ctx.line_spacing_factor = v; } }
                 170 => { if let Some(v) = pair.as_i16() { ctx.line_spacing_style = crate::entities::LineSpacingStyle::from(v); } }
                 90 => { if let Some(v) = pair.as_i32() { ctx.text_color = color_from_i32(v); } }
-                171 => { if let Some(v) = pair.as_i16() { ctx.text_alignment = mlt::TextAlignmentType::from(v); } }
+                171 => {
+                    if let Some(v) = pair.as_i16() {
+                        // Code 171 is the horizontal text attachment point,
+                        // 1-indexed (1=Left, 2=Center, 3=Right) — the field OCS
+                        // renders with; matches the DWG binary value exactly.
+                        ctx.text_attachment_point = mlt::TextAttachmentPointType::from(v);
+                        // The alignment enum is 0-indexed (Left=0), so shift by
+                        // one to get the same Left/Center/Right (drives the
+                        // multi-line justify within the text block).
+                        ctx.text_alignment = mlt::TextAlignmentType::from((v - 1).max(0));
+                    }
+                }
                 172 => { if let Some(v) = pair.as_i16() { ctx.text_flow_direction = mlt::FlowDirectionType::from(v); } }
                 91 => { if let Some(v) = pair.as_i32() { ctx.background_fill_color = color_from_i32(v); } }
                 141 => { if let Some(v) = pair.as_double() { ctx.background_scale_factor = v; } }
@@ -6094,7 +6349,7 @@ impl<'a> SectionReader<'a> {
                             MeshReadState::Edges => {
                                 edge_buf.push(v as usize);
                                 if edge_buf.len() == 2 {
-                                    mesh.edges.push(MeshEdge { start: edge_buf[0], end: edge_buf[1], crease: Some(0.0) });
+                                    mesh.edges.push(MeshEdge { start: edge_buf[0], end: edge_buf[1], crease: None });
                                     edge_buf.clear();
                                 }
                             }
@@ -6111,9 +6366,16 @@ impl<'a> SectionReader<'a> {
             }
         }
 
-        // Apply crease values to edges
+        // Apply crease values to edges. A zero crease is the "no crease"
+        // default, so leave those edges as None to match the DWG reader
+        // (which reports None for every sharp edge); only a real, non-zero
+        // crease is attached.
         for (i, crease) in crease_values.into_iter().enumerate() {
-            if i < mesh.edges.len() { mesh.edges[i].crease = Some(crease); }
+            if crease != 0.0 {
+                if let Some(edge) = mesh.edges.get_mut(i) {
+                    edge.crease = Some(crease);
+                }
+            }
         }
 
         let _ = vertex_count;
@@ -6140,11 +6402,32 @@ impl<'a> SectionReader<'a> {
                 23 => { if let Some(v) = pair.as_double() { img.size.y = v; } }
                 340 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { img.definition_handle = Some(Handle::new(h)); } }
                 360 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { img.definition_reactor_handle = Some(Handle::new(h)); } }
-                70 => { /* display properties flags */ }
+                70 => {
+                    if let Some(v) = pair.as_i16() {
+                        img.flags = ImageDisplayFlags::from_bits_truncate(v);
+                    }
+                }
+                71 => {
+                    if let Some(v) = pair.as_i16() {
+                        img.clip_boundary.clip_type = ClipType::from(v);
+                    }
+                }
                 280 => { if let Some(v) = pair.as_i16() { img.clipping_enabled = v != 0; } }
                 281 => { if let Some(v) = pair.as_i16() { img.brightness = v as u8; } }
                 282 => { if let Some(v) = pair.as_i16() { img.contrast = v as u8; } }
                 283 => { if let Some(v) = pair.as_i16() { img.fade = v as u8; } }
+                290 => {
+                    // Clip mode (0 = outside, 1 = inside). Bool-typed group code.
+                    if let Some(v) = pair.as_bool() {
+                        img.clip_boundary.clip_mode =
+                            if v { ClipMode::Inside } else { ClipMode::Outside };
+                    }
+                }
+                91 => {
+                    // Clip boundary vertex count precedes the 14/24 pairs; drop
+                    // the default-seeded corners so file vertices don't append.
+                    img.clip_boundary.vertices.clear();
+                }
                 14 => {
                     if let Some(x) = pair.as_double() {
                         img.clip_boundary.vertices.push(Vector2::new(x, 0.0));
@@ -6250,6 +6533,10 @@ impl<'a> SectionReader<'a> {
         let mut cells: Vec<TableCell> = Vec::new();
         let mut ncols: usize = 0;
         let mut cur: Option<TableCell> = None;
+        // True while inside a cell's CELL_VALUE block (301 … 304), so per-cell
+        // codes that collide with table-level ones (92, 90) are routed to the
+        // cell value rather than the table header.
+        let mut in_value = false;
 
         // Ensure the current cell has at least one content to receive a value.
         fn ensure_content(cell: &mut TableCell) {
@@ -6297,7 +6584,10 @@ impl<'a> SectionReader<'a> {
                 11 | 21 | 31 => {
                     horizontal.add_coordinate(&pair);
                 }
-                92 => {
+                // Table-level column count. A per-cell 92 (extended cell flags,
+                // emitted while a cell is open) must NOT overwrite it, or the
+                // whole row/col distribution collapses to zero columns.
+                92 if cur.is_none() => {
                     if let Some(v) = pair.as_i32() {
                         ncols = v.max(0) as usize;
                     }
@@ -6378,13 +6668,47 @@ impl<'a> SectionReader<'a> {
                     }
                 }
                 90 => {
-                    if let (Some(c), Some(v)) = (cur.as_mut(), pair.as_i32()) {
+                    if in_value {
+                        // Inside CELL_VALUE: 90 is the ACValue data type
+                        // (1=Long, 2=Double, 4=String…), not a numeric value.
+                        if let (Some(c), Some(v)) = (cur.as_mut(), pair.as_i32()) {
+                            ensure_content(c);
+                            c.contents.last_mut().unwrap().value.value_type = match v {
+                                1 => CellValueType::Long,
+                                2 => CellValueType::Double,
+                                4 => CellValueType::String,
+                                8 => CellValueType::Date,
+                                0x10 => CellValueType::Point2D,
+                                0x20 => CellValueType::Point3D,
+                                0x40 => CellValueType::Handle,
+                                _ => CellValueType::Unknown,
+                            };
+                        }
+                    }
+                    // A table-level 90 (data flags) is intentionally ignored.
+                }
+                // CELL_VALUE block start: the cell has an actual value → mark
+                // its content as Value.
+                301 => {
+                    if let Some(c) = cur.as_mut() {
                         ensure_content(c);
-                        let cv = &mut c.contents.last_mut().unwrap().value;
-                        cv.numeric_value = v as f64;
-                        cv.value_type = CellValueType::Long;
+                        c.contents.last_mut().unwrap().content_type =
+                            TableCellContentType::Value;
+                        in_value = true;
                     }
                 }
+                // Formatted string value inside the CELL_VALUE block.
+                302 => {
+                    if in_value {
+                        if let Some(c) = cur.as_mut() {
+                            if let Some(content) = c.contents.last_mut() {
+                                content.value.text = pair.value_string.clone();
+                            }
+                        }
+                    }
+                }
+                // CELL_VALUE block end.
+                304 => { in_value = false; }
                 300 => {
                     if let Some(c) = cur.as_mut() {
                         if let Some(content) = c.contents.last_mut() {
@@ -6453,7 +6777,7 @@ impl<'a> SectionReader<'a> {
 
     /// Read a PDF/DWF/DGN UNDERLAY entity
     fn read_underlay(&mut self, type_name: &str) -> Result<Option<Underlay>> {
-        use crate::entities::underlay::UnderlayType;
+        use crate::entities::underlay::{UnderlayDisplayFlags, UnderlayType};
         let utype = match type_name {
             "DWFUNDERLAY" => UnderlayType::Dwf,
             "DGNUNDERLAY" => UnderlayType::Dgn,
@@ -6475,6 +6799,15 @@ impl<'a> SectionReader<'a> {
                 42 => { if let Some(v) = pair.as_double() { underlay.y_scale = v; } }
                 43 => { if let Some(v) = pair.as_double() { underlay.z_scale = v; } }
                 50 => { if let Some(v) = pair.as_double() { underlay.rotation = v; } }
+                280 => {
+                    // Display flags (bit0 clipping, bit1 on, bit2 monochrome,
+                    // bit3 adjust-for-background, bit4 clip-inside/inverted).
+                    if let Some(v) = pair.as_i16() {
+                        let flags = UnderlayDisplayFlags::from_bits_truncate(v as u8);
+                        underlay.flags = flags;
+                        underlay.clip_inverted = flags.contains(UnderlayDisplayFlags::CLIP_INSIDE);
+                    }
+                }
                 281 => { if let Some(v) = pair.as_i16() { underlay.contrast = v as u8; } }
                 282 => { if let Some(v) = pair.as_i16() { underlay.fade = v as u8; } }
                 340 => {
@@ -6840,6 +7173,24 @@ impl<'a> SectionReader<'a> {
 /// the inverse of the writer's `write_color_i32`: 0 = ByBlock, 256 = ByLayer,
 /// 1–255 = ACI index, anything else = packed 24-bit RGB.
 fn color_from_i32(v: i32) -> Color {
+    // AutoCAD-produced DXF encodes a color in the high "method" byte:
+    //   0xC0 ByLayer, 0xC1 ByBlock, 0xC2 true-color RGB, 0xC3 ACI index.
+    // MLEADER/MLEADERSTYLE colours use this form; check it before the
+    // writer's own plain scheme (0=ByBlock, 256=ByLayer, 1..255=ACI, else RGB).
+    let u = v as u32;
+    match (u >> 24) & 0xFF {
+        0xC0 => return Color::ByLayer,
+        0xC1 => return Color::ByBlock,
+        0xC2 => {
+            return Color::Rgb {
+                r: ((u >> 16) & 0xFF) as u8,
+                g: ((u >> 8) & 0xFF) as u8,
+                b: (u & 0xFF) as u8,
+            }
+        }
+        0xC3 => return Color::from_index((u & 0xFF) as i16),
+        _ => {}
+    }
     match v {
         0 => Color::ByBlock,
         256 => Color::ByLayer,

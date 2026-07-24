@@ -521,7 +521,8 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 self.writer.write_double(44, c.offset[0])?;
                 self.writer.write_double(45, c.offset[1])?;
                 self.writer.write_double(46, c.scale)?;
-                self.writer.write_double(50, c.rotation)?;
+                // `rotation` is stored in radians; DXF code 50 is in degrees.
+                self.writer.write_double(50, c.rotation.to_degrees())?;
                 if !c.style_handle.is_null() {
                     self.writer.write_handle(340, c.style_handle)?;
                 }
@@ -3496,16 +3497,18 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         if let Some(d) = obj.back_clip {
             self.writer.write_double(41, d)?;
         }
-        self.write_matrix_column_major(&obj.inverse_block_transform)?;
-        self.write_matrix_column_major(&obj.clip_bound_transform)?;
+        self.write_matrix_row_major(&obj.inverse_block_transform)?;
+        self.write_matrix_row_major(&obj.clip_bound_transform)?;
         Ok(())
     }
 
     /// Write a 4×3 transform as 12 code-40 doubles in DXF column-major order
     /// (4 columns of 3 rows; the bottom matrix row is implied).
-    fn write_matrix_column_major(&mut self, m: &crate::types::Matrix4) -> Result<()> {
-        for col in 0..4 {
-            for row in 0..3 {
+    /// Emit a SPATIAL_FILTER transform row-major (12 code-40 values) — the
+    /// on-disk convention shared with DWG and the DXF reader.
+    fn write_matrix_row_major(&mut self, m: &crate::types::Matrix4) -> Result<()> {
+        for row in 0..3 {
+            for col in 0..4 {
                 self.writer.write_double(40, m.m[row][col])?;
             }
         }

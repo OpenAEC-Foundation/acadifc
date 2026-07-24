@@ -149,7 +149,7 @@ impl Leader {
     pub fn new() -> Self {
         Self {
             common: EntityCommon::default(),
-            dimension_style: "STANDARD".to_string(),
+            dimension_style: "Standard".to_string(),
             arrow_enabled: true,
             path_type: LeaderPathType::StraightLine,
             creation_type: LeaderCreationType::WithText,

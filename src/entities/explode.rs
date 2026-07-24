@@ -439,7 +439,7 @@ fn explode_multileader(ml: &MultiLeader) -> Vec<EntityType> {
             rectangle_width: ml.context.text_width,
             rectangle_height: None,
             rotation: ml.context.text_rotation,
-            style: "STANDARD".to_string(),
+            style: "Standard".to_string(),
             attachment_point: AttachmentPoint::TopLeft,
             drawing_direction: DrawingDirection::LeftToRight,
             line_spacing_factor: ml.context.line_spacing_factor,

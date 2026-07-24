@@ -12,7 +12,10 @@ pub use binary_reader::DxfBinaryReader;
 use section_reader::SectionReader;
 
 use crate::document::CadDocument;
+use crate::entities::solid3d::AcisVersion;
+use crate::entities::EntityType;
 use crate::error::Result;
+use crate::types::Handle;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek};
 use std::path::Path;
@@ -164,6 +167,7 @@ impl DxfReader {
                             "BLOCKS" => self.read_blocks_section(&mut document),
                             "ENTITIES" => self.read_entities_section(&mut document),
                             "OBJECTS" => self.read_objects_section(&mut document),
+                            "ACDSDATA" => self.read_acdsdata_section(&mut document),
                             "THUMBNAILIMAGE" => {
                                 document.notifications.notify(
                                     crate::notification::NotificationType::NotImplemented,
@@ -239,6 +243,116 @@ impl DxfReader {
         section_reader.read_objects(document)
     }
     
+    /// Read the ACDSDATA section (the AcDb data store).
+    ///
+    /// From R2013 (AC1027) on, a 3D solid / region / body / surface no longer
+    /// carries its ACIS geometry inline in the entity (the `AcDbModelerGeometry`
+    /// block is empty); the binary SAB blob lives here instead, in an
+    /// `ACDSRECORD` whose `ASM_Data` property is bound to the owning entity by a
+    /// 320 soft-pointer handle. The DWG reader gets this from the merged AcDs
+    /// stream; the DXF reader used to skip the whole section, leaving every
+    /// modeler entity geometry-less. Parse the records, then attach each SAB
+    /// blob to its entity so the same downstream SAB → mesh path runs.
+    fn read_acdsdata_section(&mut self, document: &mut CadDocument) -> Result<()> {
+        // (entity handle, SAB bytes) pairs collected from ASM_Data records.
+        let mut blobs: Vec<(u64, Vec<u8>)> = Vec::new();
+
+        // Per-record accumulator, flushed on each record/schema boundary (0-code).
+        let mut cur_handle: Option<u64> = None;
+        let mut is_asm = false;
+        let mut chunks: Vec<u8> = Vec::new();
+
+        while let Some(pair) = self.reader.read_pair()? {
+            if pair.code == 0 {
+                // Record boundary — flush a complete ASM_Data record.
+                if is_asm && !chunks.is_empty() {
+                    if let Some(h) = cur_handle {
+                        blobs.push((h, std::mem::take(&mut chunks)));
+                    }
+                }
+                cur_handle = None;
+                is_asm = false;
+                chunks.clear();
+                if pair.value_string == "ENDSEC" {
+                    break;
+                }
+                continue;
+            }
+            match pair.code {
+                // AcDbDs::ID soft-pointer to the owning entity.
+                320 => {
+                    if let Ok(h) = u64::from_str_radix(pair.value_string.trim(), 16) {
+                        cur_handle = Some(h);
+                    }
+                }
+                // Property name — the binary payload that follows is ACIS only
+                // for the ASM_Data property (Thumbnail_Data etc. are skipped).
+                2 => is_asm = pair.value_string == "ASM_Data",
+                // Binary chunk (hex-encoded); only kept once inside ASM_Data.
+                310 if is_asm => {
+                    let hex = pair.value_string.trim().as_bytes();
+                    let mut i = 0;
+                    while i + 1 < hex.len() {
+                        let hi = (hex[i] as char).to_digit(16);
+                        let lo = (hex[i + 1] as char).to_digit(16);
+                        if let (Some(hi), Some(lo)) = (hi, lo) {
+                            chunks.push((hi * 16 + lo) as u8);
+                        }
+                        i += 2;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Attach each SAB blob to its modeler entity.
+        for (handle, sab) in blobs {
+            let Some(entity) = document.get_entity_mut(Handle::new(handle)) else {
+                continue;
+            };
+            match entity {
+                EntityType::Solid3D(e) => {
+                    e.acis_data.sab_data = sab;
+                    e.acis_data.is_binary = true;
+                    e.acis_data.version = AcisVersion::Version2;
+                    e.point_of_reference = e
+                        .acis_data
+                        .geometry_centre()
+                        .or_else(|| e.acis_data.placement_origin())
+                        .unwrap_or(e.point_of_reference);
+                }
+                EntityType::Region(e) => {
+                    e.acis_data.sab_data = sab;
+                    e.acis_data.is_binary = true;
+                    e.acis_data.version = AcisVersion::Version2;
+                    e.point_of_reference = e
+                        .acis_data
+                        .geometry_centre()
+                        .or_else(|| e.acis_data.placement_origin())
+                        .unwrap_or(e.point_of_reference);
+                }
+                EntityType::Body(e) => {
+                    e.acis_data.sab_data = sab;
+                    e.acis_data.is_binary = true;
+                    e.acis_data.version = AcisVersion::Version2;
+                    e.point_of_reference = e
+                        .acis_data
+                        .geometry_centre()
+                        .or_else(|| e.acis_data.placement_origin())
+                        .unwrap_or(e.point_of_reference);
+                }
+                EntityType::Surface(e) => {
+                    e.acis_data.sab_data = sab;
+                    e.acis_data.is_binary = true;
+                    e.acis_data.version = AcisVersion::Version2;
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
+
     /// Skip the current section
     fn skip_section(&mut self) -> Result<()> {
         while let Some(pair) = self.reader.read_pair()? {

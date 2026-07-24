@@ -2091,6 +2091,14 @@ impl CadDocument {
         for e in self.dim_styles.iter()    { if !e.handle().is_null() { used_handles.insert(e.handle().value()); } }
         for e in self.block_records.iter() { if !e.handle().is_null() { used_handles.insert(e.handle().value()); } }
         for e in self.entities.iter()      { let h = e.common().handle.value(); if h > 0 { used_handles.insert(h); } }
+        // Snapshot the handles used by NON-object records. Object keys are
+        // unique in `self.objects`, so an object can only truly collide with a
+        // record of a different kind (entity, table entry, block record). The
+        // object-collision pass (1d) must decide against THIS set — using the
+        // full `used_handles` (which also contains every object handle, added
+        // just below) makes the check trivially true and remaps every object,
+        // orphaning entity->object links like Underlay/RasterImage definitions.
+        let non_object_used = used_handles.clone();
         for (h, _) in &self.objects        { let v = h.value(); if v > 0 { used_handles.insert(v); } }
 
         // Reassign any table control handle that collides with a used handle
@@ -2156,7 +2164,7 @@ impl CadDocument {
         let mut remap: Vec<(Handle, Handle)> = Vec::new();
         let obj_handles: Vec<Handle> = self.objects.keys().copied().collect();
         for old_h in obj_handles {
-            if used_handles.contains(&old_h.value()) {
+            if non_object_used.contains(&old_h.value()) {
                 let new_h = Handle::new(self.next_handle); self.next_handle += 1;
                 remap.push((old_h, new_h));
             }
@@ -2247,6 +2255,27 @@ impl CadDocument {
                     br.layout = *new_h;
                 }
             }
+
+            // Update entity -> object references so a genuinely remapped
+            // definition object stays linked (RasterImage/Underlay renderers
+            // look the definition up by this handle to find the file path).
+            for entity in self.entities.iter_mut() {
+                match Arc::make_mut(entity) {
+                    EntityType::Underlay(u) => {
+                        if let Some(new_h) = remap_map.get(&u.definition_handle.value()) {
+                            u.definition_handle = *new_h;
+                        }
+                    }
+                    EntityType::RasterImage(img) => {
+                        if let Some(dh) = img.definition_handle {
+                            if let Some(new_h) = remap_map.get(&dh.value()) {
+                                img.definition_handle = Some(*new_h);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
         }
         let model_handle = self.header.model_space_block_handle;
         let paper_handle = self.header.paper_space_block_handle;
@@ -2295,6 +2324,37 @@ impl CadDocument {
         // We just skip further assignment here.
 
         let _ = paper_handle; // suppress unused warning; future: paper space logic
+
+        // Cache each RasterImage's file path from its IMAGEDEF object. The OCS
+        // renderer reads `RasterImage.file_path`, but DXF stores the path only
+        // on the AcDbRasterImageDef object (code 1), so copy it across by the
+        // image's definition handle. Mirrors the DWG builder's post-pass; runs
+        // after the object-handle remap so definition handles are current.
+        let def_paths: std::collections::HashMap<Handle, String> = self
+            .objects
+            .iter()
+            .filter_map(|(h, o)| match o {
+                ObjectType::ImageDefinition(d) if !d.file_name.is_empty() => {
+                    Some((*h, d.file_name.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        if !def_paths.is_empty() {
+            for entity in self.entities.iter_mut() {
+                let needs = matches!(&**entity, EntityType::RasterImage(im)
+                    if im.file_path.is_empty()
+                        && im.definition_handle.is_some_and(|h| def_paths.contains_key(&h)));
+                if !needs {
+                    continue;
+                }
+                if let EntityType::RasterImage(im) = Arc::make_mut(entity) {
+                    if let Some(p) = im.definition_handle.and_then(|h| def_paths.get(&h)) {
+                        im.file_path = p.clone();
+                    }
+                }
+            }
+        }
     }
 }
 
