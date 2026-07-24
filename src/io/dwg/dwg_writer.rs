@@ -61,16 +61,28 @@ impl DwgWriter {
 
     /// Write a DWG file to any `Write + Seek` output.
     pub fn write_to_writer<W: Write + Seek>(mut output: W, document: &CadDocument) -> Result<()> {
+        let perf = std::env::var_os("OCS_PERF").is_some();
+        let started = std::time::Instant::now();
         validate_version(document.version)?;
         let version = document.version;
 
-        if uses_ac21_format(version) {
+        let result = if uses_ac21_format(version) {
             write_ac21(&mut output, document, version)
         } else if uses_paged_format(version) {
             write_ac18(&mut output, document, version)
         } else {
             write_ac15(&mut output, document, version)
+        };
+        if perf {
+            eprintln!(
+                "[perf] dwg-write total={:.1}ms version={:?} entities={} objects={}",
+                started.elapsed().as_secs_f64() * 1000.0,
+                version,
+                document.entities().count(),
+                document.objects.len(),
+            );
         }
+        result
     }
 
     /// Write an AC21 DWG file **without LZ77 compression** (diagnostic).
@@ -402,8 +414,17 @@ fn write_ac15<W: Write + Seek>(
     let mut fhw = DwgFileHeaderWriterAC15::new(version);
 
     // ── Phase 1: Compute objects FIRST to get handle map ──
+    let objects_started = std::time::Instant::now();
     let obj_writer = DwgObjectWriter::new(document)?;
     let (obj_data, handle_map_u32, extents, _sab_entries) = obj_writer.write();
+    if std::env::var_os("OCS_PERF").is_some() {
+        eprintln!(
+            "[perf] dwg-write objects={:.1}ms bytes={} handles={} format=ac15",
+            objects_started.elapsed().as_secs_f64() * 1000.0,
+            obj_data.len(),
+            handle_map_u32.len(),
+        );
+    }
 
     // ── Phase 2: Prepare header (sync handles + correct HANDSEED) ──
     let corrected_header = prepare_header(document, &handle_map_u32, &extents);
@@ -483,8 +504,17 @@ fn write_ac18<W: Write + Seek>(
     const SMALL_PAGE: usize = 0x80;
 
     // ── Phase 1: Compute objects FIRST to get handle map ──
+    let objects_started = std::time::Instant::now();
     let obj_writer = DwgObjectWriter::new(document)?;
     let (obj_data, handle_map_u32, extents, sab_entries) = obj_writer.write();
+    if std::env::var_os("OCS_PERF").is_some() {
+        eprintln!(
+            "[perf] dwg-write objects={:.1}ms bytes={} handles={} format=ac18",
+            objects_started.elapsed().as_secs_f64() * 1000.0,
+            obj_data.len(),
+            handle_map_u32.len(),
+        );
+    }
 
     // ── Phase 2: Prepare header (sync handles + correct HANDSEED) ──
     let corrected_header = prepare_header(document, &handle_map_u32, &extents);
@@ -596,8 +626,17 @@ fn write_ac21_impl<W: Write + Seek>(
     fhw.skip_lz77 = skip_lz77;
 
     // ── Phase 1: Compute objects FIRST to get handle map ──
+    let objects_started = std::time::Instant::now();
     let obj_writer = DwgObjectWriter::new(document)?;
     let (obj_data, handle_map_u32, extents, sab_entries) = obj_writer.write();
+    if std::env::var_os("OCS_PERF").is_some() {
+        eprintln!(
+            "[perf] dwg-write objects={:.1}ms bytes={} handles={} format=ac21",
+            objects_started.elapsed().as_secs_f64() * 1000.0,
+            obj_data.len(),
+            handle_map_u32.len(),
+        );
+    }
 
     // ── Phase 2: Prepare header (sync handles + correct HANDSEED) ──
     let corrected_header = prepare_header(document, &handle_map_u32, &extents);

@@ -45,6 +45,61 @@ use crate::io::dwg::checksum::{apply_mask, apply_magic_sequence};
 /// AC1021 file header offset (data pages start after this)
 const AC21_FILE_HEADER_SIZE: u64 = 0x480;
 
+fn parallel_map_ordered<T, R, F>(items: Vec<T>, map: F) -> Vec<R>
+where
+    T: Send,
+    R: Send,
+    F: Fn(T) -> R + Send + Sync,
+{
+    use rayon::prelude::*;
+    items.into_par_iter().map(map).collect()
+}
+
+fn ac21_page_layout(
+    compressed_size: u64,
+    correction_factor: u64,
+    block_size: usize,
+) -> Result<(usize, usize, usize), DxfError> {
+    let aligned = compressed_size.wrapping_add(7) & 0xFFFF_FFF8;
+    let total_size = aligned.wrapping_mul(correction_factor) as usize;
+    if total_size == 0 || total_size > 100_000_000 {
+        return Err(DxfError::InvalidFormat(format!(
+            "Invalid page buffer size: {} (compressed={}, factor={}, aligned={})",
+            total_size, compressed_size, correction_factor, aligned
+        )));
+    }
+    let factor = (total_size + block_size - 1) / block_size;
+    Ok((total_size, factor, factor * 255))
+}
+
+fn decode_ac21_page(
+    encoded: &[u8],
+    total_size: usize,
+    factor: usize,
+    block_size: usize,
+    compressed_size: u64,
+    uncompressed_size: u64,
+) -> Vec<u8> {
+    let mut compressed_data = vec![0u8; total_size];
+    reed_solomon_decode(encoded, &mut compressed_data, factor, block_size);
+    if compressed_size == uncompressed_size {
+        compressed_data.truncate(uncompressed_size as usize);
+        return compressed_data;
+    }
+
+    let mut padded_source = vec![0u8; compressed_data.len() + 64];
+    padded_source[..compressed_data.len()].copy_from_slice(&compressed_data);
+    let mut decompressed_data = vec![0u8; uncompressed_size as usize + 64];
+    decompress_ac21(
+        &padded_source,
+        0,
+        compressed_size as u32,
+        &mut decompressed_data,
+    );
+    decompressed_data.truncate(uncompressed_size as usize);
+    decompressed_data
+}
+
 /// Results from reading a DWG file header.
 ///
 /// Contains version info, section layout, and all extracted CRC values.
@@ -618,6 +673,25 @@ impl DwgReader<File> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+impl DwgReader<Cursor<memmap2::Mmap>> {
+    /// Open through a read-only memory map. Section seeks then become pointer
+    /// moves and the OS can page/readahead the file without repeated syscalls.
+    pub fn from_mmap<P: AsRef<Path>>(path: P) -> Result<Self, DxfError> {
+        let path = path.as_ref();
+        let file = File::open(path)?;
+        // SAFETY: read-only map owns its file-backed virtual-memory mapping;
+        // this reader never mutates the file while the mapping is alive.
+        let map = unsafe { memmap2::MmapOptions::new().map(&file)? };
+        Ok(Self {
+            stream: Cursor::new(map),
+            options: DwgReadOptions::default(),
+            notifications: NotificationCollection::new(),
+            source_path: Some(path.to_string_lossy().into_owned()),
+        })
+    }
+}
+
 impl<R: Read + Seek> DwgReader<R> {
     /// Create a reader from any seekable stream.
     pub fn from_stream(stream: R) -> Self {
@@ -652,8 +726,11 @@ impl<R: Read + Seek> DwgReader<R> {
     /// document is returned instead of propagating the error.
     pub fn read(&mut self) -> std::result::Result<crate::document::CadDocument, DxfError> {
         let failsafe = self.options.failsafe;
+        let perf = std::env::var_os("OCS_PERF").is_some();
+        let total_started = std::time::Instant::now();
 
         // 1. Read the DWG file header and section map
+        let stage_started = std::time::Instant::now();
         let info = match self.read_file_header() {
             Ok(info) => info,
             Err(e) if failsafe => {
@@ -667,6 +744,14 @@ impl<R: Read + Seek> DwgReader<R> {
             }
             Err(e) => return Err(e),
         };
+        if perf {
+            eprintln!(
+                "[perf] dwg-read header={:.1}ms sections={} pages={}",
+                stage_started.elapsed().as_secs_f64() * 1000.0,
+                info.section_descriptors.len(),
+                info.page_records.len(),
+            );
+        }
         let dxf_version = crate::types::DxfVersion::parse(&info.version_string)
             .unwrap_or(crate::types::DxfVersion::Unknown);
         let mut document = crate::document::CadDocument::with_version(dxf_version);
@@ -731,6 +816,8 @@ impl<R: Read + Seek> DwgReader<R> {
         };
 
         // 5. Read Objects (AcDb:AcDbObjects) and build document
+        let handle_count = handle_map.len();
+        let objects_started = std::time::Instant::now();
         if !handle_map.is_empty() {
             if let Ok(objects_buf) = self.get_section_buffer("AcDb:AcDbObjects", &info) {
                 match crate::io::dwg::dwg_stream_readers::object_reader::DwgObjectReader::new(
@@ -750,6 +837,15 @@ impl<R: Read + Seek> DwgReader<R> {
                     ),
                 }
             }
+        }
+        if perf {
+            eprintln!(
+                "[perf] dwg-read objects={:.1}ms handles={} entities={} objects={}",
+                objects_started.elapsed().as_secs_f64() * 1000.0,
+                handle_count,
+                document.entities().count(),
+                document.objects.len(),
+            );
         }
 
         // 6. R2013+ (AC1027+): 3DSOLID / REGION / BODY ACIS geometry is not
@@ -851,6 +947,15 @@ impl<R: Read + Seek> DwgReader<R> {
         // inspect them via `document.notifications`.
         document.notifications.extend(std::mem::take(&mut self.notifications));
 
+        if perf {
+            eprintln!(
+                "[perf] dwg-read total={:.1}ms entities={} objects={} classes={}",
+                total_started.elapsed().as_secs_f64() * 1000.0,
+                document.entities().count(),
+                document.objects.len(),
+                document.classes.iter().count(),
+            );
+        }
         Ok(document)
     }
 
@@ -1641,21 +1746,8 @@ impl<R: Read + Seek> DwgReader<R> {
         correction_factor: u64,
         block_size: usize,
     ) -> Result<Vec<u8>, DxfError> {
-        // Calculate sizes matching ACadSharp's getPageBuffer()
-        let v = compressed_size.wrapping_add(7);
-        let v1 = v & 0xFFFF_FFF8; // Align to 8 bytes
-
-        let total_size = v1.wrapping_mul(correction_factor) as usize;
-
-        if total_size == 0 || total_size > 100_000_000 {
-            return Err(DxfError::InvalidFormat(format!(
-                "Invalid page buffer size: {} (compressed={}, factor={}, v1={})",
-                total_size, compressed_size, correction_factor, v1
-            )));
-        }
-
-        let factor = (total_size + block_size - 1) / block_size;
-        let read_length = factor * 255;
+        let (total_size, factor, read_length) =
+            ac21_page_layout(compressed_size, correction_factor, block_size)?;
 
         // Read encoded data from file
         self.stream.seek(SeekFrom::Start(AC21_FILE_HEADER_SIZE + page_offset))?;
@@ -1666,39 +1758,14 @@ impl<R: Read + Seek> DwgReader<R> {
             encoded_buffer[bytes_read..].fill(0);
         }
 
-        // Reed-Solomon decode
-        let mut compressed_data = vec![0u8; total_size];
-        reed_solomon_decode(&encoded_buffer, &mut compressed_data, factor, block_size);
-
-        // LZ77 AC21 decompress.
-        // Some writers store compressed data even when the compressed size is
-        // not smaller than the uncompressed size (the ODA spec suggests data
-        // should be stored raw in that case, but not all implementations follow
-        // this convention).  Always decompress when the sizes differ; only skip
-        // when they are exactly equal (meaning data was stored raw).
-        if compressed_size != uncompressed_size {
-            // AC21 decompressor may read/write slightly past declared sizes
-            // due to block-level copy operations (4/8/32 byte chunks).
-            // Pad both source and destination buffers.
-            let src_padded_size = compressed_data.len() + 64;
-            let mut padded_source = vec![0u8; src_padded_size];
-            padded_source[..compressed_data.len()].copy_from_slice(&compressed_data);
-
-            let dst_padded_size = uncompressed_size as usize + 64;
-            let mut decompressed_data = vec![0u8; dst_padded_size];
-            decompress_ac21(
-                &padded_source,
-                0,
-                compressed_size as u32,
-                &mut decompressed_data,
-            );
-            decompressed_data.truncate(uncompressed_size as usize);
-            Ok(decompressed_data)
-        } else {
-            // compressed_size == uncompressed_size: data is stored raw
-            compressed_data.truncate(uncompressed_size as usize);
-            Ok(compressed_data)
-        }
+        Ok(decode_ac21_page(
+            &encoded_buffer,
+            total_size,
+            factor,
+            block_size,
+            compressed_size,
+            uncompressed_size,
+        ))
     }
 
     /// Get the merged decompressed buffer for a named section (AC21).
@@ -1723,6 +1790,8 @@ impl<R: Read + Seek> DwgReader<R> {
         info: &DwgFileHeaderInfo,
     ) -> Result<Vec<u8>, DxfError> {
         let failsafe = self.options.failsafe;
+        let perf = std::env::var_os("OCS_PERF").is_some();
+        let started = std::time::Instant::now();
 
         // ── AC15 path: direct read from section locators ──
         // If we have section_locators (AC15 format), read raw bytes
@@ -1737,6 +1806,14 @@ impl<R: Read + Seek> DwgReader<R> {
                 self.stream.seek(SeekFrom::Start(offset as u64))?;
                 let mut buf = vec![0u8; size as usize];
                 self.stream.read_exact(&mut buf)?;
+                if perf {
+                    eprintln!(
+                        "[perf] dwg-section name={} format=ac15 time={:.1}ms bytes={}",
+                        section_name,
+                        started.elapsed().as_secs_f64() * 1000.0,
+                        buf.len(),
+                    );
+                }
                 return Ok(buf);
             } else {
                 return Err(DxfError::Parse(
@@ -1747,7 +1824,16 @@ impl<R: Read + Seek> DwgReader<R> {
 
         // ── AC18 path: page-based with LZ77 AC18 compression ──
         if info.is_ac18_format {
-            return self.get_section_buffer_ac18(section_name, info);
+            let result = self.get_section_buffer_ac18(section_name, info);
+            if perf {
+                eprintln!(
+                    "[perf] dwg-section name={} format=ac18 time={:.1}ms bytes={}",
+                    section_name,
+                    started.elapsed().as_secs_f64() * 1000.0,
+                    result.as_ref().map_or(0, Vec::len),
+                );
+            }
+            return result;
         }
 
         // ── AC21 path: page-based section descriptors ──
@@ -1771,64 +1857,134 @@ impl<R: Read + Seek> DwgReader<R> {
         let encoding = section.encoding;
         let block_size: usize = 251;
 
+        enum PagePayload {
+            Ready(Vec<u8>),
+            Encoded {
+                bytes: Vec<u8>,
+                total_size: usize,
+                factor: usize,
+                compressed_size: u64,
+                uncompressed_size: u64,
+            },
+            Failed(String),
+        }
+        struct PreparedPage {
+            number: i64,
+            fill_size: usize,
+            payload: PagePayload,
+        }
+
+        // File seeks stay ordered; CPU-heavy Reed-Solomon and LZ77 work runs
+        // concurrently in bounded batches. This keeps peak memory near
+        // `result + 2 * worker pages` instead of retaining encoded and decoded
+        // copies of the whole section at once.
+        let batch_pages = rayon::current_num_threads().max(1).saturating_mul(2);
         let mut skipped_pages = 0u32;
-
-        for page in &section.pages {
-            // Look up the page record to get the file offset
-            if let Some(&(page_offset, _page_size)) = info.page_records.get(&(page.page_number as i32)) {
-                let page_result = if encoding == 1 {
-                    // encoding=1: read raw data directly (no RS, no LZ77).
-                    // AutoCAD stores encoding=1 pages as raw bytes aligned to 32.
-                    let read_size = page.decompressed_size as usize;
-                    (|| -> Result<Vec<u8>, DxfError> {
-                        self.stream.seek(SeekFrom::Start(AC21_FILE_HEADER_SIZE + page_offset as u64))?;
-                        let mut buf = vec![0u8; read_size];
-                        self.stream.read_exact(&mut buf)?;
-                        Ok(buf)
-                    })()
-                } else {
-                    self.get_page_buffer_at(
-                        page_offset as u64,
-                        page.compressed_size,
-                        page.decompressed_size,
-                        1, // correction factor is always 1 for data pages
-                        block_size,
-                    )
+        for page_batch in section.pages.chunks(batch_pages) {
+            let mut prepared = Vec::with_capacity(page_batch.len());
+            for page in page_batch {
+                let fill_size = page.decompressed_size as usize;
+                let payload = match info.page_records.get(&(page.page_number as i32)) {
+                    Some(&(page_offset, _)) if encoding == 1 => {
+                        let read = (|| -> Result<Vec<u8>, DxfError> {
+                            self.stream.seek(SeekFrom::Start(
+                                AC21_FILE_HEADER_SIZE + page_offset as u64,
+                            ))?;
+                            let mut bytes = vec![0u8; fill_size];
+                            self.stream.read_exact(&mut bytes)?;
+                            Ok(bytes)
+                        })();
+                        match read {
+                            Ok(bytes) => PagePayload::Ready(bytes),
+                            Err(error) if failsafe => PagePayload::Failed(error.to_string()),
+                            Err(error) => return Err(error),
+                        }
+                    }
+                    Some(&(page_offset, _)) => {
+                        match ac21_page_layout(page.compressed_size, 1, block_size) {
+                            Ok((total_size, factor, read_length)) => {
+                                let read = (|| -> Result<Vec<u8>, DxfError> {
+                                    self.stream.seek(SeekFrom::Start(
+                                        AC21_FILE_HEADER_SIZE + page_offset as u64,
+                                    ))?;
+                                    let mut bytes = vec![0u8; read_length];
+                                    let read = self.stream.read(&mut bytes)?;
+                                    bytes[read..].fill(0);
+                                    Ok(bytes)
+                                })();
+                                match read {
+                                    Ok(bytes) => PagePayload::Encoded {
+                                        bytes,
+                                        total_size,
+                                        factor,
+                                        compressed_size: page.compressed_size,
+                                        uncompressed_size: page.decompressed_size,
+                                    },
+                                    Err(error) if failsafe => {
+                                        PagePayload::Failed(error.to_string())
+                                    }
+                                    Err(error) => return Err(error),
+                                }
+                            }
+                            Err(error) if failsafe => PagePayload::Failed(error.to_string()),
+                            Err(error) => return Err(error),
+                        }
+                    }
+                    None if failsafe => PagePayload::Failed(format!(
+                        "page {} not found in page map",
+                        page.page_number
+                    )),
+                    None => {
+                        return Err(DxfError::Parse(format!(
+                            "Page {} not found in page map",
+                            page.page_number
+                        )))
+                    }
                 };
+                prepared.push(PreparedPage {
+                    number: page.page_number,
+                    fill_size,
+                    payload,
+                });
+            }
 
+            let decoded = parallel_map_ordered(prepared, |page| {
+                let data = match page.payload {
+                    PagePayload::Ready(bytes) => Ok(bytes),
+                    PagePayload::Encoded {
+                        bytes,
+                        total_size,
+                        factor,
+                        compressed_size,
+                        uncompressed_size,
+                    } => Ok(decode_ac21_page(
+                        &bytes,
+                        total_size,
+                        factor,
+                        block_size,
+                        compressed_size,
+                        uncompressed_size,
+                    )),
+                    PagePayload::Failed(error) => Err(error),
+                };
+                (page.number, page.fill_size, data)
+            });
+
+            for (page_number, fill_size, page_result) in decoded {
                 match page_result {
                     Ok(page_data) => result.extend_from_slice(&page_data),
-                    Err(e) if failsafe => {
+                    Err(error) => {
                         skipped_pages += 1;
                         self.notifications.notify(
                             NotificationType::Error,
                             format!(
                                 "Failsafe: skipped corrupt page {} in section '{}': {}",
-                                page.page_number, section_name, e
+                                page_number, section_name, error
                             ),
                         );
-                        // Fill with zeros to maintain expected offsets
-                        let fill_size = page.decompressed_size as usize;
-                        result.extend(std::iter::repeat(0u8).take(fill_size));
+                        result.resize(result.len() + fill_size, 0);
                     }
-                    Err(e) => return Err(e),
                 }
-            } else if failsafe {
-                skipped_pages += 1;
-                self.notifications.notify(
-                    NotificationType::Error,
-                    format!(
-                        "Failsafe: page {} not found in page map for section '{}'",
-                        page.page_number, section_name
-                    ),
-                );
-                // Fill with zeros to maintain expected offsets
-                let fill_size = page.decompressed_size as usize;
-                result.extend(std::iter::repeat(0u8).take(fill_size));
-            } else {
-                return Err(DxfError::Parse(
-                    format!("Page {} not found in page map", page.page_number)
-                ));
             }
         }
 
@@ -1847,6 +2003,15 @@ impl<R: Read + Seek> DwgReader<R> {
         // Truncate to the declared section size (last page may be padded)
         result.truncate(total_size);
 
+        if perf {
+            eprintln!(
+                "[perf] dwg-section name={} format=ac21 time={:.1}ms bytes={} pages={}",
+                section_name,
+                started.elapsed().as_secs_f64() * 1000.0,
+                result.len(),
+                section.pages.len(),
+            );
+        }
         Ok(result)
     }
 
@@ -1871,60 +2036,68 @@ impl<R: Read + Seek> DwgReader<R> {
         let max_page_size = section.decompressed_size as usize;
 
         let mut result = vec![0u8; total_size];
+        let batch_pages = rayon::current_num_threads().max(1).saturating_mul(2);
 
-        for page in &section.pages {
-            let page_number = page.page_number as i32;
+        for page_batch in section.pages.chunks(batch_pages) {
+            let mut prepared = Vec::with_capacity(page_batch.len());
+            for page in page_batch {
+                let page_number = page.page_number as i32;
 
-            let &(page_file_offset, _page_total_size) = info.page_records.get(&page_number)
-                .ok_or_else(|| DxfError::Parse(
-                    format!("AC18 page {} not found in page records for section '{}'",
-                            page_number, section_name)
-                ))?;
+                let &(page_file_offset, _page_total_size) = info.page_records.get(&page_number)
+                    .ok_or_else(|| DxfError::Parse(
+                        format!("AC18 page {} not found in page records for section '{}'",
+                                page_number, section_name)
+                    ))?;
 
-            self.stream.seek(SeekFrom::Start(page_file_offset as u64))?;
+                self.stream.seek(SeekFrom::Start(page_file_offset as u64))?;
 
-            // Read 32-byte data section header (XOR-masked)
-            let mut header = [0u8; 32];
-            self.stream.read_exact(&mut header)?;
+                // Read 32-byte data section header (XOR-masked)
+                let mut header = [0u8; 32];
+                self.stream.read_exact(&mut header)?;
 
-            // XOR unmask using the page's file position
-            apply_mask(&mut header, page_file_offset as u64);
+                // XOR unmask using the page's file position
+                apply_mask(&mut header, page_file_offset as u64);
 
-            // Parse header fields
-            let mut hcursor = Cursor::new(&header[..]);
-            let _section_type = hcursor.read_i32::<LittleEndian>()?;
-            let _section_id = hcursor.read_i32::<LittleEndian>()?;
-            let data_compressed_size = hcursor.read_i32::<LittleEndian>()?;
-            let _page_size = hcursor.read_i32::<LittleEndian>()?;
-            let data_offset = hcursor.read_i64::<LittleEndian>()?;
+                // Parse header fields
+                let mut hcursor = Cursor::new(&header[..]);
+                let _section_type = hcursor.read_i32::<LittleEndian>()?;
+                let _section_id = hcursor.read_i32::<LittleEndian>()?;
+                let data_compressed_size = hcursor.read_i32::<LittleEndian>()?;
+                let _page_size = hcursor.read_i32::<LittleEndian>()?;
+                let data_offset = hcursor.read_i64::<LittleEndian>()?;
 
-            // Read compressed data
-            if data_compressed_size <= 0 || data_compressed_size > 10_000_000 {
-                self.notifications.notify(
-                    NotificationType::Warning,
-                    format!(
-                        "AC18: Invalid compressed size {} for page {} in section '{}'",
-                        data_compressed_size, page_number, section_name
-                    ),
-                );
-                continue;
+                // Read compressed data
+                if data_compressed_size <= 0 || data_compressed_size > 10_000_000 {
+                    self.notifications.notify(
+                        NotificationType::Warning,
+                        format!(
+                            "AC18: Invalid compressed size {} for page {} in section '{}'",
+                            data_compressed_size, page_number, section_name
+                        ),
+                    );
+                    continue;
+                }
+                let mut compressed = vec![0u8; data_compressed_size as usize];
+                self.stream.read_exact(&mut compressed)?;
+
+                prepared.push((data_offset as usize, compressed));
             }
-            let mut compressed = vec![0u8; data_compressed_size as usize];
-            self.stream.read_exact(&mut compressed)?;
 
-            // Decompress
-            let decompressed = if is_compressed {
-                decompress_ac18(&compressed, max_page_size)
-            } else {
-                compressed
-            };
+            let decoded = parallel_map_ordered(prepared, |(dst_start, compressed)| {
+                let decompressed = if is_compressed {
+                    decompress_ac18(&compressed, max_page_size)
+                } else {
+                    compressed
+                };
+                (dst_start, decompressed)
+            });
 
-            // Copy to result at the correct offset within the section data
-            let dst_start = data_offset as usize;
-            if dst_start < total_size {
-                let copy_len = decompressed.len().min(total_size - dst_start);
-                result[dst_start..dst_start + copy_len]
-                    .copy_from_slice(&decompressed[..copy_len]);
+            for (dst_start, decompressed) in decoded {
+                if dst_start < total_size {
+                    let copy_len = decompressed.len().min(total_size - dst_start);
+                    result[dst_start..dst_start + copy_len]
+                        .copy_from_slice(&decompressed[..copy_len]);
+                }
             }
         }
 

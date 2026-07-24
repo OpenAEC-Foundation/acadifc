@@ -138,6 +138,8 @@ impl DwgFileHeaderWriterAC18 {
         compressed: bool,
         decomp_size: usize,
     ) -> Result<(), DxfError> {
+        let perf = std::env::var_os("OCS_PERF").is_some();
+        let started = std::time::Instant::now();
         let mut descriptor = DwgSectionDescriptor::new(name);
         descriptor.decompressed_size = decomp_size as u64;
         descriptor.compressed_size = data.len() as u64;
@@ -146,37 +148,60 @@ impl DwgFileHeaderWriterAC18 {
         self.next_section_id += 1;
 
         let n_full_pages = data.len() / decomp_size;
-        let mut offset: usize = 0;
-
-        // Write full pages
-        for _ in 0..n_full_pages {
-            self.create_local_section(
-                output,
-                &mut descriptor,
-                data,
-                decomp_size,
-                offset,
-                decomp_size,
-                compressed,
-            )?;
-            offset += decomp_size;
-        }
-
-        // Write remainder page (if non-empty and not all zeros)
+        let mut page_inputs: Vec<_> = (0..n_full_pages)
+            .map(|index| {
+                let offset = index * decomp_size;
+                (offset, decomp_size, &data[offset..offset + decomp_size])
+            })
+            .collect();
         let remainder = data.len() % decomp_size;
+        let offset = n_full_pages * decomp_size;
         if remainder > 0 && !is_all_zeros(&data[offset..]) {
-            self.create_local_section(
-                output,
-                &mut descriptor,
-                data,
-                decomp_size,
-                offset,
-                remainder,
-                compressed,
-            )?;
+            page_inputs.push((offset, remainder, &data[offset..]));
         }
 
+        use rayon::prelude::*;
+        let batch_pages = rayon::current_num_threads().max(1).saturating_mul(2);
+        for page_batch in page_inputs.chunks(batch_pages) {
+            let encoded: Vec<_> = page_batch
+                .par_iter()
+                .map(|&(offset, total_size, bytes)| {
+                    let mut padded = vec![0u8; decomp_size];
+                    padded[..total_size].copy_from_slice(bytes);
+                    let encoded = if compressed {
+                        let mut compressor = DwgLZ77AC18Compressor::new();
+                        compressor.compress(&padded, 0, decomp_size)
+                    } else {
+                        padded
+                    };
+                    (offset, total_size, encoded)
+                })
+                .collect();
+
+            for (offset, total_size, encoded) in encoded {
+                self.create_local_section(
+                    output,
+                    &mut descriptor,
+                    offset,
+                    total_size,
+                    compressed,
+                    encoded,
+                )?;
+            }
+        }
+
+        let pages = descriptor.page_count;
         self.descriptors.insert(name.to_string(), descriptor);
+        if perf {
+            eprintln!(
+                "[perf] dwg-write-section name={} format=ac18 time={:.1}ms bytes={} pages={} compressed={}",
+                name,
+                started.elapsed().as_secs_f64() * 1000.0,
+                data.len(),
+                pages,
+                compressed,
+            );
+        }
         Ok(())
     }
 
@@ -200,15 +225,11 @@ impl DwgFileHeaderWriterAC18 {
         &mut self,
         output: &mut W,
         descriptor: &mut DwgSectionDescriptor,
-        data: &[u8],
-        decomp_size: usize,
         offset: usize,
         total_size: usize,
         compressed: bool,
+        compressed_data: Vec<u8>,
     ) -> Result<(), DxfError> {
-        // Apply compression if requested, padding to decomp_size
-        let compressed_data = self.apply_compression(data, decomp_size, offset, total_size, compressed)?;
-
         // Write magic number alignment padding
         self.write_magic_number(output)?;
 
@@ -276,32 +297,6 @@ impl DwgFileHeaderWriterAC18 {
         self.local_section_maps.push(local_map);
 
         Ok(())
-    }
-
-    /// Compress data for a page, padding to the full decompressed page size.
-    fn apply_compression(
-        &mut self,
-        data: &[u8],
-        decomp_size: usize,
-        offset: usize,
-        total_size: usize,
-        compressed: bool,
-    ) -> Result<Vec<u8>, DxfError> {
-        if compressed {
-            // Pad data to decomp_size before compression
-            let mut padded = vec![0u8; decomp_size];
-            let copy_len = total_size.min(data.len() - offset);
-            padded[..copy_len].copy_from_slice(&data[offset..offset + copy_len]);
-
-            let compressed_out = self.compressor.compress(&padded, 0, decomp_size);
-            Ok(compressed_out)
-        } else {
-            // Copy data, padding to decomp_size
-            let mut result = vec![0u8; decomp_size];
-            let copy_len = total_size.min(data.len() - offset);
-            result[..copy_len].copy_from_slice(&data[offset..offset + copy_len]);
-            Ok(result)
-        }
     }
 
     /// Write the 32-byte data section page header.

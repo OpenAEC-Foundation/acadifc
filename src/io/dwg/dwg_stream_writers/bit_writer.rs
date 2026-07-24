@@ -134,6 +134,14 @@ impl DwgBitWriter {
         self.buffer.clone()
     }
 
+    /// Flush and move out the completed buffer without cloning it.
+    /// The writer remains valid and can be reset/reused by its owner.
+    pub fn take_bytes(&mut self) -> Vec<u8> {
+        self.flush();
+        self.write_pos = 0;
+        std::mem::take(&mut self.buffer)
+    }
+
     /// Flush the partial byte (pad with zeros).
     ///
     /// If the write position is within the existing buffer (after seeking),

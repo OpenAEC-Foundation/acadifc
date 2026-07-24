@@ -194,20 +194,29 @@ impl DwgDocumentBuilder {
             BlockControl(u64, u64),
         }
         let mut parsed_entries: Vec<ParsedEntry> = Vec::new();
+        use rayon::prelude::*;
+        let record_catalog: Vec<(u64, usize, i16)> = handles
+            .par_iter()
+            .filter_map(|&handle| {
+                let offset = self.obj_reader.offset_for(handle)?;
+                if offset < 0 {
+                    return None;
+                }
+                let raw = self.obj_reader.type_code_at(offset as usize).ok()?;
+                Some((
+                    handle,
+                    offset as usize,
+                    Self::resolve_type_code(raw, &class_map),
+                ))
+            })
+            .collect();
 
-        for &handle in &handles {
-            let offset = match self.obj_reader.offset_for(handle) {
-                Some(o) if o >= 0 => o,
-                _ => continue,
-            };
-            let (raw_type_code, mut reader) = match self.obj_reader.read_record_at(offset as usize)
-            {
-                Ok(r) => r,
-                Err(_) => continue,
-            };
-            let type_code = Self::resolve_type_code(raw_type_code, &class_map);
-
+        for &(handle, offset, type_code) in &record_catalog {
             if is_table_type(type_code) {
+                let (_, mut reader) = match self.obj_reader.read_record_at(offset) {
+                    Ok(record) => record,
+                    Err(_) => continue,
+                };
                 // Wrap in catch_unwind to survive corrupt/misaligned records
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let non_entity = self
@@ -830,20 +839,16 @@ impl DwgDocumentBuilder {
         };
         // Pending attribute entities keyed by owner (INSERT) handle.
         let mut pending_attributes: HashMap<u64, Vec<AttributeEntity>> = HashMap::new();
-        for &handle in &handles {
-            let offset = match self.obj_reader.offset_for(handle) {
-                Some(o) if o >= 0 => o,
-                _ => {
-                    continue;
-                }
-            };
-            let (raw_type_code, reader) = match self.obj_reader.read_record_at(offset as usize) {
+        for &(handle, offset, type_code) in &record_catalog {
+            if is_table_type(type_code) {
+                continue;
+            }
+            let (_, reader) = match self.obj_reader.read_record_at(offset) {
                 Ok(r) => r,
                 Err(_e) => {
                     continue;
                 }
             };
-            let type_code = Self::resolve_type_code(raw_type_code, &class_map);
 
             // Wrap per-object processing in catch_unwind to survive
             // corrupt or misaligned records without crashing the entire read.

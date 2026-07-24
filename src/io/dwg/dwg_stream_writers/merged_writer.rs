@@ -387,11 +387,11 @@ impl DwgMergedWriter {
         // Append handle stream
         self.handle.write_spear_shift();
         self.handle_start_bits = self.main.position_in_bits();
-        let handle_bytes = self.handle.to_bytes();
-        self.main.write_bytes(&handle_bytes);
+        self.handle.flush();
+        self.main.write_bytes(self.handle.buffer());
         self.main.write_spear_shift();
 
-        self.main.to_bytes()
+        self.main.take_bytes()
     }
 
     /// Three-stream merge (R2007+):
@@ -454,8 +454,8 @@ impl DwgMergedWriter {
         if text_size_bits > 0 {
             // Append text stream bytes (byte-aligned) after main data
             self.text.write_spear_shift();
-            let text_bytes = self.text.to_bytes();
-            self.main.write_bytes(&text_bytes);
+            self.text.flush();
+            self.main.write_bytes(self.text.buffer());
 
             // Byte-align after text bytes — ensures the buffer is large
             // enough before we seek back to write flag words.
@@ -481,13 +481,13 @@ impl DwgMergedWriter {
         self.handle_start_bits = self.main.position_in_bits();
 
         // Append handle bytes.
-        let handle_bytes = self.handle.to_bytes();
-        self.main.write_bytes(&handle_bytes);
+        self.handle.flush();
+        self.main.write_bytes(self.handle.buffer());
 
         // Final byte-alignment for CRC computation.
         self.main.write_spear_shift();
 
-        self.main.to_bytes()
+        self.main.take_bytes()
     }
 
     /// Get the bit position where the handle section starts in the merged data.

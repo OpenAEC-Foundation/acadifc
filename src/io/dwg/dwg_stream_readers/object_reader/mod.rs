@@ -22,6 +22,7 @@ use crate::io::dwg::dwg_stream_readers::merged_reader::DwgMergedReader;
 use crate::io::dwg::dwg_version::DwgVersion;
 use crate::types::{Color, DxfVersion, Transparency};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Maximum number of items in any array read from the stream.
 /// Prevents infinite loops when reading corrupt data.
@@ -150,6 +151,34 @@ impl DwgObjectReader {
         })
     }
 
+    /// Read only the type prefix of an object record.
+    /// Pass-1 cataloguing needs no payload, text, or handle cursor; avoiding a
+    /// full record allocation here removes one complete copy of every entity.
+    pub fn type_code_at(&self, offset: usize) -> Result<i16> {
+        if offset >= self.data.len() {
+            return Err(DxfError::Parse(format!(
+                "Object offset {} out of range (data len {})",
+                offset,
+                self.data.len()
+            )));
+        }
+        let (size, ms_len) = read_modular_short(&self.data[offset..]);
+        let mut pos = offset + ms_len;
+        if self.version.r2010_plus() {
+            let (_, mc_len) = read_modular_char(&self.data[pos..]);
+            pos += mc_len;
+        }
+        if size == 0 || pos >= self.data.len() {
+            return Err(DxfError::Parse(format!(
+                "Object record at {} has no type prefix",
+                offset
+            )));
+        }
+        let prefix_len = size.min(32).min(self.data.len() - pos);
+        Ok(PrefixBitReader::new(&self.data[pos..pos + prefix_len])
+            .read_object_type(self.dxf_version))
+    }
+
     /// Read a single object record at the given byte offset.
     ///
     /// Returns the type code and a `DwgMergedReader` positioned at the
@@ -192,7 +221,7 @@ impl DwgObjectReader {
                 self.data.len()
             )));
         }
-        let merged_data = self.data[pos..pos + size].to_vec();
+        let merged_data: Arc<[u8]> = Arc::from(&self.data[pos..pos + size]);
 
         // 4. For R2007+ (ThreeStream): read type_code from a temp reader,
         //    then manually construct the three sub-readers with correct
@@ -209,8 +238,8 @@ impl DwgObjectReader {
             let dwg = DwgVersion::from_dxf_version(self.dxf_version).unwrap_or(DwgVersion::AC15);
 
             // Read type_code from temp reader
-            let mut temp = crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::new(
-                merged_data.clone(),
+            let mut temp = crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::from_shared(
+                Arc::clone(&merged_data),
                 dwg,
                 self.dxf_version,
             );
@@ -240,16 +269,16 @@ impl DwgObjectReader {
             }
 
             // Main reader: starts at data_start_bits (after type_code [+ RL])
-            let mut main_reader = crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::new(
-                merged_data.clone(),
+            let mut main_reader = crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::from_shared(
+                Arc::clone(&merged_data),
                 dwg,
                 self.dxf_version,
             );
             main_reader.set_position_in_bits(data_start_bits);
 
             // Text reader: positioned by flag at flag_position
-            let mut text_reader = crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::new(
-                merged_data.clone(),
+            let mut text_reader = crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::from_shared(
+                Arc::clone(&merged_data),
                 dwg,
                 self.dxf_version,
             );
@@ -257,8 +286,8 @@ impl DwgObjectReader {
 
             // Handle reader: starts at bit position handle_start (NOT byte-aligned).
             let mut handle_reader =
-                crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::new(
-                    merged_data.clone(),
+                crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::from_shared(
+                    Arc::clone(&merged_data),
                     dwg,
                     self.dxf_version,
                 );
@@ -292,8 +321,8 @@ impl DwgObjectReader {
         let handle_start_bits = if self.version.r2000_plus() {
             // Read BS + RL from a disposable temp reader to discover
             // the split point without consuming from the final reader.
-            let mut temp = crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::new(
-                merged_data.clone(),
+            let mut temp = crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::from_shared(
+                Arc::clone(&merged_data),
                 dwg,
                 self.dxf_version,
             );
@@ -305,14 +334,14 @@ impl DwgObjectReader {
         };
 
         // Create main reader (reads from bit 0)
-        let main_reader = crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::new(
-            merged_data.clone(),
+        let main_reader = crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::from_shared(
+            Arc::clone(&merged_data),
             dwg,
             self.dxf_version,
         );
 
         // Create handle reader positioned at handle_start_bits
-        let mut handle_reader = crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::new(
+        let mut handle_reader = crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader::from_shared(
             merged_data,
             dwg,
             self.dxf_version,
@@ -784,6 +813,69 @@ impl DwgObjectReader {
 // ════════════════════════════════════════════════════════════════════════════
 //  Modular encoding readers (byte-level, for record framing)
 // ════════════════════════════════════════════════════════════════════════════
+
+/// Allocation-free reader for the few leading bits that encode an object type.
+/// A full `DwgBitReader` owns its backing bytes, which is useful for persistent
+/// merged streams but wasteful for the pass-1 type catalog.
+struct PrefixBitReader<'a> {
+    data: &'a [u8],
+    bit: usize,
+}
+
+impl<'a> PrefixBitReader<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self { data, bit: 0 }
+    }
+
+    fn read_bit(&mut self) -> u8 {
+        let shift = 7 - self.bit % 8;
+        let value = (self
+            .data
+            .get(self.bit / 8)
+            .copied()
+            .unwrap_or(0)
+            >> shift)
+            & 1;
+        self.bit += 1;
+        value
+    }
+
+    fn read_2bits(&mut self) -> u8 {
+        (self.read_bit() << 1) | self.read_bit()
+    }
+
+    fn read_byte(&mut self) -> u8 {
+        let mut value = 0u8;
+        for _ in 0..8 {
+            value = (value << 1) | self.read_bit();
+        }
+        value
+    }
+
+    fn read_raw_short(&mut self) -> i16 {
+        i16::from_le_bytes([self.read_byte(), self.read_byte()])
+    }
+
+    fn read_object_type(&mut self, version: DxfVersion) -> i16 {
+        let pair = self.read_2bits();
+        if version >= DxfVersion::AC1024 {
+            match pair {
+                0 => self.read_byte() as i16,
+                1 => 0x1F0 + self.read_byte() as i16,
+                2 | 3 => self.read_raw_short(),
+                _ => unreachable!(),
+            }
+        } else {
+            match pair {
+                0 => self.read_raw_short(),
+                1 => self.read_byte() as i16,
+                2 => 0,
+                3 => 256,
+                _ => unreachable!(),
+            }
+        }
+    }
+}
 
 /// Read a ModularShort (MS) from a byte slice.
 /// Returns (value, bytes_consumed).
