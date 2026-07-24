@@ -3598,12 +3598,17 @@ impl<'a> SectionReader<'a> {
                     }
                 }
                 63 => {
-                    if let Some(ci) = pair.as_i16() {
+                    // Background fill colour (ACI). Parse the raw value: code 63
+                    // is not classified as an integer group code, so as_i16()
+                    // returns None. A following 421 (true colour) overrides.
+                    if let Ok(ci) = pair.value_string.trim().parse::<i16>() {
                         mtext.background_color = Color::from_index(ci);
                     }
                 }
                 421 => {
-                    if let Some(v) = pair.as_i32() {
+                    // Background fill true colour (24-bit RGB); same typing
+                    // caveat as 63 — parse the raw value directly.
+                    if let Ok(v) = pair.value_string.trim().parse::<i32>() {
                         mtext.background_color = Color::from_true_color_value(v);
                     }
                 }
