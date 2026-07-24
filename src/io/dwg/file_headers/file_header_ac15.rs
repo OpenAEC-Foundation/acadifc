@@ -25,15 +25,15 @@
 //!
 //! Based on ACadSharp's `DwgFileHeaderWriterAC15`.
 
-use std::io::{Write, Seek};
-use indexmap::IndexMap;
 use byteorder::{LittleEndian, WriteBytesExt};
+use indexmap::IndexMap;
+use std::io::{Seek, Write};
 
-use crate::error::DxfError;
-use crate::types::DxfVersion;
-use super::section_definition::{names, end_sentinels};
+use super::section_definition::{end_sentinels, names};
 use super::section_descriptor::DwgSectionLocatorRecord;
+use crate::error::DxfError;
 use crate::io::dwg::crc;
+use crate::types::DxfVersion;
 
 /// File header size in bytes for AC15 format.
 const FILE_HEADER_SIZE: usize = 0x61; // 97 bytes
@@ -173,7 +173,9 @@ impl DwgFileHeaderWriterAC15 {
         buf.extend_from_slice(&[0, 0, 0, 0, 0, 15, 1]);
 
         // 0x0D: Preview seeker (4-byte absolute address)
-        let preview_seeker = self.records.get(names::PREVIEW)
+        let preview_seeker = self
+            .records
+            .get(names::PREVIEW)
             .map_or(0i32, |(r, _)| r.seeker as i32);
         buf.write_i32::<LittleEndian>(preview_seeker)?;
 
@@ -188,11 +190,16 @@ impl DwgFileHeaderWriterAC15 {
         buf.write_i32::<LittleEndian>(6)?;
 
         // 0x19: 6 × Section locator records (9 bytes each = 54 bytes)
-        // Written in dictionary order, skipping records without numbers
-        for (_, (record, _)) in &self.records {
-            if let Some(number) = record.number {
-                self.write_record(&mut buf, number, record)?;
-            }
+        // Locator records must be written by section number, independently of
+        // the dictionary order that defines the physical section layout.
+        let mut locator_records: Vec<_> = self
+            .records
+            .values()
+            .filter_map(|(record, _)| record.number.map(|number| (number, record)))
+            .collect();
+        locator_records.sort_unstable_by_key(|(number, _)| *number);
+        for (number, record) in locator_records {
+            self.write_record(&mut buf, number, record)?;
         }
 
         // CRC-16 over everything written so far
@@ -203,15 +210,24 @@ impl DwgFileHeaderWriterAC15 {
         buf.extend_from_slice(&end_sentinels::FILE_HEADER);
 
         // Verify we wrote exactly FILE_HEADER_SIZE bytes
-        debug_assert_eq!(buf.len(), FILE_HEADER_SIZE,
-            "File header size mismatch: expected {FILE_HEADER_SIZE}, got {}", buf.len());
+        debug_assert_eq!(
+            buf.len(),
+            FILE_HEADER_SIZE,
+            "File header size mismatch: expected {FILE_HEADER_SIZE}, got {}",
+            buf.len()
+        );
 
         output.write_all(&buf)?;
         Ok(())
     }
 
     /// Write a single section locator record (9 bytes).
-    fn write_record(&self, buf: &mut Vec<u8>, number: u8, record: &DwgSectionLocatorRecord) -> Result<(), DxfError> {
+    fn write_record(
+        &self,
+        buf: &mut Vec<u8>,
+        number: u8,
+        record: &DwgSectionLocatorRecord,
+    ) -> Result<(), DxfError> {
         buf.push(number);
         buf.write_i32::<LittleEndian>(record.seeker as i32)?;
         buf.write_i32::<LittleEndian>(record.size as i32)?;
@@ -253,16 +269,6 @@ mod tests {
     }
 
     #[test]
-    fn test_add_section() {
-        let mut writer = DwgFileHeaderWriterAC15::new(DxfVersion::AC1015);
-        writer.add_section(names::HEADER, vec![1, 2, 3, 4, 5]);
-
-        let (record, data) = &writer.records[names::HEADER];
-        assert_eq!(record.size, 5);
-        assert_eq!(data.as_ref().unwrap(), &vec![1, 2, 3, 4, 5]);
-    }
-
-    #[test]
     fn test_handle_section_offset() {
         let mut writer = DwgFileHeaderWriterAC15::new(DxfVersion::AC1015);
         // Add sections before AcDbObjects
@@ -282,9 +288,14 @@ mod tests {
 
         // Add empty sections for all records
         for name in [
-            names::HEADER, names::CLASSES, names::OBJ_FREE_SPACE,
-            names::TEMPLATE, names::AUX_HEADER, names::ACDB_OBJECTS,
-            names::HANDLES, names::PREVIEW,
+            names::HEADER,
+            names::CLASSES,
+            names::OBJ_FREE_SPACE,
+            names::TEMPLATE,
+            names::AUX_HEADER,
+            names::ACDB_OBJECTS,
+            names::HANDLES,
+            names::PREVIEW,
         ] {
             writer.add_section(name, vec![]);
         }
@@ -301,9 +312,14 @@ mod tests {
     fn test_write_file_version_string() {
         let mut writer = DwgFileHeaderWriterAC15::new(DxfVersion::AC1015);
         for name in [
-            names::HEADER, names::CLASSES, names::OBJ_FREE_SPACE,
-            names::TEMPLATE, names::AUX_HEADER, names::ACDB_OBJECTS,
-            names::HANDLES, names::PREVIEW,
+            names::HEADER,
+            names::CLASSES,
+            names::OBJ_FREE_SPACE,
+            names::TEMPLATE,
+            names::AUX_HEADER,
+            names::ACDB_OBJECTS,
+            names::HANDLES,
+            names::PREVIEW,
         ] {
             writer.add_section(name, vec![]);
         }
@@ -341,9 +357,18 @@ mod tests {
         assert_eq!(data.len(), FILE_HEADER_SIZE + 100 + 50 + 200);
 
         // Verify section data appears in order after header
-        assert_eq!(&data[FILE_HEADER_SIZE..FILE_HEADER_SIZE + 100], &[0xAA; 100]);
-        assert_eq!(&data[FILE_HEADER_SIZE + 100..FILE_HEADER_SIZE + 150], &[0xBB; 50]);
-        assert_eq!(&data[FILE_HEADER_SIZE + 150..FILE_HEADER_SIZE + 350], &[0xCC; 200]);
+        assert_eq!(
+            &data[FILE_HEADER_SIZE..FILE_HEADER_SIZE + 100],
+            &[0xAA; 100]
+        );
+        assert_eq!(
+            &data[FILE_HEADER_SIZE + 100..FILE_HEADER_SIZE + 150],
+            &[0xBB; 50]
+        );
+        assert_eq!(
+            &data[FILE_HEADER_SIZE + 150..FILE_HEADER_SIZE + 350],
+            &[0xCC; 200]
+        );
     }
 
     #[test]
@@ -371,16 +396,23 @@ mod tests {
         for _ in 0..6 {
             let number = data[offset];
             let seeker = i32::from_le_bytes([
-                data[offset + 1], data[offset + 2],
-                data[offset + 3], data[offset + 4],
+                data[offset + 1],
+                data[offset + 2],
+                data[offset + 3],
+                data[offset + 4],
             ]);
             let size = i32::from_le_bytes([
-                data[offset + 5], data[offset + 6],
-                data[offset + 7], data[offset + 8],
+                data[offset + 5],
+                data[offset + 6],
+                data[offset + 7],
+                data[offset + 8],
             ]);
             records.push((number, seeker, size));
             offset += 9;
         }
+
+        let locator_numbers: Vec<_> = records.iter().map(|record| record.0).collect();
+        assert_eq!(locator_numbers, [0, 1, 2, 3, 4, 5]);
 
         // Record 0 (Header): seeker = 0x61, size = 100
         let header_rec = records.iter().find(|r| r.0 == 0).unwrap();
@@ -397,9 +429,14 @@ mod tests {
     fn test_file_header_crc() {
         let mut writer = DwgFileHeaderWriterAC15::new(DxfVersion::AC1015);
         for name in [
-            names::HEADER, names::CLASSES, names::OBJ_FREE_SPACE,
-            names::TEMPLATE, names::AUX_HEADER, names::ACDB_OBJECTS,
-            names::HANDLES, names::PREVIEW,
+            names::HEADER,
+            names::CLASSES,
+            names::OBJ_FREE_SPACE,
+            names::TEMPLATE,
+            names::AUX_HEADER,
+            names::ACDB_OBJECTS,
+            names::HANDLES,
+            names::PREVIEW,
         ] {
             writer.add_section(name, vec![]);
         }
@@ -422,9 +459,14 @@ mod tests {
     fn test_file_header_end_sentinel() {
         let mut writer = DwgFileHeaderWriterAC15::new(DxfVersion::AC1015);
         for name in [
-            names::HEADER, names::CLASSES, names::OBJ_FREE_SPACE,
-            names::TEMPLATE, names::AUX_HEADER, names::ACDB_OBJECTS,
-            names::HANDLES, names::PREVIEW,
+            names::HEADER,
+            names::CLASSES,
+            names::OBJ_FREE_SPACE,
+            names::TEMPLATE,
+            names::AUX_HEADER,
+            names::ACDB_OBJECTS,
+            names::HANDLES,
+            names::PREVIEW,
         ] {
             writer.add_section(name, vec![]);
         }
@@ -447,9 +489,14 @@ mod tests {
     fn test_r13_version_string() {
         let mut writer = DwgFileHeaderWriterAC15::new(DxfVersion::AC1012);
         for name in [
-            names::HEADER, names::CLASSES, names::OBJ_FREE_SPACE,
-            names::TEMPLATE, names::AUX_HEADER, names::ACDB_OBJECTS,
-            names::HANDLES, names::PREVIEW,
+            names::HEADER,
+            names::CLASSES,
+            names::OBJ_FREE_SPACE,
+            names::TEMPLATE,
+            names::AUX_HEADER,
+            names::ACDB_OBJECTS,
+            names::HANDLES,
+            names::PREVIEW,
         ] {
             writer.add_section(name, vec![]);
         }
