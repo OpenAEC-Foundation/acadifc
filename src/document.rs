@@ -2280,26 +2280,12 @@ impl CadDocument {
         let model_handle = self.header.model_space_block_handle;
         let paper_handle = self.header.paper_space_block_handle;
 
-        // Model-space entities (document.entities) — use model space as default owner
-        for entity in self.entities.iter_mut() {
-            let entity = Arc::make_mut(entity);
-            let common = match entity {
-                EntityType::Dimension(d) => {
-                    let base = d.base_mut();
-                    &mut base.common
-                }
-                _ => {
-                    // For all other entity types, use as_entity_mut().set_handle pattern
-                    // but we need &mut EntityCommon directly — use a helper
-                    get_common_mut(entity)
-                }
-            };
-            if common.owner_handle.is_null() {
-                common.owner_handle = model_handle;
-            }
-        }
-
-        // Block record entities — set owner handle on entities looked up from entity map
+        // Block record entities — set owner handle on entities looked up from
+        // the entity map. This MUST run before the model-space default below:
+        // an R12 DXF carries no per-entity owner (code 330), so block content
+        // starts null-owner; if the model-space default claimed it first, block
+        // definitions would leak into model space and their block-local
+        // geometry would pile up at the origin.
         for br in self.block_records.iter() {
             let br_handle = br.handle;
             for eh in &br.entity_handles {
@@ -2316,6 +2302,26 @@ impl CadDocument {
                         common.owner_handle = br_handle;
                     }
                 }
+            }
+        }
+
+        // Model-space entities (document.entities) — use model space as the
+        // default owner for anything still unowned after block assignment.
+        for entity in self.entities.iter_mut() {
+            let entity = Arc::make_mut(entity);
+            let common = match entity {
+                EntityType::Dimension(d) => {
+                    let base = d.base_mut();
+                    &mut base.common
+                }
+                _ => {
+                    // For all other entity types, use as_entity_mut().set_handle pattern
+                    // but we need &mut EntityCommon directly — use a helper
+                    get_common_mut(entity)
+                }
+            };
+            if common.owner_handle.is_null() {
+                common.owner_handle = model_handle;
             }
         }
 
