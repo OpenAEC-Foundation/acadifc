@@ -3013,6 +3013,12 @@ impl<'a> SectionReader<'a> {
             vflags: i16,
             start_width: f64,
             end_width: f64,
+            // Whether codes 40/41 were actually present on this VERTEX. An
+            // absent width inherits the POLYLINE default; an explicit 0 means a
+            // genuinely zero-width segment. Collapsing both to 0.0 loses that
+            // distinction and makes tapered polylines render as constant width.
+            has_start_width: bool,
+            has_end_width: bool,
             bulge: f64,
             tangent: f64,
             handle: u64,
@@ -3043,6 +3049,8 @@ impl<'a> SectionReader<'a> {
                     let mut vflags: i16 = 0;
                     let mut sw = 0.0f64;
                     let mut ew = 0.0f64;
+                    let mut has_sw = false;
+                    let mut has_ew = false;
                     let mut bulge = 0.0f64;
                     let mut tangent = 0.0f64;
                     let mut vi1: i16 = 0;
@@ -3063,8 +3071,8 @@ impl<'a> SectionReader<'a> {
                             10 => { if let Some(v) = vpair.as_double() { loc.x = v; } }
                             20 => { if let Some(v) = vpair.as_double() { loc.y = v; } }
                             30 => { if let Some(v) = vpair.as_double() { loc.z = v; } }
-                            40 => { if let Some(v) = vpair.as_double() { sw = v; } }
-                            41 => { if let Some(v) = vpair.as_double() { ew = v; } }
+                            40 => { if let Some(v) = vpair.as_double() { sw = v; has_sw = true; } }
+                            41 => { if let Some(v) = vpair.as_double() { ew = v; has_ew = true; } }
                             42 => { if let Some(v) = vpair.as_double() { bulge = v; } }
                             50 => { if let Some(v) = vpair.as_double() { tangent = v; } }
                             62 => { if let Some(ci) = vpair.as_i16() { vcolor = Some(Color::from_index(ci)); } }
@@ -3113,6 +3121,8 @@ impl<'a> SectionReader<'a> {
                             vflags,
                             start_width: sw,
                             end_width: ew,
+                            has_start_width: has_sw,
+                            has_end_width: has_ew,
                             bulge,
                             tangent,
                             handle: vhandle,
@@ -3261,23 +3271,38 @@ impl<'a> SectionReader<'a> {
             pl.common = common;
             pl.flags = PolylineFlags::from_bits(flags as u16);
             pl.smooth_surface = SmoothSurfaceType::from(smooth);
-            pl.start_width = def_start_width;
-            pl.end_width = def_end_width;
             pl.thickness = thickness;
             pl.elevation = elevation;
             pl.normal = normal_v;
+            // A VERTEX without codes 40/41 inherits the POLYLINE default width;
+            // one that carries them (even as 0) keeps its own value. Bake the
+            // effective width into each vertex so tapered polylines survive —
+            // this mirrors how a heavy polyline down-saves to LWPOLYLINE.
             pl.vertices = geom_vertices
                 .iter()
                 .map(|rv| {
                     let mut v = Vertex2D::new(rv.loc);
                     v.flags = VertexFlags::from_bits(rv.vflags as u8);
-                    v.start_width = rv.start_width;
-                    v.end_width = rv.end_width;
+                    v.start_width = if rv.has_start_width { rv.start_width } else { def_start_width };
+                    v.end_width = if rv.has_end_width { rv.end_width } else { def_end_width };
                     v.bulge = rv.bulge;
                     v.curve_tangent = rv.tangent;
                     v
                 })
                 .collect();
+            // When any vertex specifies its own width, the widths now live
+            // per-vertex; keeping a non-zero polyline default would let a
+            // renderer bleed it onto the intentionally zero-width segments.
+            let per_vertex_widths = geom_vertices
+                .iter()
+                .any(|rv| rv.has_start_width || rv.has_end_width);
+            if per_vertex_widths {
+                pl.start_width = 0.0;
+                pl.end_width = 0.0;
+            } else {
+                pl.start_width = def_start_width;
+                pl.end_width = def_end_width;
+            }
             Ok(Some(EntityType::Polyline2D(pl)))
         }
     }
