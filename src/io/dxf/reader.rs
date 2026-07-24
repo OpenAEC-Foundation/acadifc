@@ -212,6 +212,9 @@ impl DxfReader {
         // stale round-trip EED left by an earlier edit.
         if document.version < crate::types::DxfVersion::AC1018 {
             crate::io::dwg::dwg_reader::recover_roundtrip_gradients(&mut document);
+            // Pre-R2004 also stores an MTEXT background fill as round-trip EED
+            // rather than the native codes; rebuild it (dimension text fills).
+            crate::io::dwg::dwg_reader::recover_mtext_bg_roundtrip(&mut document);
         }
 
         Ok(document)

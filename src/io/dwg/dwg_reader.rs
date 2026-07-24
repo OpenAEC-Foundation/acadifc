@@ -842,6 +842,9 @@ impl<R: Read + Seek> DwgReader<R> {
             .unwrap_or(false);
         if pre_r2004 {
             recover_roundtrip_gradients(&mut document);
+            // Pre-R2004 stores an MTEXT background fill as round-trip EED
+            // instead of the native codes (dimension text fills, etc.).
+            recover_mtext_bg_roundtrip(&mut document);
         }
 
         // Transfer reader notifications to the document so callers can
@@ -2283,6 +2286,89 @@ pub(crate) fn recover_roundtrip_gradients(document: &mut crate::document::CadDoc
                 },
             ];
             h.gradient_color.name = name;
+        }
+    }
+}
+
+/// Recover an MTEXT background fill that a pre-R2004 (R2000/R14) save stored as
+/// round-trip EED (`ACAD_MTEXT_BBRT` … `ACAD_MTEXT_BERT`) instead of the native
+/// codes (90 flags / 63|421 colour / 45 scale / 441 transparency), which those
+/// versions predate. AutoCAD/ODA render the fill from this metadata; without it
+/// a down-saved dimension text (or any MTEXT) shows no background. Applied only
+/// when the entity has no native fill flag. The colour is stored with the
+/// AutoCAD "method byte" (0xC2 = RGB, 0xC3 = ACI, 0xC0/0xC1 = ByLayer/ByBlock).
+pub(crate) fn recover_mtext_bg_roundtrip(document: &mut crate::document::CadDocument) {
+    use crate::entities::EntityType;
+    use crate::types::{Color, Handle};
+    use crate::xdata::XDataValue;
+
+    fn color_from_method(v: i32) -> Color {
+        let u = v as u32;
+        match (u >> 24) & 0xFF {
+            0xC0 => Color::ByLayer,
+            0xC1 => Color::ByBlock,
+            0xC3 => Color::from_index((u & 0xFF) as i16),
+            _ => Color::Rgb {
+                r: ((u >> 16) & 0xFF) as u8,
+                g: ((u >> 8) & 0xFF) as u8,
+                b: (u & 0xFF) as u8,
+            },
+        }
+    }
+
+    let mut recovered: Vec<(Handle, i32, f64, Color, i32)> = Vec::new();
+    for e in document.entities() {
+        let EntityType::MText(m) = e else { continue };
+        if m.background_fill_flags != 0 {
+            continue; // native fill present — nothing to recover
+        }
+        let Some(rec) = m
+            .common
+            .extended_data
+            .records()
+            .iter()
+            .find(|r| r.application_name.eq_ignore_ascii_case("ACAD"))
+        else {
+            continue;
+        };
+        let vals = &rec.values;
+        let Some(begin) = vals
+            .iter()
+            .position(|v| matches!(v, XDataValue::String(s) if s == "ACAD_MTEXT_BBRT"))
+        else {
+            continue;
+        };
+        // Walk the BBRT…BERT block as (Integer16 code, value) pairs.
+        let (mut flags, mut scale, mut color, mut transp) =
+            (0i32, 1.0f64, Color::ByLayer, 0i32);
+        let mut i = begin + 1;
+        while i + 1 < vals.len() {
+            if matches!(&vals[i], XDataValue::String(s) if s == "ACAD_MTEXT_BERT") {
+                break;
+            }
+            if let XDataValue::Integer16(code) = vals[i] {
+                match (code, &vals[i + 1]) {
+                    (91, XDataValue::Integer32(v)) => flags = *v,
+                    (46, XDataValue::Real(v)) => scale = *v,
+                    (64, XDataValue::Integer32(v)) => color = color_from_method(*v),
+                    (442, XDataValue::Integer32(v)) => transp = *v,
+                    _ => {}
+                }
+                i += 2;
+            } else {
+                i += 1;
+            }
+        }
+        if flags != 0 {
+            recovered.push((m.common.handle, flags, scale, color, transp));
+        }
+    }
+    for (h, flags, scale, color, transp) in recovered {
+        if let Some(EntityType::MText(m)) = document.get_entity_mut(h) {
+            m.background_fill_flags = flags;
+            m.background_scale = scale;
+            m.background_color = color;
+            m.background_transparency = transp;
         }
     }
 }
