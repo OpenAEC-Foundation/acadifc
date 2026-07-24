@@ -204,6 +204,16 @@ impl DxfReader {
         // Post-read resolution: assign owner handles and update next_handle
         document.resolve_references();
 
+        // Pre-R2004 (R2000/R14) down-saved gradient hatches keep their gradient
+        // in the ACAD round-trip metadata (GradientColor1/2ACI EED + an
+        // ACAD_XREC_ROUNDTRIP XRecord) rather than a native gradient block, so
+        // they read back as flat solid fills. Rebuild them — gated to pre-R2004
+        // so a native R2004+ gradient (read directly) always wins over any
+        // stale round-trip EED left by an earlier edit.
+        if document.version < crate::types::DxfVersion::AC1018 {
+            crate::io::dwg::dwg_reader::recover_roundtrip_gradients(&mut document);
+        }
+
         Ok(document)
     }
     

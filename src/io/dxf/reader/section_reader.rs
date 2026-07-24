@@ -6848,6 +6848,23 @@ impl<'a> SectionReader<'a> {
                 }
                 102 => {} // Skip extension dictionaries / reactors groups
                 _ => {
+                    // Binary payloads (1004 XDATA-style, 310-319) also flow into
+                    // raw_data, decoded from hex, so consumers that expect the
+                    // DWG-style raw byte blob (e.g. down-saved gradient recovery)
+                    // can read it.
+                    if pair.code == 1004 || (310..=319).contains(&pair.code) {
+                        let hex = pair.value_string.trim().as_bytes();
+                        let mut i = 0;
+                        while i + 1 < hex.len() {
+                            if let (Some(hi), Some(lo)) = (
+                                (hex[i] as char).to_digit(16),
+                                (hex[i + 1] as char).to_digit(16),
+                            ) {
+                                xr.raw_data.push((hi * 16 + lo) as u8);
+                            }
+                            i += 2;
+                        }
+                    }
                     // All other codes are data entries — parse with proper type
                     let value = match XRecordValueType::from_code(pair.code) {
                         XRecordValueType::Double => {

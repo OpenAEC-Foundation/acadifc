@@ -2165,7 +2165,7 @@ mod section_name_tests {
 /// `ACAD_XREC_ROUNDTRIP` XRecord under the hatch's extension dictionary. When a
 /// solid hatch carries this metadata but no live gradient block, rebuild
 /// `gradient_color` so it renders as the intended gradient.
-fn recover_roundtrip_gradients(document: &mut crate::document::CadDocument) {
+pub(crate) fn recover_roundtrip_gradients(document: &mut crate::document::CadDocument) {
     use crate::entities::EntityType;
     use crate::objects::ObjectType;
     use crate::types::{Color, Handle};
@@ -2229,6 +2229,32 @@ fn recover_roundtrip_gradients(document: &mut crate::document::CadDocument) {
                             if up.contains(cand) {
                                 name = (*cand).to_string();
                                 break;
+                            }
+                        }
+                        // A DXF-sourced round-trip XRecord encodes the gradient
+                        // type as a number in the 1004 binary (first LE int32 =
+                        // 123 + gradient index in AutoCAD's dropdown order),
+                        // not as an ASCII name; decode it when no name matched.
+                        if name.is_empty() && xr.raw_data.len() >= 4 {
+                            const BY_INDEX: &[&str] = &[
+                                "LINEAR",
+                                "CYLINDER",
+                                "INVCYLINDER",
+                                "SPHERICAL",
+                                "HEMISPHERICAL",
+                                "CURVED",
+                                "INVSPHERICAL",
+                                "INVHEMISPHERICAL",
+                                "INVCURVED",
+                            ];
+                            let v = u32::from_le_bytes([
+                                xr.raw_data[0],
+                                xr.raw_data[1],
+                                xr.raw_data[2],
+                                xr.raw_data[3],
+                            ]);
+                            if (123..123 + BY_INDEX.len() as u32).contains(&v) {
+                                name = BY_INDEX[(v - 123) as usize].to_string();
                             }
                         }
                     }
