@@ -1620,10 +1620,21 @@ impl CadDocument {
             h
         };
 
-        // Set owner to *Model_Space block record if not already set
+        // Default an unowned entity to model space — or paper space when it
+        // carries the paper-space flag (R12 code 67 → entity_mode 1). Without
+        // the paper-space branch, R12 paper-space entities (layout viewports,
+        // etc.) fall into model space.
         let ms_handle = self.header.model_space_block_handle;
-        if entity.common().owner_handle.is_null() && !ms_handle.is_null() {
-            entity.common_mut().owner_handle = ms_handle;
+        let ps_handle = self.header.paper_space_block_handle;
+        if entity.common().owner_handle.is_null() {
+            let target = if entity.common().entity_mode == Some(1) && !ps_handle.is_null() {
+                ps_handle
+            } else {
+                ms_handle
+            };
+            if !target.is_null() {
+                entity.common_mut().owner_handle = target;
+            }
         }
 
         // AttributeEntity is a sub-entity owned by INSERT, not a direct
@@ -2305,8 +2316,9 @@ impl CadDocument {
             }
         }
 
-        // Model-space entities (document.entities) — use model space as the
-        // default owner for anything still unowned after block assignment.
+        // Default owner for anything still unowned after block assignment:
+        // paper space when the entity carried the R12 paper-space flag
+        // (code 67 → entity_mode 1), model space otherwise.
         for entity in self.entities.iter_mut() {
             let entity = Arc::make_mut(entity);
             let common = match entity {
@@ -2321,7 +2333,11 @@ impl CadDocument {
                 }
             };
             if common.owner_handle.is_null() {
-                common.owner_handle = model_handle;
+                common.owner_handle = if common.entity_mode == Some(1) {
+                    paper_handle
+                } else {
+                    model_handle
+                };
             }
         }
 

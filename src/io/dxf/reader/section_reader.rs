@@ -2568,9 +2568,15 @@ impl<'a> SectionReader<'a> {
                 }
                 Ok(true)
             }
-            // Paper space flag (67 = 1 means entity is in paper space).
-            // Ownership is determined by code 330, so we just consume this.
+            // Paper space flag (67 = 1 means the entity is in paper space).
+            // R2000+ also carries an explicit owner (code 330), but R12 does
+            // not, so record the flag (entity_mode 1 = paper) — resolve_references
+            // uses it to place unowned entities in paper vs model space instead
+            // of dumping every R12 paper-space entity into model space.
             67 => {
+                if pair.as_i16() == Some(1) {
+                    common.entity_mode = Some(1);
+                }
                 Ok(true)
             }
             // Extended data - read and store
