@@ -1133,6 +1133,17 @@ pub struct CadDocument {
     /// read artifact; empty for new/DXF documents.
     pub(crate) acis_sab_handles: Vec<Handle>,
 
+    /// Original decompressed `AcDb:AcDsPrototype_1b` section. Same-version
+    /// saves can reuse it when every attached SAB body is still unchanged.
+    /// Shared so document snapshots do not duplicate large modeler data.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub(crate) raw_acds_data: Option<Arc<Vec<u8>>>,
+
+    /// `(handle, byte length, hash)` of SAB bodies when `raw_acds_data` was
+    /// captured. Used to reject stale section passthrough after geometry edits.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub(crate) raw_acds_fingerprint: Vec<(u64, usize, u64)>,
+
     /// Section-view style (`AcDbSectionViewStyle`) display fields, decoded from
     /// the DWG for rendering section marks (arrow size, label height, …). A file
     /// normally has one; the first decoded is kept. `None` for new/DXF documents
@@ -1301,6 +1312,8 @@ impl CadDocument {
             dwg_source_version: None,
             preview: None,
             acis_sab_handles: Vec::new(),
+            raw_acds_data: None,
+            raw_acds_fingerprint: Vec::new(),
             section_view_style: None,
             view_rep_refs: std::collections::HashMap::new(),
             section_view_reps: Vec::new(),
@@ -1326,8 +1339,8 @@ impl CadDocument {
     ///
     /// Unsupported objects (e.g. AEC/Civil3D), raw graphical records
     /// (Surface/MLEADER/unknown entities) and EED blobs are stored as the
-    /// source version's bytes; they can only be re-emitted to the same encoding
-    /// family. When `target` is in a different family the writer must drop
+    /// source version's bytes; they can only be re-emitted to the exact source
+    /// version. When `target` differs the writer must drop
     /// them, so a caller that wants a lossless round-trip should save in
     /// [`dwg_source_version`](Self::dwg_source_version) instead. Returns false
     /// when there is nothing version-locked (or the document is not from DWG).
@@ -1336,9 +1349,7 @@ impl CadDocument {
             Some(v) => v,
             None => return false,
         };
-        let same_family = (src >= DxfVersion::AC1021) == (target >= DxfVersion::AC1021)
-            && (src >= DxfVersion::AC1024) == (target >= DxfVersion::AC1024);
-        if same_family {
+        if src == target {
             return false;
         }
         // Unsupported non-graphical objects preserved as raw bytes.
@@ -1611,6 +1622,10 @@ impl CadDocument {
                 is_an_entity: false,
                 class_number: 0, // will be assigned (500+)
                 item_class_id: 0x1F3,
+                dwg_version: 0,
+                maintenance_version: 0,
+                unknown1: 0,
+                unknown2: 0,
             },
             DxfClass {
                 dxf_name: "DICTIONARYVAR".to_string(),
@@ -1622,6 +1637,10 @@ impl CadDocument {
                 is_an_entity: false,
                 class_number: 0,
                 item_class_id: 0x1F3,
+                dwg_version: 0,
+                maintenance_version: 0,
+                unknown1: 0,
+                unknown2: 0,
             },
             DxfClass {
                 dxf_name: "LAYOUT".to_string(),
@@ -1633,6 +1652,10 @@ impl CadDocument {
                 is_an_entity: false,
                 class_number: 0,
                 item_class_id: 0x1F3,
+                dwg_version: 0,
+                maintenance_version: 0,
+                unknown1: 0,
+                unknown2: 0,
             },
             DxfClass {
                 dxf_name: "ACDBPLACEHOLDER".to_string(),
@@ -1644,6 +1667,10 @@ impl CadDocument {
                 is_an_entity: false,
                 class_number: 0,
                 item_class_id: 0x1F3,
+                dwg_version: 0,
+                maintenance_version: 0,
+                unknown1: 0,
+                unknown2: 0,
             },
             DxfClass {
                 dxf_name: "PLOTSETTINGS".to_string(),
@@ -1655,6 +1682,10 @@ impl CadDocument {
                 is_an_entity: false,
                 class_number: 0,
                 item_class_id: 0x1F3,
+                dwg_version: 0,
+                maintenance_version: 0,
+                unknown1: 0,
+                unknown2: 0,
             },
             DxfClass {
                 dxf_name: "SCALE".to_string(),
@@ -1666,6 +1697,10 @@ impl CadDocument {
                 is_an_entity: false,
                 class_number: 0,
                 item_class_id: 0x1F3,
+                dwg_version: 0,
+                maintenance_version: 0,
+                unknown1: 0,
+                unknown2: 0,
             },
         ];
         for cls in standard_classes {
@@ -1723,6 +1758,10 @@ impl CadDocument {
             is_an_entity: false,
             class_number: 0,
             item_class_id: 0x1F3,
+            dwg_version: 0,
+            maintenance_version: 0,
+            unknown1: 0,
+            unknown2: 0,
         });
     }
 

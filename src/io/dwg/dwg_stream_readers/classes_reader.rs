@@ -125,10 +125,10 @@ pub fn read_classes(data: &[u8], version: DxfVersion, maintenance_version: u8) -
         if version >= DxfVersion::AC1018 {
             let instance_count = reader.read_bit_long();
             class.instance_count = instance_count;
-            let _dwg_version = reader.read_bit_long();
-            let _maintenance_version = reader.read_bit_long();
-            let _unknown1 = reader.read_bit_long();
-            let _unknown2 = reader.read_bit_long();
+            class.dwg_version = reader.read_bit_long();
+            class.maintenance_version = reader.read_bit_long();
+            class.unknown1 = reader.read_bit_long();
+            class.unknown2 = reader.read_bit_long();
         }
 
         // Preserve every entry in order: the DWG classes section is positional

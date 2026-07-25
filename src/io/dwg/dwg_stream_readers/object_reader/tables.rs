@@ -524,12 +524,11 @@ pub fn read_linetype(
 
     // Per spec (OpenDesign §20.4.58):
     //   R2004 and earlier: 256-byte text area (always present).
-    //   R2007+: 512-byte text area ONLY if the 0x02 bit (text) or 0x04 bit (shape)
-    //   is set on any ShapeFlag entry.
+    //   R2007+: 512-byte text area ONLY if the 0x02 text bit is set on any
+    //   ShapeFlag entry. Shape-only elements do not carry this area.
     if version.r2007_plus() {
-        // Text area is present if any element is complex (text 0x02 or shape 0x04).
-        let has_complex_elem = segments.iter().any(|s| s.dwg_flags & 0x06 != 0);
-        if has_complex_elem {
+        let has_text = segments.iter().any(|s| s.dwg_flags & 0x02 != 0);
+        if has_text {
             let mut text_area = [0u8; 512];
             for b in text_area.iter_mut() {
                 *b = reader.read_byte();

@@ -970,13 +970,28 @@ impl<'a> DwgObjectWriter<'a> {
     /// preamble, no handle registration). Shared by SPLINE and HELIX, which
     /// embeds a spline as its curve geometry.
     fn write_spline_data(&mut self, e: &Spline) {
-        // Determine scenario: 2 = fit points, 1 = control points/knots
-        let scenario: i32 = if !e.fit_points.is_empty() { 2 } else { 1 };
+        let r2013_plus = self.version.r2013_plus(self.dxf_version);
+        // R2013+ derives the storage scenario from flags1 and knot
+        // parameterization. Custom knots always use control points.
+        let scenario: i32 = if !e.fit_points.is_empty()
+            && (!r2013_plus || e.knot_parameterization != 15)
+        {
+            2
+        } else {
+            1
+        };
 
-        if self.version.r2013_plus(self.dxf_version) {
+        if r2013_plus {
             // R2013+: scenario BL, flags1 BL, knot parametrization BL
+            let mut flags1 = if e.flags.closed { 4 } else { 0 };
+            if scenario == 2 {
+                // Fit-point storage requires both MethodFitPoints and
+                // UseKnotParameter. Omitting bit 8 makes readers parse the
+                // following fit-point body as control-point data.
+                flags1 |= 1 | 8;
+            }
             self.writer.write_bit_long(scenario);
-            self.writer.write_bit_long(0); // flags1
+            self.writer.write_bit_long(flags1);
             self.writer.write_bit_long(e.knot_parameterization); // knot parametrization
         } else {
             // Scenario BL
@@ -2748,8 +2763,8 @@ impl<'a> DwgObjectWriter<'a> {
     // â”€â”€ MultiLeader â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn write_multileader(&mut self, e: &MultiLeader) {
-        // Same encoding family: emit the captured bytes verbatim (guaranteed
-        // lossless). Cross-version falls through to the native encoder below,
+        // Exact source version: emit the captured bytes verbatim (guaranteed
+        // lossless). A different version falls through to the native encoder,
         // which re-encodes the parsed entity in the target version's layout.
         if let Some(ref raw) = e.raw_dwg_data {
             if self.raw_passthrough_compatible(e.dwg_source_version) {
@@ -3524,17 +3539,9 @@ impl<'a> DwgObjectWriter<'a> {
     /// For R2013 and later, ACIS data lives in the AcDsPrototype_1b section.
     /// The entity stream simply indicates "no inline data":
     ///   acis_empty = true (B), wireframe_present = false (B).
-    fn write_acis_empty(&mut self, point: Vector3, isolines: i32) {
+    fn write_acis_empty(&mut self, _point: Vector3, _isolines: i32) {
         self.writer.write_bit(true); // acis_empty = true (no inline data)
-        // AutoCAD still writes the wireframe stub: anchor point (bbox
-        // centre), ISOLINES, isoline_present=1 with zero wire/sil counts.
-        self.writer.write_bit(true); // wireframe_data_present
-        self.writer.write_bit(true); // point_present
-        self.writer.write_3bit_double(point);
-        self.writer.write_bit_long(if isolines > 0 { isolines } else { 4 });
-        self.writer.write_bit(true); // isoline_present
-        self.writer.write_bit_long(0); // num_wires
-        self.writer.write_bit_long(0); // num_silhouettes
+        self.writer.write_bit(false); // wireframe_data_present
     }
 
     /// Write the R2013+ modeler-geometry revision block (`COMMON_3DSOLID`).

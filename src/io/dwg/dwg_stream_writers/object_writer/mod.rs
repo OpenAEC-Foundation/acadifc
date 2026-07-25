@@ -596,8 +596,13 @@ impl<'a> DwgObjectWriter<'a> {
 
         if self.version.r2007_plus() {
             // Material handle
+            let material = if self.is_writable_object(&layer.material) {
+                layer.material
+            } else {
+                Handle::NULL
+            };
             self.writer
-                .write_handle(DwgReferenceType::HardPointer, layer.material.value());
+                .write_handle(DwgReferenceType::HardPointer, material.value());
         }
 
         // Linetype handle — look up by name
@@ -709,76 +714,82 @@ impl<'a> DwgObjectWriter<'a> {
         // Num dashes
         self.writer.write_byte(ltype.elements.len() as u8);
 
+        let unicode_text = self.version.r2007_plus();
+        let mut text_area = if unicode_text {
+            ltype
+                .elements
+                .iter()
+                .any(|seg| seg.complex.as_ref().is_some_and(|cx| cx.is_text()))
+                .then(|| vec![0u8; 512])
+        } else {
+            Some(vec![0u8; 256])
+        };
+        let mut text_cursor = if self.dxf_version <= DxfVersion::AC1014 {
+            1usize
+        } else {
+            0usize
+        };
+        let mut shape_numbers = Vec::with_capacity(ltype.elements.len());
+        let mut shape_flags = Vec::with_capacity(ltype.elements.len());
+
         for seg in &ltype.elements {
             let c = seg.complex.as_ref();
-            self.writer.write_bit_double(seg.length);
-            // Shape number: for DWG text elements, this is a byte offset into
-            // the text area; for shape elements, the shape number itself.
-            let shape_num = if let Some(ref cx) = c {
-                if cx.is_text() {
-                    // Text elements use byte offset; 0 is safe default
-                    0i16
-                } else {
-                    cx.shape_number().unwrap_or(0)
-                }
-            } else {
-                0
-            };
-            self.writer.write_bit_short(shape_num);
-            self.writer.write_raw_double(c.map_or(0.0, |cx| cx.offset[0])); // offset x
-            self.writer.write_raw_double(c.map_or(0.0, |cx| cx.offset[1])); // offset y
-            self.writer.write_bit_double(c.map_or(1.0, |cx| cx.scale)); // scale
-            self.writer.write_bit_double(c.map_or(0.0, |cx| cx.rotation)); // rotation
-            // Build DWG flags: 0x01=abs rot, 0x02=shape, 0x04=text
             let flags = if let Some(ref cx) = c {
                 let mut f: i16 = 0;
                 if cx.is_absolute_rotation() { f |= 0x01; }
-                if cx.is_shape() { f |= 0x02; }
-                if cx.is_text() { f |= 0x04; }
+                if cx.is_text() { f |= 0x02; }
+                if cx.is_shape() { f |= 0x04; }
                 f
             } else {
                 0
             };
-            self.writer.write_bit_short(flags); // shape flags
+            shape_flags.push(flags);
+
+            let mut shape_number = c.and_then(|cx| cx.shape_number()).unwrap_or(0);
+            if let (Some(cx), Some(area)) = (c, text_area.as_mut()) {
+                if let Some(text) = cx.text().filter(|text| !text.is_empty()) {
+                    let bytes = if unicode_text {
+                        text.encode_utf16()
+                            .flat_map(u16::to_le_bytes)
+                            .collect::<Vec<_>>()
+                    } else {
+                        let (encoded, _, _) = encoding_rs::WINDOWS_1252.encode(text);
+                        encoded.into_owned()
+                    };
+                    let terminator_len = if unicode_text { 2 } else { 1 };
+                    if text_cursor + bytes.len() + terminator_len <= area.len() {
+                        shape_number = text_cursor as i16;
+                        area[text_cursor..text_cursor + bytes.len()].copy_from_slice(&bytes);
+                        text_cursor += bytes.len() + terminator_len;
+                    } else {
+                        shape_number = 0;
+                    }
+                }
+            }
+            shape_numbers.push(shape_number);
         }
 
-        // Text area: R2004 and earlier always have 256 bytes; R2007+ only if complex
-        let has_complex = ltype.elements.iter().any(|s| s.complex.is_some());
-        if !self.version.r2007_plus() {
-            // R2004 and earlier: unconditional 256-byte text area
-            let mut text_area = [0u8; 256];
-            if has_complex {
-                for seg in &ltype.elements {
-                    if let Some(ref cx) = seg.complex {
-                        if let Some(t) = cx.text() {
-                            if !t.is_empty() {
-                                let bytes = t.as_bytes();
-                                let copy_len = bytes.len().min(255);
-                                text_area[..copy_len].copy_from_slice(&bytes[..copy_len]);
-                            }
-                        }
-                    }
-                }
-            }
-            for &b in &text_area {
-                self.writer.write_byte(b);
-            }
-        } else if has_complex {
-            // R2007+: 512-byte text area only if complex elements exist
-            let mut text_area = [0u8; 512];
-            for seg in &ltype.elements {
-                if let Some(ref cx) = seg.complex {
-                    if let Some(t) = cx.text() {
-                        if !t.is_empty() {
-                            let bytes = t.as_bytes();
-                            let copy_len = bytes.len().min(511);
-                            text_area[..copy_len].copy_from_slice(&bytes[..copy_len]);
-                        }
-                    }
-                }
-            }
-            for &b in &text_area {
-                self.writer.write_byte(b);
+        for ((seg, shape_number), flags) in ltype
+            .elements
+            .iter()
+            .zip(shape_numbers)
+            .zip(shape_flags)
+        {
+            let c = seg.complex.as_ref();
+            self.writer.write_bit_double(seg.length);
+            self.writer.write_bit_short(shape_number);
+            self.writer.write_raw_double(c.map_or(0.0, |cx| cx.offset[0]));
+            self.writer.write_raw_double(c.map_or(0.0, |cx| cx.offset[1]));
+            self.writer.write_bit_double(c.map_or(1.0, |cx| cx.scale));
+            self.writer.write_bit_double(c.map_or(0.0, |cx| cx.rotation));
+            self.writer.write_bit_short(flags);
+        }
+
+        // R2004- always carries 256 encoded bytes. R2007+ carries 512
+        // UTF-16LE bytes only when at least one text segment exists.
+        if let Some(area) = text_area {
+            for byte in area {
+                self.writer.write_byte(byte);
             }
         }
 
@@ -1551,7 +1562,7 @@ impl<'a> DwgObjectWriter<'a> {
 
     /// Write block begin/entities/end for every block record.
     fn write_block_entities(&mut self) {
-        use rayon::prelude::*;
+        use crate::io::dwg::parallel::{map_chunks, worker_count};
 
         let block_records: Vec<BlockRecord> = self
             .document
@@ -1661,14 +1672,14 @@ impl<'a> DwgObjectWriter<'a> {
                                     && unique.insert(handle.value())
                             });
                         if safe_to_batch {
-                            let worker_count = rayon::current_num_threads().max(1);
+                            let worker_count = worker_count();
                             let chunk_size =
                                 ((run.len() + worker_count * 4 - 1) / (worker_count * 4))
                                     .max(512);
-                            let batches: Vec<ParallelEntityBatch> = run
-                                .par_chunks(chunk_size)
-                                .map(|chunk| self.serialize_parallel_entity_batch(chunk))
-                                .collect();
+                            let batches: Vec<ParallelEntityBatch> =
+                                map_chunks(run, chunk_size, |chunk| {
+                                    self.serialize_parallel_entity_batch(chunk)
+                                });
                             for batch in batches {
                                 self.append_parallel_entity_batch(batch);
                             }

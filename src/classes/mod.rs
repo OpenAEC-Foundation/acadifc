@@ -88,6 +88,14 @@ pub struct DxfClass {
     pub class_number: i16,
     /// Item class ID: 498 for entities, 499 for objects
     pub item_class_id: i16,
+    /// DWG schema version recorded by the class entry (R2004+).
+    pub dwg_version: i32,
+    /// DWG maintenance release recorded by the class entry (R2004+).
+    pub maintenance_version: i32,
+    /// First reserved class metadata value (normally zero).
+    pub unknown1: i32,
+    /// Second reserved class metadata value (normally zero).
+    pub unknown2: i32,
 }
 
 impl DxfClass {
@@ -103,6 +111,10 @@ impl DxfClass {
             is_an_entity: false,
             class_number: 0,
             item_class_id: 499, // default to object
+            dwg_version: 0,
+            maintenance_version: 0,
+            unknown1: 0,
+            unknown2: 0,
         }
     }
 

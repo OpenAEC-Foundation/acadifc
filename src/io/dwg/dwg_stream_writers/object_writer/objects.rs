@@ -234,16 +234,14 @@ impl<'a> DwgObjectWriter<'a> {
     /// version's object-type encoding, stream layout and text encoding, which
     /// differ across the R2004/R2007 and R2007/R2010 boundaries and cannot be
     /// reframed without parsing the (unsupported) object — so passthrough is
-    /// only valid within the same encoding family. `None` (e.g. DXF) is treated
-    /// as compatible. Incompatible objects are dropped to keep the file valid.
+    /// only valid for the exact source version. Object schemas change inside
+    /// an encoding family too (notably R2013 common data and R2018 proxy
+    /// bodies), so carrying raw bytes across those boundaries corrupts the
+    /// following fields. `None` is treated as compatible.
     pub(super) fn raw_passthrough_compatible(&self, raw_dwg_version: Option<DxfVersion>) -> bool {
         match raw_dwg_version {
             None => true,
-            Some(src) => {
-                let tgt = self.dxf_version;
-                (src >= DxfVersion::AC1021) == (tgt >= DxfVersion::AC1021)
-                    && (src >= DxfVersion::AC1024) == (tgt >= DxfVersion::AC1024)
-            }
+            Some(src) => src == self.dxf_version,
         }
     }
 
@@ -1056,8 +1054,8 @@ impl<'a> DwgObjectWriter<'a> {
     ///
     /// An object read from a file carries its verbatim record in `source_raw`
     /// and is re-emitted byte-for-byte (identical to the previous `Unknown`
-    /// passthrough) when the target uses the same encoding family; on an
-    /// incompatible cross-version save it is dropped, exactly as `Unknown` was.
+    /// passthrough) when the target is the exact source version; on a
+    /// different-version save it is dropped, exactly as `Unknown` was.
     /// A synthesized object (`source_raw == None`) is encoded from its fields:
     /// the shared `AcDbObjectContextData` base (class_version, is_default), the
     /// per-type placement payload in the DATA stream, and the

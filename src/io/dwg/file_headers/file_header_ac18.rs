@@ -139,7 +139,7 @@ impl DwgFileHeaderWriterAC18 {
         decomp_size: usize,
     ) -> Result<(), DxfError> {
         let perf = std::env::var_os("PERF").is_some();
-        let started = std::time::Instant::now();
+        let started = web_time::Instant::now();
         let mut descriptor = DwgSectionDescriptor::new(name);
         descriptor.decompressed_size = decomp_size as u64;
         descriptor.compressed_size = data.len() as u64;
@@ -160,12 +160,11 @@ impl DwgFileHeaderWriterAC18 {
             page_inputs.push((offset, remainder, &data[offset..]));
         }
 
-        use rayon::prelude::*;
-        let batch_pages = rayon::current_num_threads().max(1).saturating_mul(2);
+        use crate::io::dwg::parallel::{map_slice, worker_count};
+        let batch_pages = worker_count().saturating_mul(2);
         for page_batch in page_inputs.chunks(batch_pages) {
-            let encoded: Vec<_> = page_batch
-                .par_iter()
-                .map(|&(offset, total_size, bytes)| {
+            let encoded: Vec<_> =
+                map_slice(page_batch, |&(offset, total_size, bytes)| {
                     let mut padded = vec![0u8; decomp_size];
                     padded[..total_size].copy_from_slice(bytes);
                     let encoded = if compressed {
@@ -175,8 +174,7 @@ impl DwgFileHeaderWriterAC18 {
                         padded
                     };
                     (offset, total_size, encoded)
-                })
-                .collect();
+                });
 
             for (offset, total_size, encoded) in encoded {
                 self.create_local_section(

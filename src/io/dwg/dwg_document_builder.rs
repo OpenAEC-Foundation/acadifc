@@ -21,6 +21,9 @@ use crate::io::dwg::dwg_stream_readers::object_reader::entities;
 use crate::io::dwg::dwg_stream_readers::object_reader::objects;
 use crate::io::dwg::dwg_stream_readers::object_reader::tables;
 use crate::io::dwg::dwg_stream_readers::object_reader::{DwgObjectReader, EntityCommonData};
+use crate::io::dwg::parallel::{
+    filter_map_slice, for_each_mut, map_chunks, map_mut, worker_count,
+};
 use crate::notification::{NotificationCollection, NotificationType};
 use crate::types::Handle;
 use crate::types::LineWeight;
@@ -249,7 +252,7 @@ impl DwgDocumentBuilder {
     /// Returns collected notifications (skipped records, warnings).
     pub fn build(mut self, document: &mut CadDocument) -> NotificationCollection {
         let perf = std::env::var_os("PERF").is_some();
-        let build_started = std::time::Instant::now();
+        let build_started = web_time::Instant::now();
         let mut handles = self.obj_reader.handles();
         // Sort handles numerically so that entity records are processed in
         // allocation order.  This ensures polyline vertex records are
@@ -319,11 +322,9 @@ impl DwgDocumentBuilder {
             BlockControl(u64, u64),
         }
         let mut parsed_entries: Vec<ParsedEntry> = Vec::new();
-        use rayon::prelude::*;
-        let catalog_started = std::time::Instant::now();
-        let record_catalog: Vec<(u64, usize, i16)> = handles
-            .par_iter()
-            .filter_map(|&handle| {
+        let catalog_started = web_time::Instant::now();
+        let record_catalog: Vec<(u64, usize, i16)> =
+            filter_map_slice(&handles, |&handle| {
                 let offset = self.obj_reader.offset_for(handle)?;
                 if offset < 0 {
                     return None;
@@ -334,8 +335,7 @@ impl DwgDocumentBuilder {
                     offset as usize,
                     Self::resolve_type_code(raw, &class_map),
                 ))
-            })
-            .collect();
+            });
         self.report_progress(75);
         if perf {
             eprintln!(
@@ -345,7 +345,7 @@ impl DwgDocumentBuilder {
             );
         }
         self.report_progress(110);
-        let pass1_started = std::time::Instant::now();
+        let pass1_started = web_time::Instant::now();
 
         for &(handle, offset, type_code) in &record_catalog {
             if is_table_type(type_code) {
@@ -1046,20 +1046,19 @@ impl DwgDocumentBuilder {
         let source_version = document.version;
         let model_space_block_handle = document.header.model_space_block_handle;
         let paper_space_block_handle = document.header.paper_space_block_handle;
-        let worker_count = rayon::current_num_threads().max(1);
+        let worker_count = worker_count();
         let chunk_size = 512usize;
         let batch_size = chunk_size * worker_count * 4;
-        let pass2_started = std::time::Instant::now();
+        let pass2_started = web_time::Instant::now();
         let mut decode_seconds = 0.0f64;
         let mut commit_seconds = 0.0f64;
 
         let pass2_total = pass2_records.len().max(1);
         let mut pass2_done = 0usize;
         for batch in pass2_records.chunks(batch_size) {
-            let decode_started = std::time::Instant::now();
-            let chunks: Vec<Pass2Chunk> = batch
-                .par_chunks(chunk_size)
-                .map(|records| {
+            let decode_started = web_time::Instant::now();
+            let chunks: Vec<Pass2Chunk> =
+                map_chunks(batch, chunk_size, |records| {
                     let mut chunk = Pass2Chunk::new(
                         source_version,
                         model_space_block_handle,
@@ -1090,11 +1089,10 @@ impl DwgDocumentBuilder {
                         }
                     }
                     chunk
-                })
-                .collect();
+                });
             decode_seconds += decode_started.elapsed().as_secs_f64();
 
-            let commit_started = std::time::Instant::now();
+            let commit_started = web_time::Instant::now();
             for mut chunk in chunks {
                 document
                     .eed_by_handle
@@ -1175,7 +1173,7 @@ impl DwgDocumentBuilder {
                 worker_count,
             );
         }
-        let post_started = std::time::Instant::now();
+        let post_started = web_time::Instant::now();
         self.report_progress(875);
 
         // ── Post-pass: Assemble polyline vertices and add to document ──
@@ -1374,7 +1372,7 @@ impl DwgDocumentBuilder {
             );
         }
         self.report_progress(925);
-        let ownership_started = std::time::Instant::now();
+        let ownership_started = web_time::Instant::now();
         // Rebuild block membership in O(entities + blocks). The ordinary
         // add-entity path scans every block record for every entity, which
         // dominates load time in block-heavy drawings. Owner correction and
@@ -1388,7 +1386,84 @@ impl DwgDocumentBuilder {
                 document.block_records.len(),
             );
         }
-        let tail_started = std::time::Instant::now();
+        let tail_started = web_time::Instant::now();
+
+        // Ensure allocations made by the repair steps start above every source
+        // record, even when the file's HANDSEED was stale.
+        let max_from_reader = handles.iter().max().copied().unwrap_or(0);
+        if max_from_reader + 1 > document.header.handle_seed {
+            document.header.handle_seed = max_from_reader + 1;
+        }
+
+        // BLOCK/ENDBLK markers are structural records and are not retained in
+        // the flat entity arena. Damaged files can point a block record at a
+        // handle now occupied by a table entry or ordinary object (0718 uses
+        // its Standard DIMSTYLE as *Paper_Space's BLOCK marker). Rehome only
+        // those colliding markers; the writer will synthesize their records.
+        let mut occupied: std::collections::HashSet<Handle> =
+            document.objects.keys().copied().collect();
+        occupied.extend(document.entities().filter_map(|entity| {
+            (!matches!(
+                entity,
+                crate::entities::EntityType::Block(_)
+                    | crate::entities::EntityType::BlockEnd(_)
+            ))
+            .then_some(entity.common().handle)
+        }));
+        for handle in [
+            document.block_records.handle(),
+            document.layers.handle(),
+            document.text_styles.handle(),
+            document.line_types.handle(),
+            document.views.handle(),
+            document.ucss.handle(),
+            document.vports.handle(),
+            document.app_ids.handle(),
+            document.dim_styles.handle(),
+        ] {
+            occupied.insert(handle);
+        }
+        occupied.extend(document.block_records.iter().map(|record| record.handle));
+        occupied.extend(document.layers.iter().map(|entry| entry.handle));
+        occupied.extend(document.text_styles.iter().map(|entry| entry.handle));
+        occupied.extend(document.line_types.iter().map(|entry| entry.handle));
+        occupied.extend(document.views.iter().map(|entry| entry.handle));
+        occupied.extend(document.ucss.iter().map(|entry| entry.handle));
+        occupied.extend(document.vports.iter().map(|entry| entry.handle));
+        occupied.extend(document.app_ids.iter().map(|entry| entry.handle));
+        occupied.extend(document.dim_styles.iter().map(|entry| entry.handle));
+        fn allocate_marker(
+            occupied: &mut std::collections::HashSet<Handle>,
+            next_handle: &mut u64,
+        ) -> Handle {
+            while occupied.contains(&Handle::new(*next_handle)) {
+                *next_handle += 1;
+            }
+            let handle = Handle::new(*next_handle);
+            *next_handle += 1;
+            occupied.insert(handle);
+            handle
+        }
+        let mut next_handle = document.header.handle_seed.max(1);
+        for record in document.block_records.iter_mut() {
+            if record.block_entity_handle.is_null()
+                || occupied.contains(&record.block_entity_handle)
+            {
+                record.block_entity_handle =
+                    allocate_marker(&mut occupied, &mut next_handle);
+            } else {
+                occupied.insert(record.block_entity_handle);
+            }
+            if record.block_end_handle.is_null()
+                || occupied.contains(&record.block_end_handle)
+            {
+                record.block_end_handle =
+                    allocate_marker(&mut occupied, &mut next_handle);
+            } else {
+                occupied.insert(record.block_end_handle);
+            }
+        }
+        document.header.handle_seed = document.header.handle_seed.max(next_handle);
 
         // ── Post-pass: Resolve root dictionary handle ──────────────────
         //
@@ -1396,11 +1471,13 @@ impl DwgDocumentBuilder {
         // references that resolve to 0 during header reading.  Now that
         // all objects have been read, scan for the actual root dictionary
         // (owner == NULL) and update the header.
-        if document.header.named_objects_dict_handle.is_null()
-            || !document
+        let root_is_dictionary = matches!(
+            document
                 .objects
-                .contains_key(&document.header.named_objects_dict_handle)
-        {
+                .get(&document.header.named_objects_dict_handle),
+            Some(crate::objects::ObjectType::Dictionary(_))
+        );
+        if !root_is_dictionary {
             let mut best = Handle::NULL;
             let mut best_count = 0usize;
             for (h, obj) in &document.objects {
@@ -1417,6 +1494,200 @@ impl DwgDocumentBuilder {
             }
             if !best.is_null() {
                 document.header.named_objects_dict_handle = best;
+            } else {
+                // Some damaged files point NOD at a table control and give
+                // every top-level dictionary that same invalid owner. Preserve
+                // those valid child dictionaries behind a fresh root instead
+                // of writing a null NOD, which makes ODA demand recovery.
+                let header_root = document.header.named_objects_dict_handle;
+                let mut invalid_root_votes: HashMap<Handle, usize> = HashMap::new();
+                for (handle, reactors) in &document.reactors_by_handle {
+                    if !matches!(
+                        document.objects.get(handle),
+                        Some(
+                            crate::objects::ObjectType::Dictionary(_)
+                                | crate::objects::ObjectType::DictionaryWithDefault(_)
+                        )
+                    ) {
+                        continue;
+                    }
+                    for reactor in reactors {
+                        if !matches!(
+                            document.objects.get(reactor),
+                            Some(crate::objects::ObjectType::Dictionary(_))
+                        ) {
+                            *invalid_root_votes.entry(*reactor).or_default() += 1;
+                        }
+                    }
+                }
+                let previous_root = invalid_root_votes
+                    .into_iter()
+                    .max_by_key(|(_, count)| *count)
+                    .map(|(handle, _)| handle)
+                    .filter(|handle| !handle.is_null())
+                    .unwrap_or(header_root);
+                let root_handle = document.allocate_handle();
+                let children = [
+                    ("ACAD_GROUP", document.header.acad_group_dict_handle),
+                    (
+                        "ACAD_MLINESTYLE",
+                        document.header.acad_mlinestyle_dict_handle,
+                    ),
+                    ("ACAD_LAYOUT", document.header.acad_layout_dict_handle),
+                    (
+                        "ACAD_PLOTSETTINGS",
+                        document.header.acad_plotsettings_dict_handle,
+                    ),
+                    (
+                        "ACAD_PLOTSTYLENAME",
+                        document.header.acad_plotstylename_dict_handle,
+                    ),
+                    ("ACAD_MATERIAL", document.header.acad_material_dict_handle),
+                    ("ACAD_COLOR", document.header.acad_color_dict_handle),
+                    (
+                        "ACAD_VISUALSTYLE",
+                        document.header.acad_visualstyle_dict_handle,
+                    ),
+                ];
+                let mut root = crate::objects::Dictionary::new();
+                root.handle = root_handle;
+                for (name, child_handle) in children {
+                    let child_is_dictionary = matches!(
+                        document.objects.get(&child_handle),
+                        Some(
+                            crate::objects::ObjectType::Dictionary(_)
+                                | crate::objects::ObjectType::DictionaryWithDefault(_)
+                        )
+                    );
+                    if !child_is_dictionary {
+                        continue;
+                    }
+                    root.add_entry(name, child_handle);
+                    if let Some(child) = document.objects.get_mut(&child_handle) {
+                        match child {
+                            crate::objects::ObjectType::Dictionary(dictionary) => {
+                                dictionary.owner = root_handle;
+                            }
+                            crate::objects::ObjectType::DictionaryWithDefault(dictionary) => {
+                                dictionary.owner = root_handle;
+                            }
+                            _ => {}
+                        }
+                    }
+                    if let Some(reactors) =
+                        document.reactors_by_handle.get_mut(&child_handle)
+                    {
+                        for reactor in reactors {
+                            if *reactor == previous_root {
+                                *reactor = root_handle;
+                            }
+                        }
+                    }
+                }
+
+                // A damaged NOD often leaves every former root child with a
+                // reactor pointing at the non-dictionary header handle. Repair
+                // all of those references, not only the few child handles that
+                // survived header decoding. Keep every recovered dictionary
+                // reachable from the fresh root; known roles retain their
+                // standard names, unknown roles get stable recovery names.
+                let top_level: Vec<Handle> = document
+                    .reactors_by_handle
+                    .iter()
+                    .filter_map(|(handle, reactors)| {
+                        reactors.contains(&previous_root).then_some(*handle)
+                    })
+                    .collect();
+                for child_handle in top_level {
+                    let inferred_name = match document.objects.get(&child_handle) {
+                        Some(crate::objects::ObjectType::Dictionary(dictionary)) => {
+                            let values: Vec<&crate::objects::ObjectType> = dictionary
+                                .entries
+                                .iter()
+                                .filter_map(|(_, handle)| document.objects.get(handle))
+                                .collect();
+                            if values
+                                .iter()
+                                .any(|object| matches!(object, crate::objects::ObjectType::Layout(_)))
+                            {
+                                "ACAD_LAYOUT".to_string()
+                            } else if values.iter().any(|object| {
+                                matches!(object, crate::objects::ObjectType::MLineStyle(_))
+                            }) {
+                                "ACAD_MLINESTYLE".to_string()
+                            } else if values.iter().any(|object| {
+                                matches!(object, crate::objects::ObjectType::PlotSettings(_))
+                            }) {
+                                "ACAD_PLOTSETTINGS".to_string()
+                            } else if values.iter().any(|object| {
+                                matches!(object, crate::objects::ObjectType::MultiLeaderStyle(_))
+                            }) {
+                                "ACAD_MLEADERSTYLE".to_string()
+                            } else if values.iter().any(|object| {
+                                matches!(object, crate::objects::ObjectType::TableStyle(_))
+                            }) {
+                                "ACAD_TABLESTYLE".to_string()
+                            } else if values
+                                .iter()
+                                .any(|object| matches!(object, crate::objects::ObjectType::Scale(_)))
+                            {
+                                "ACAD_SCALELIST".to_string()
+                            } else if values.iter().any(|object| {
+                                matches!(object, crate::objects::ObjectType::VisualStyle(_))
+                            }) {
+                                "ACAD_VISUALSTYLE".to_string()
+                            } else if values.iter().any(|object| {
+                                matches!(object, crate::objects::ObjectType::Material(_))
+                            }) {
+                                "ACAD_MATERIAL".to_string()
+                            } else if values.iter().any(|object| {
+                                matches!(object, crate::objects::ObjectType::BookColor(_))
+                            }) {
+                                "ACAD_COLOR".to_string()
+                            } else if values
+                                .iter()
+                                .any(|object| matches!(object, crate::objects::ObjectType::Group(_)))
+                            {
+                                "ACAD_GROUP".to_string()
+                            } else if dictionary.get("AcDsRecords").is_some()
+                                || dictionary.get("AcDsSchemas").is_some()
+                            {
+                                "ACAD_ACDSRECORDS".to_string()
+                            } else if dictionary.get("CANNOSCALE").is_some() {
+                                "AcDbVariableDictionary".to_string()
+                            } else {
+                                format!("RECOVERED_{:X}", child_handle.value())
+                            }
+                        }
+                        _ => continue,
+                    };
+                    let name = if root.get(&inferred_name).is_some() {
+                        format!("RECOVERED_{:X}", child_handle.value())
+                    } else {
+                        inferred_name
+                    };
+                    root.add_entry(name, child_handle);
+                    if let Some(crate::objects::ObjectType::Dictionary(dictionary)) =
+                        document.objects.get_mut(&child_handle)
+                    {
+                        if dictionary.owner.is_null() || dictionary.owner == previous_root {
+                            dictionary.owner = root_handle;
+                        }
+                    }
+                    if let Some(reactors) =
+                        document.reactors_by_handle.get_mut(&child_handle)
+                    {
+                        for reactor in reactors {
+                            if *reactor == previous_root {
+                                *reactor = root_handle;
+                            }
+                        }
+                    }
+                }
+                document
+                    .objects
+                    .insert(root_handle, crate::objects::ObjectType::Dictionary(root));
+                document.header.named_objects_dict_handle = root_handle;
             }
         }
 
@@ -1436,14 +1707,7 @@ impl DwgDocumentBuilder {
             );
         }
 
-        // Ensure handle_seed reflects the true maximum handle present in the
-        // source file's Handles section.
-        let max_from_reader = handles.iter().max().copied().unwrap_or(0);
-        if max_from_reader + 1 > document.header.handle_seed {
-            document.header.handle_seed = max_from_reader + 1;
-        }
-
-        let annotative_started = std::time::Instant::now();
+        let annotative_started = web_time::Instant::now();
         // ── Annotative flag from `AcadAnnotative` EED (STYLE / DIMSTYLE) ──
         // These records have no native annotative field; the flag is stored as
         // extended data under the `AcadAnnotative` application.
@@ -1484,7 +1748,7 @@ impl DwgDocumentBuilder {
             );
         }
 
-        let eed_started = std::time::Instant::now();
+        let eed_started = web_time::Instant::now();
         // ── Decode entity EED blobs into structured records ──────────────────
         // The object reader keeps every EED block as verbatim `raw_dwg_eed`
         // bytes (preserved for a byte-exact re-save). Additionally decode each
@@ -1505,7 +1769,7 @@ impl DwgDocumentBuilder {
                 .map(|l| (l.handle.value(), l.name.clone()))
                 .collect();
             if !app_name_by_handle.is_empty() {
-                document.entities.par_iter_mut().for_each(|entity| {
+                for_each_mut(&mut document.entities, |entity| {
                     let records: Vec<crate::xdata::ExtendedDataRecord> = {
                         let xd = &entity.common().extended_data;
                         xd.raw_dwg_eed
@@ -1546,7 +1810,7 @@ impl DwgDocumentBuilder {
             );
         }
 
-        let acis_started = std::time::Instant::now();
+        let acis_started = web_time::Instant::now();
         // ── AcDs SAB ordering ──────────────────────────────────────────────
         // R2013+ modeler geometry (3DSOLID/REGION/BODY/SURFACE) is stored as
         // SAB blobs in the AcDs section, one per entity whose `has_ds_data` bit
@@ -1581,7 +1845,7 @@ impl DwgDocumentBuilder {
             );
         }
 
-        let repair_started = std::time::Instant::now();
+        let repair_started = web_time::Instant::now();
         // ── Handle-collision repair ────────────────────────────────────────
         // The document is seeded with standard table entries (Standard dim
         // style, default block records, …) at low handles before the file's
@@ -1592,6 +1856,192 @@ impl DwgDocumentBuilder {
         // ("improperly read"). Re-home any dim-style entry whose handle also
         // belongs to a block record, following the header references so the
         // Standard style stays reachable.
+        {
+            use std::collections::HashSet;
+
+            // Retained defaults that were not present in the source must not
+            // keep one of their preallocated low handles when the source uses
+            // that handle for a different record. Prefer the source record and
+            // move only the synthetic table entry.
+            let source_records: HashSet<u64> =
+                record_catalog.iter().map(|(handle, _, _)| *handle).collect();
+            let mut source_views = HashSet::new();
+            let mut source_ucss = HashSet::new();
+            let mut source_vports = HashSet::new();
+            let mut source_app_ids = HashSet::new();
+            for entry in &parsed_entries {
+                match entry {
+                    ParsedEntry::View(handle, _) => {
+                        source_views.insert(*handle);
+                    }
+                    ParsedEntry::Ucs(handle, _) => {
+                        source_ucss.insert(*handle);
+                    }
+                    ParsedEntry::VPort(handle, _) => {
+                        source_vports.insert(*handle);
+                    }
+                    ParsedEntry::AppId(handle, _) => {
+                        source_app_ids.insert(*handle);
+                    }
+                    _ => {}
+                }
+            }
+            let collides = |handle: Handle, source_entries: &HashSet<u64>| {
+                !handle.is_null()
+                    && source_records.contains(&handle.value())
+                    && !source_entries.contains(&handle.value())
+            };
+
+            let source_layers: HashSet<u64> = maps.layers.keys().copied().collect();
+            let layer_collisions: Vec<Handle> = document
+                .layers
+                .iter()
+                .filter(|entry| collides(entry.handle, &source_layers))
+                .map(|entry| entry.handle)
+                .collect();
+            for old in layer_collisions {
+                let new = document.allocate_handle();
+                for entry in document.layers.iter_mut() {
+                    if entry.handle == old {
+                        entry.handle = new;
+                    }
+                }
+                if document.header.current_layer_handle == old {
+                    document.header.current_layer_handle = new;
+                }
+            }
+
+            let source_linetypes: HashSet<u64> = maps.linetypes.keys().copied().collect();
+            let linetype_collisions: Vec<Handle> = document
+                .line_types
+                .iter()
+                .filter(|entry| collides(entry.handle, &source_linetypes))
+                .map(|entry| entry.handle)
+                .collect();
+            for old in linetype_collisions {
+                let new = document.allocate_handle();
+                for entry in document.line_types.iter_mut() {
+                    if entry.handle == old {
+                        entry.handle = new;
+                    }
+                }
+                for handle in [
+                    &mut document.header.current_linetype_handle,
+                    &mut document.header.continuous_linetype_handle,
+                    &mut document.header.bylayer_linetype_handle,
+                    &mut document.header.byblock_linetype_handle,
+                    &mut document.header.dim_linetype_handle,
+                    &mut document.header.dim_linetype1_handle,
+                    &mut document.header.dim_linetype2_handle,
+                ] {
+                    if *handle == old {
+                        *handle = new;
+                    }
+                }
+            }
+
+            let source_styles: HashSet<u64> = maps.text_styles.keys().copied().collect();
+            let style_collisions: Vec<Handle> = document
+                .text_styles
+                .iter()
+                .filter(|entry| collides(entry.handle, &source_styles))
+                .map(|entry| entry.handle)
+                .collect();
+            for old in style_collisions {
+                let new = document.allocate_handle();
+                for entry in document.text_styles.iter_mut() {
+                    if entry.handle == old {
+                        entry.handle = new;
+                    }
+                }
+                if document.header.current_text_style_handle == old {
+                    document.header.current_text_style_handle = new;
+                }
+                if document.header.dim_text_style_handle == old {
+                    document.header.dim_text_style_handle = new;
+                }
+            }
+
+            let source_dimstyles: HashSet<u64> = maps.dim_styles.keys().copied().collect();
+            let dimstyle_collisions: Vec<Handle> = document
+                .dim_styles
+                .iter()
+                .filter(|entry| collides(entry.handle, &source_dimstyles))
+                .map(|entry| entry.handle)
+                .collect();
+            for old in dimstyle_collisions {
+                let new = document.allocate_handle();
+                for entry in document.dim_styles.iter_mut() {
+                    if entry.handle == old {
+                        entry.handle = new;
+                    }
+                }
+                if document.header.current_dimstyle_handle == old {
+                    document.header.current_dimstyle_handle = new;
+                }
+            }
+
+            let view_collisions: Vec<Handle> = document
+                .views
+                .iter()
+                .filter(|entry| collides(entry.handle, &source_views))
+                .map(|entry| entry.handle)
+                .collect();
+            for old in view_collisions {
+                let new = document.allocate_handle();
+                for entry in document.views.iter_mut() {
+                    if entry.handle == old {
+                        entry.handle = new;
+                    }
+                }
+            }
+
+            let ucs_collisions: Vec<Handle> = document
+                .ucss
+                .iter()
+                .filter(|entry| collides(entry.handle, &source_ucss))
+                .map(|entry| entry.handle)
+                .collect();
+            for old in ucs_collisions {
+                let new = document.allocate_handle();
+                for entry in document.ucss.iter_mut() {
+                    if entry.handle == old {
+                        entry.handle = new;
+                    }
+                }
+            }
+
+            let vport_collisions: Vec<Handle> = document
+                .vports
+                .iter()
+                .filter(|entry| collides(entry.handle, &source_vports))
+                .map(|entry| entry.handle)
+                .collect();
+            for old in vport_collisions {
+                let new = document.allocate_handle();
+                for entry in document.vports.iter_mut() {
+                    if entry.handle == old {
+                        entry.handle = new;
+                    }
+                }
+            }
+
+            let app_id_collisions: Vec<Handle> = document
+                .app_ids
+                .iter()
+                .filter(|entry| collides(entry.handle, &source_app_ids))
+                .map(|entry| entry.handle)
+                .collect();
+            for old in app_id_collisions {
+                let new = document.allocate_handle();
+                for entry in document.app_ids.iter_mut() {
+                    if entry.handle == old {
+                        entry.handle = new;
+                    }
+                }
+            }
+        }
+
         {
             use std::collections::HashSet;
             let block_handles: HashSet<u64> = document
@@ -1771,18 +2221,14 @@ impl DwgDocumentBuilder {
         document: &mut CadDocument,
         binary_entity_owner: Option<&ahash::AHashMap<Handle, Handle>>,
     ) {
-        use rayon::prelude::*;
-
         let valid_owners: ahash::AHashSet<Handle> =
             document.block_records.iter().map(|record| record.handle).collect();
         let model_space = document.header.model_space_block_handle;
         let paper_space = document.header.paper_space_block_handle;
         let model_is_valid = valid_owners.contains(&model_space);
         let paper_is_valid = valid_owners.contains(&paper_space);
-        let memberships: Vec<Option<(Handle, Handle)>> = document
-            .entities
-            .par_iter_mut()
-            .map(|entity| {
+        let memberships: Vec<Option<(Handle, Handle)>> =
+            map_mut(&mut document.entities, |entity| {
                 if matches!(
                     entity.as_ref(),
                     EntityType::AttributeEntity(_)
@@ -1811,8 +2257,7 @@ impl DwgDocumentBuilder {
                     std::sync::Arc::make_mut(entity).common_mut().owner_handle = owner;
                 }
                 valid_owners.contains(&owner).then_some((owner, handle))
-            })
-            .collect();
+            });
         let mut by_owner: ahash::AHashMap<Handle, Vec<Handle>> =
             ahash::AHashMap::with_capacity(document.block_records.len());
         for (owner, handle) in memberships.into_iter().flatten() {

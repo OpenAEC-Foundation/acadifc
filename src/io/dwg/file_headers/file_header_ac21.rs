@@ -486,7 +486,7 @@ impl DwgFileHeaderWriterAC21 {
         data: &[u8],
     ) -> Result<(), DxfError> {
         let perf = std::env::var_os("PERF").is_some();
-        let started = std::time::Instant::now();
+        let started = web_time::Instant::now();
         let hash_code = ac21_section_info::hash_code(name)
             .ok_or_else(|| DxfError::InvalidFormat(
                 format!("Unknown AC21 section: {}", name),
@@ -513,22 +513,19 @@ impl DwgFileHeaderWriterAC21 {
         // deterministic because completed pages are written serially in input
         // order after CPU-heavy LZ77/RS work finishes.
         let page_size = max_page_size as usize;
-        use rayon::prelude::*;
+        use crate::io::dwg::parallel::{map_chunks_indexed, worker_count};
         let skip_lz77 = self.skip_lz77;
-        let batch_pages = rayon::current_num_threads().max(1).saturating_mul(2);
+        let batch_pages = worker_count().saturating_mul(2);
         let batch_bytes = page_size.saturating_mul(batch_pages).max(page_size);
         for (batch_index, batch) in data.chunks(batch_bytes).enumerate() {
             let first_page = batch_index.saturating_mul(batch_pages);
-            let encoded: Vec<_> = batch
-                .par_chunks(page_size)
-                .enumerate()
-                .map(|(index, bytes)| {
+            let encoded: Vec<_> =
+                map_chunks_indexed(batch, page_size, |index, bytes| {
                     (
                         (first_page + index) as u64 * max_page_size,
                         encode_data_page(bytes, encoding, skip_lz77),
                     )
-                })
-                .collect();
+                });
 
             for (offset, page) in encoded {
                 let page_record =

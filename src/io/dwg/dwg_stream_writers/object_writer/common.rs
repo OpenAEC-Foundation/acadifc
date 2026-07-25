@@ -500,6 +500,13 @@ impl<'a> DwgObjectWriter<'a> {
 
         // ── R2007+: material flags + shadow flags ──
         if self.version.r2007_plus() {
+            let material_handle = material_handle
+                .filter(|handle| self.is_writable_object(handle));
+            let material_flags = if material_flags == 0b11 && material_handle.is_none() {
+                0b00
+            } else {
+                material_flags
+            };
             // Material flags BB
             self.writer.write_2bits(material_flags);
             if material_flags == 0b11 {

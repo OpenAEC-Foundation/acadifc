@@ -41,19 +41,10 @@ use crate::io::dwg::reed_solomon::reed_solomon_decode;
 use crate::io::dwg::decompressor_ac18::decompress_ac18;
 use crate::io::dwg::decompressor_ac21::decompress_ac21;
 use crate::io::dwg::checksum::{apply_mask, apply_magic_sequence};
+use crate::io::dwg::parallel::{map_ordered, worker_count};
 
 /// AC1021 file header offset (data pages start after this)
 const AC21_FILE_HEADER_SIZE: u64 = 0x480;
-
-fn parallel_map_ordered<T, R, F>(items: Vec<T>, map: F) -> Vec<R>
-where
-    T: Send,
-    R: Send,
-    F: Fn(T) -> R + Send + Sync,
-{
-    use rayon::prelude::*;
-    items.into_par_iter().map(map).collect()
-}
 
 fn ac21_page_layout(
     compressed_size: u64,
@@ -751,11 +742,11 @@ impl<R: Read + Seek> DwgReader<R> {
     pub fn read(&mut self) -> std::result::Result<crate::document::CadDocument, DxfError> {
         let failsafe = self.options.failsafe;
         let perf = std::env::var_os("PERF").is_some();
-        let total_started = std::time::Instant::now();
+        let total_started = web_time::Instant::now();
         self.report_progress(0);
 
         // 1. Read the DWG file header and section map
-        let stage_started = std::time::Instant::now();
+        let stage_started = web_time::Instant::now();
         let info = match self.read_file_header() {
             Ok(info) => info,
             Err(e) if failsafe => {
@@ -846,7 +837,7 @@ impl<R: Read + Seek> DwgReader<R> {
 
         // 5. Read Objects (AcDb:AcDbObjects) and build document
         let handle_count = handle_map.len();
-        let objects_started = std::time::Instant::now();
+        let objects_started = web_time::Instant::now();
         if !handle_map.is_empty() {
             if let Ok(objects_buf) = self.get_section_buffer("AcDb:AcDbObjects", &info) {
                 match crate::io::dwg::dwg_stream_readers::object_reader::DwgObjectReader::new(
@@ -904,6 +895,19 @@ impl<R: Read + Seek> DwgReader<R> {
                 }
             };
             if attached > 0 {
+                let fingerprint = super::sab_fingerprint(document.entities().filter_map(|entity| {
+                    let acis = match entity {
+                        crate::entities::EntityType::Solid3D(entity) => &entity.acis_data,
+                        crate::entities::EntityType::Region(entity) => &entity.acis_data,
+                        crate::entities::EntityType::Body(entity) => &entity.acis_data,
+                        crate::entities::EntityType::Surface(entity) => &entity.acis_data,
+                        _ => return None,
+                    };
+                    (!acis.sab_data.is_empty())
+                        .then_some((entity.common().handle, acis.sab_data.as_slice()))
+                }));
+                document.raw_acds_data = Some(std::sync::Arc::new(acds_buf));
+                document.raw_acds_fingerprint = fingerprint;
                 self.notifications.notify(
                     NotificationType::Warning,
                     format!("AcDs: attached {} SAB blob(s) to modeler entities", attached),
@@ -1826,7 +1830,7 @@ impl<R: Read + Seek> DwgReader<R> {
     ) -> Result<Vec<u8>, DxfError> {
         let failsafe = self.options.failsafe;
         let perf = std::env::var_os("PERF").is_some();
-        let started = std::time::Instant::now();
+        let started = web_time::Instant::now();
 
         // ── AC15 path: direct read from section locators ──
         // If we have section_locators (AC15 format), read raw bytes
@@ -1913,7 +1917,7 @@ impl<R: Read + Seek> DwgReader<R> {
         // concurrently in bounded batches. This keeps peak memory near
         // `result + 2 * worker pages` instead of retaining encoded and decoded
         // copies of the whole section at once.
-        let batch_pages = rayon::current_num_threads().max(1).saturating_mul(2);
+        let batch_pages = worker_count().saturating_mul(2);
         let mut skipped_pages = 0u32;
         for page_batch in section.pages.chunks(batch_pages) {
             let mut prepared = Vec::with_capacity(page_batch.len());
@@ -1983,7 +1987,7 @@ impl<R: Read + Seek> DwgReader<R> {
                 });
             }
 
-            let decoded = parallel_map_ordered(prepared, |page| {
+            let decoded = map_ordered(prepared, |page| {
                 let data = match page.payload {
                     PagePayload::Ready(bytes) => Ok(bytes),
                     PagePayload::Encoded {
@@ -2071,7 +2075,7 @@ impl<R: Read + Seek> DwgReader<R> {
         let max_page_size = section.decompressed_size as usize;
 
         let mut result = vec![0u8; total_size];
-        let batch_pages = rayon::current_num_threads().max(1).saturating_mul(2);
+        let batch_pages = worker_count().saturating_mul(2);
 
         for page_batch in section.pages.chunks(batch_pages) {
             let mut prepared = Vec::with_capacity(page_batch.len());
@@ -2118,7 +2122,7 @@ impl<R: Read + Seek> DwgReader<R> {
                 prepared.push((data_offset as usize, compressed));
             }
 
-            let decoded = parallel_map_ordered(prepared, |(dst_start, compressed)| {
+            let decoded = map_ordered(prepared, |(dst_start, compressed)| {
                 let decompressed = if is_compressed {
                     decompress_ac18(&compressed, max_page_size)
                 } else {

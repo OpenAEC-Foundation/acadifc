@@ -692,27 +692,28 @@ pub fn read_spline(
     version: DwgVersion,
     dxf_version: DxfVersion,
 ) -> SplineData {
-    let mut _flags1 = 0i32;
+    let mut flags1 = 0i32;
     let mut knot_param = 0i32;
 
     let mut scenario = reader.read_bit_long();
     if version.r2013_plus(dxf_version) {
-        _flags1 = reader.read_bit_long();
+        flags1 = reader.read_bit_long();
         knot_param = reader.read_bit_long();
-        // R2013+ encodes the storage method in `splineflags1`, not the leading
-        // scenario field (which is unreliable here): bit 0 = created from fit
-        // points (scenario 2), bit 1 = control vertices (scenario 1).
-        if _flags1 & 1 != 0 {
-            scenario = 2;
-        } else if _flags1 & 2 != 0 {
-            scenario = 1;
-        }
+        // R2013+ derives the storage method from knot parametrization and the
+        // UseKnotParameter flag. Bit 1 is only CV-frame visibility.
+        scenario = if knot_param == 15 || flags1 & 8 == 0 {
+            1
+        } else {
+            2
+        };
     }
 
     let degree = reader.read_bit_long();
 
     let mut rational = false;
-    let mut closed = false;
+    // Fit-point splines have no closed bit in their scenario body. R2013+
+    // stores it in splineflags1 instead.
+    let mut closed = flags1 & 4 != 0;
     let mut periodic = false;
     let mut knot_tolerance = 0.0;
     let mut control_tolerance = 0.0;

@@ -62,7 +62,7 @@ impl DwgWriter {
     /// Write a DWG file to any `Write + Seek` output.
     pub fn write_to_writer<W: Write + Seek>(mut output: W, document: &CadDocument) -> Result<()> {
         let perf = std::env::var_os("PERF").is_some();
-        let started = std::time::Instant::now();
+        let started = web_time::Instant::now();
         validate_version(document.version)?;
         let version = document.version;
 
@@ -127,6 +127,27 @@ fn validate_version(version: DxfVersion) -> Result<()> {
     }
 }
 
+fn acds_data<'a>(
+    document: &'a CadDocument,
+    version: DxfVersion,
+    sab_entries: &[(Handle, Vec<u8>)],
+) -> std::borrow::Cow<'a, [u8]> {
+    let fingerprint = super::sab_fingerprint(
+        sab_entries
+            .iter()
+            .map(|(handle, bytes)| (*handle, bytes.as_slice())),
+    );
+    if document.dwg_source_version == Some(version)
+        && !fingerprint.is_empty()
+        && fingerprint == document.raw_acds_fingerprint
+    {
+        if let Some(raw) = document.raw_acds_data.as_deref() {
+            return std::borrow::Cow::Borrowed(raw.as_slice());
+        }
+    }
+    std::borrow::Cow::Owned(build_acds_prototype(sab_entries))
+}
+
 /// Whether the version uses the AC21 (R2007) file format.
 ///
 /// AC1021 uses RS-encoded pages, LZ77 AC21 compression, and CRC-64
@@ -158,6 +179,9 @@ fn prepare_header(
     extents: &Option<crate::types::BoundingBox3D>,
 ) -> HeaderVariables {
     let mut h = document.header.clone();
+    let emitted = |handle: Handle| {
+        !handle.is_null() && handle_map.iter().any(|(value, _)| *value == handle.value())
+    };
 
     // ── Sync table control handles from actual table objects ──
     // The tables always have valid handles from initialize_defaults(),
@@ -303,11 +327,10 @@ fn prepare_header(
         }
     }
 
-    // R2007+: current_material_handle — validate against objects
+    // R2007+: current_material_handle — validate against emitted objects.
+    // Unsupported raw materials may be dropped during a version conversion.
     {
-        let mat_valid = !h.current_material_handle.is_null()
-            && document.objects.contains_key(&h.current_material_handle);
-        if !mat_valid {
+        if !emitted(h.current_material_handle) {
             h.current_material_handle = Handle::NULL;
         }
     }
@@ -414,7 +437,7 @@ fn write_ac15<W: Write + Seek>(
     let mut fhw = DwgFileHeaderWriterAC15::new(version);
 
     // ── Phase 1: Compute objects FIRST to get handle map ──
-    let objects_started = std::time::Instant::now();
+    let objects_started = web_time::Instant::now();
     let obj_writer = DwgObjectWriter::new(document)?;
     let (obj_data, handle_map_u32, extents, _sab_entries) = obj_writer.write();
     if std::env::var_os("PERF").is_some() {
@@ -504,7 +527,7 @@ fn write_ac18<W: Write + Seek>(
     const SMALL_PAGE: usize = 0x80;
 
     // ── Phase 1: Compute objects FIRST to get handle map ──
-    let objects_started = std::time::Instant::now();
+    let objects_started = web_time::Instant::now();
     let obj_writer = DwgObjectWriter::new(document)?;
     let (obj_data, handle_map_u32, extents, sab_entries) = obj_writer.write();
     if std::env::var_os("PERF").is_some() {
@@ -576,7 +599,7 @@ fn write_ac18<W: Write + Seek>(
 
     // ── Section: AcDsPrototype_1b (AC1027+ ACIS SAB storage) ──
     if !sab_entries.is_empty() {
-        let acds_data = build_acds_prototype(&sab_entries);
+        let acds_data = acds_data(document, version, &sab_entries);
         fhw.add_section(output, section_names::ACDS_PROTOTYPE, &acds_data, true, PAGE_SIZE)?;
     }
 
@@ -626,7 +649,7 @@ fn write_ac21_impl<W: Write + Seek>(
     fhw.skip_lz77 = skip_lz77;
 
     // ── Phase 1: Compute objects FIRST to get handle map ──
-    let objects_started = std::time::Instant::now();
+    let objects_started = web_time::Instant::now();
     let obj_writer = DwgObjectWriter::new(document)?;
     let (obj_data, handle_map_u32, extents, sab_entries) = obj_writer.write();
     if std::env::var_os("PERF").is_some() {
@@ -678,7 +701,7 @@ fn write_ac21_impl<W: Write + Seek>(
 
     // AcDsPrototype_1b (AC1027+ ACIS SAB storage)
     if !sab_entries.is_empty() {
-        let acds_data = build_acds_prototype(&sab_entries);
+        let acds_data = acds_data(document, version, &sab_entries);
         fhw.add_section(output, section_names::ACDS_PROTOTYPE, &acds_data)?;
     }
 

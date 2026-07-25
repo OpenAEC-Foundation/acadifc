@@ -48,7 +48,7 @@ quick-xml = { version = "0.36", optional = true }
 # Utilities
 bitflags = "2.4"
 once_cell = "1.19"
-rayon = "1"
+web-time = "1"
 
 # Fast number formatting
 itoa = "1"
@@ -56,6 +56,7 @@ ryu = "1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 memmap2 = "0.9"
+rayon = "1"
 
 [dev-dependencies]
 criterion = "0.5"

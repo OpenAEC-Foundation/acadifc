@@ -73,10 +73,10 @@ pub fn write_classes(version: DxfVersion, classes: &[DxfClass], maintenance_vers
             writer.write_bit(c.was_zombie);
             writer.write_bit_short(c.item_class_id);
             writer.write_bit_long(c.instance_count);
-            writer.write_bit_long(0);
-            writer.write_bit_long(0);
-            writer.write_bit_long(0);
-            writer.write_bit_long(0);
+            writer.write_bit_long(c.dwg_version);
+            writer.write_bit_long(c.maintenance_version);
+            writer.write_bit_long(c.unknown1);
+            writer.write_bit_long(c.unknown2);
         }
 
         // merge() handles: RL patching, text-size flags, byte alignment
@@ -111,10 +111,10 @@ pub fn write_classes(version: DxfVersion, classes: &[DxfClass], maintenance_vers
 
             if version >= DxfVersion::AC1018 {
                 writer.write_bit_long(c.instance_count);
-                writer.write_bit_long(0);
-                writer.write_bit_long(0);
-                writer.write_bit_long(0);
-                writer.write_bit_long(0);
+                writer.write_bit_long(c.dwg_version);
+                writer.write_bit_long(c.maintenance_version);
+                writer.write_bit_long(c.unknown1);
+                writer.write_bit_long(c.unknown2);
             }
         }
 
@@ -182,6 +182,10 @@ mod tests {
             is_an_entity: false,
             class_number: number,
             item_class_id: 0x1F3, // object
+            dwg_version: 0,
+            maintenance_version: 0,
+            unknown1: 0,
+            unknown2: 0,
         }
     }
 
