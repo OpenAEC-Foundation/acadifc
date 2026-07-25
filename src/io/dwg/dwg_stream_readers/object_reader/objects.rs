@@ -243,6 +243,7 @@ pub struct RasterVariablesData {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BookColorData {
+    pub color: Color,
     pub color_name: String,
     pub book_name: String,
 }
@@ -783,9 +784,36 @@ pub fn read_placeholder(_reader: &mut DwgMergedReader) {
 }
 
 pub fn read_book_color(reader: &mut DwgMergedReader) -> BookColorData {
-    let color_name = reader.read_variable_text();
-    let book_name = reader.read_variable_text();
-    BookColorData { color_name, book_name }
+    let color_index = reader.read_bit_short();
+    if reader.dxf_version() >= DxfVersion::AC1018 {
+        let true_color = reader.read_bit_long() as u32;
+        let flags = reader.read_byte();
+        let color_name = if flags & 1 != 0 {
+            reader.read_variable_text()
+        } else {
+            String::new()
+        };
+        let book_name = if flags & 2 != 0 {
+            reader.read_variable_text()
+        } else {
+            String::new()
+        };
+        BookColorData {
+            color: Color::from_rgb(
+                ((true_color >> 16) & 0xFF) as u8,
+                ((true_color >> 8) & 0xFF) as u8,
+                (true_color & 0xFF) as u8,
+            ),
+            color_name,
+            book_name,
+        }
+    } else {
+        BookColorData {
+            color: Color::from_index(color_index),
+            color_name: String::new(),
+            book_name: String::new(),
+        }
+    }
 }
 
 pub fn read_wipeout_variables(reader: &mut DwgMergedReader) -> WipeoutVariablesData {

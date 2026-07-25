@@ -3733,6 +3733,7 @@ impl DwgDocumentBuilder {
                     let obj = crate::objects::BookColor {
                         handle: Handle::from(handle),
                         owner: owner_handle,
+                        color: data.color,
                         color_name: data.color_name,
                         book_name: data.book_name,
                     };

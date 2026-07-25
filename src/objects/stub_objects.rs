@@ -3,7 +3,7 @@
 //! These are minimal representations of DXF objects that ACadSharp supports
 //! but that don't require full rich data models for typical usage.
 
-use crate::types::{Handle, Matrix4, Vector2, Vector3};
+use crate::types::{Color, Handle, Matrix4, Vector2, Vector3};
 
 /// Trait for minimal stub objects that only need handle + owner fields.
 /// Used by the generic `read_stub_object` reader.
@@ -293,6 +293,9 @@ pub struct BookColor {
     pub handle: Handle,
     /// Owner handle
     pub owner: Handle,
+    /// RGB/ACI value stored by the DBCOLOR record
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub color: Color,
     /// Color name (code 1)
     pub color_name: String,
     /// Book name (code 2)
@@ -305,6 +308,7 @@ impl BookColor {
         BookColor {
             handle: Handle::NULL,
             owner: Handle::NULL,
+            color: Color::default(),
             color_name: String::new(),
             book_name: String::new(),
         }

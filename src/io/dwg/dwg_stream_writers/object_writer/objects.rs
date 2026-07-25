@@ -1361,8 +1361,31 @@ impl<'a> DwgObjectWriter<'a> {
             &None,
         );
 
-        self.writer.write_variable_text(&bc.color_name);
-        self.writer.write_variable_text(&bc.book_name);
+        if self.version.r2004_plus() {
+            self.writer.write_bit_short(0);
+            let (r, g, b) = bc.color.rgb().unwrap_or((0, 0, 0));
+            let true_color =
+                (0xC2u32 << 24) | ((r as u32) << 16) | ((g as u32) << 8) | b as u32;
+            self.writer.write_bit_long(true_color as i32);
+
+            let mut flags = 0u8;
+            if !bc.color_name.is_empty() {
+                flags |= 1;
+            }
+            if !bc.book_name.is_empty() {
+                flags |= 2;
+            }
+            self.writer.write_byte(flags);
+            if flags & 1 != 0 {
+                self.writer.write_variable_text(&bc.color_name);
+            }
+            if flags & 2 != 0 {
+                self.writer.write_variable_text(&bc.book_name);
+            }
+        } else {
+            self.writer
+                .write_bit_short(bc.color.approximate_index());
+        }
 
         self.register_object(bc.handle);
     }
