@@ -726,7 +726,7 @@ impl<R: Read + Seek> DwgReader<R> {
     /// document is returned instead of propagating the error.
     pub fn read(&mut self) -> std::result::Result<crate::document::CadDocument, DxfError> {
         let failsafe = self.options.failsafe;
-        let perf = std::env::var_os("OCS_PERF").is_some();
+        let perf = std::env::var_os("PERF").is_some();
         let total_started = std::time::Instant::now();
 
         // 1. Read the DWG file header and section map
@@ -1790,7 +1790,7 @@ impl<R: Read + Seek> DwgReader<R> {
         info: &DwgFileHeaderInfo,
     ) -> Result<Vec<u8>, DxfError> {
         let failsafe = self.options.failsafe;
-        let perf = std::env::var_os("OCS_PERF").is_some();
+        let perf = std::env::var_os("PERF").is_some();
         let started = std::time::Instant::now();
 
         // ── AC15 path: direct read from section locators ──

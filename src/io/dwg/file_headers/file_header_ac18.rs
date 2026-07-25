@@ -138,7 +138,7 @@ impl DwgFileHeaderWriterAC18 {
         compressed: bool,
         decomp_size: usize,
     ) -> Result<(), DxfError> {
-        let perf = std::env::var_os("OCS_PERF").is_some();
+        let perf = std::env::var_os("PERF").is_some();
         let started = std::time::Instant::now();
         let mut descriptor = DwgSectionDescriptor::new(name);
         descriptor.decompressed_size = decomp_size as u64;

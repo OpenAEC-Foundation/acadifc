@@ -61,7 +61,7 @@ impl DwgWriter {
 
     /// Write a DWG file to any `Write + Seek` output.
     pub fn write_to_writer<W: Write + Seek>(mut output: W, document: &CadDocument) -> Result<()> {
-        let perf = std::env::var_os("OCS_PERF").is_some();
+        let perf = std::env::var_os("PERF").is_some();
         let started = std::time::Instant::now();
         validate_version(document.version)?;
         let version = document.version;
@@ -417,7 +417,7 @@ fn write_ac15<W: Write + Seek>(
     let objects_started = std::time::Instant::now();
     let obj_writer = DwgObjectWriter::new(document)?;
     let (obj_data, handle_map_u32, extents, _sab_entries) = obj_writer.write();
-    if std::env::var_os("OCS_PERF").is_some() {
+    if std::env::var_os("PERF").is_some() {
         eprintln!(
             "[perf] dwg-write objects={:.1}ms bytes={} handles={} format=ac15",
             objects_started.elapsed().as_secs_f64() * 1000.0,
@@ -507,7 +507,7 @@ fn write_ac18<W: Write + Seek>(
     let objects_started = std::time::Instant::now();
     let obj_writer = DwgObjectWriter::new(document)?;
     let (obj_data, handle_map_u32, extents, sab_entries) = obj_writer.write();
-    if std::env::var_os("OCS_PERF").is_some() {
+    if std::env::var_os("PERF").is_some() {
         eprintln!(
             "[perf] dwg-write objects={:.1}ms bytes={} handles={} format=ac18",
             objects_started.elapsed().as_secs_f64() * 1000.0,
@@ -629,7 +629,7 @@ fn write_ac21_impl<W: Write + Seek>(
     let objects_started = std::time::Instant::now();
     let obj_writer = DwgObjectWriter::new(document)?;
     let (obj_data, handle_map_u32, extents, sab_entries) = obj_writer.write();
-    if std::env::var_os("OCS_PERF").is_some() {
+    if std::env::var_os("PERF").is_some() {
         eprintln!(
             "[perf] dwg-write objects={:.1}ms bytes={} handles={} format=ac21",
             objects_started.elapsed().as_secs_f64() * 1000.0,

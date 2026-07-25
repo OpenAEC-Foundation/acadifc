@@ -485,7 +485,7 @@ impl DwgFileHeaderWriterAC21 {
         name: &str,
         data: &[u8],
     ) -> Result<(), DxfError> {
-        let perf = std::env::var_os("OCS_PERF").is_some();
+        let perf = std::env::var_os("PERF").is_some();
         let started = std::time::Instant::now();
         let hash_code = ac21_section_info::hash_code(name)
             .ok_or_else(|| DxfError::InvalidFormat(

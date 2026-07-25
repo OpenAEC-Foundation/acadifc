@@ -233,7 +233,7 @@ impl DwgDocumentBuilder {
     ///
     /// Returns collected notifications (skipped records, warnings).
     pub fn build(mut self, document: &mut CadDocument) -> NotificationCollection {
-        let perf = std::env::var_os("OCS_PERF").is_some();
+        let perf = std::env::var_os("PERF").is_some();
         let build_started = std::time::Instant::now();
         let mut handles = self.obj_reader.handles();
         // Sort handles numerically so that entity records are processed in
