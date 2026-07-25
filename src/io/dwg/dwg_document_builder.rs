@@ -205,6 +205,9 @@ pub struct DwgDocumentBuilder {
     failsafe: bool,
     /// Notifications collected during building.
     notifications: NotificationCollection,
+    /// Shared with `DwgReader`; reports the object-build portion of the
+    /// reader's 0..=1000 progress range.
+    progress: Option<std::sync::Arc<dyn Fn(u16) + Send + Sync>>,
 }
 
 impl DwgDocumentBuilder {
@@ -214,6 +217,7 @@ impl DwgDocumentBuilder {
             obj_reader,
             failsafe: false,
             notifications: NotificationCollection::new(),
+            progress: None,
         }
     }
 
@@ -223,6 +227,17 @@ impl DwgDocumentBuilder {
     /// instead of being silently lost.
     pub fn set_failsafe(&mut self, failsafe: bool) {
         self.failsafe = failsafe;
+    }
+
+    pub fn set_progress_callback(&mut self, progress: std::sync::Arc<dyn Fn(u16) + Send + Sync>) {
+        self.progress = Some(progress);
+    }
+
+    #[inline]
+    fn report_progress(&self, value: u16) {
+        if let Some(progress) = &self.progress {
+            progress(value.min(1000));
+        }
     }
 
     /// Build the document by iterating all handles and dispatching objects.
@@ -244,6 +259,7 @@ impl DwgDocumentBuilder {
         let mut skipped_pass1 = 0u32;
         let mut skipped_pass2 = 0u32;
         let total_handles = handles.len();
+        self.report_progress(55);
 
         // Build class_number → internal type code mapping for non-fixed types.
         // The DWG binary uses class numbers (500+) for object types defined in
@@ -320,6 +336,7 @@ impl DwgDocumentBuilder {
                 ))
             })
             .collect();
+        self.report_progress(75);
         if perf {
             eprintln!(
                 "[perf] dwg-build catalog={:.1}ms records={}",
@@ -327,6 +344,7 @@ impl DwgDocumentBuilder {
                 record_catalog.len(),
             );
         }
+        self.report_progress(110);
         let pass1_started = std::time::Instant::now();
 
         for &(handle, offset, type_code) in &record_catalog {
@@ -1035,6 +1053,8 @@ impl DwgDocumentBuilder {
         let mut decode_seconds = 0.0f64;
         let mut commit_seconds = 0.0f64;
 
+        let pass2_total = pass2_records.len().max(1);
+        let mut pass2_done = 0usize;
         for batch in pass2_records.chunks(batch_size) {
             let decode_started = std::time::Instant::now();
             let chunks: Vec<Pass2Chunk> = batch
@@ -1141,6 +1161,9 @@ impl DwgDocumentBuilder {
                 }
             }
             commit_seconds += commit_started.elapsed().as_secs_f64();
+            pass2_done = pass2_done.saturating_add(batch.len());
+            let value = 110u32 + ((pass2_done as u64 * 760) / pass2_total as u64) as u32;
+            self.report_progress(value.min(870) as u16);
         }
         if perf {
             eprintln!(
@@ -1153,6 +1176,7 @@ impl DwgDocumentBuilder {
             );
         }
         let post_started = std::time::Instant::now();
+        self.report_progress(875);
 
         // ── Post-pass: Assemble polyline vertices and add to document ──
         for (poly_handle, mut entity) in pending.polylines {
@@ -1349,6 +1373,7 @@ impl DwgDocumentBuilder {
                 post_started.elapsed().as_secs_f64() * 1000.0,
             );
         }
+        self.report_progress(925);
         let ownership_started = std::time::Instant::now();
         // Rebuild block membership in O(entities + blocks). The ordinary
         // add-entity path scans every block record for every entity, which

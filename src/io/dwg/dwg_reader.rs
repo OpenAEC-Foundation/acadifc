@@ -652,6 +652,10 @@ pub struct DwgReader<R: Read + Seek> {
     /// Source path, when opened from a file — copied onto the document so the
     /// `Filename` / `FilePath` fields can resolve.
     source_path: Option<String>,
+    /// Optional monotonic read progress callback. The value is in 0..=1000 so
+    /// callers can map DWG parsing into a larger file-open pipeline without
+    /// coupling this crate to a UI or an async runtime.
+    progress: Option<std::sync::Arc<dyn Fn(u16) + Send + Sync>>,
 }
 
 impl DwgReader<File> {
@@ -669,6 +673,7 @@ impl DwgReader<File> {
             options,
             notifications: NotificationCollection::new(),
             source_path: Some(path.to_string_lossy().into_owned()),
+            progress: None,
         })
     }
 }
@@ -688,6 +693,7 @@ impl DwgReader<Cursor<memmap2::Mmap>> {
             options: DwgReadOptions::default(),
             notifications: NotificationCollection::new(),
             source_path: Some(path.to_string_lossy().into_owned()),
+            progress: None,
         })
     }
 }
@@ -700,6 +706,7 @@ impl<R: Read + Seek> DwgReader<R> {
             options: DwgReadOptions::default(),
             notifications: NotificationCollection::new(),
             source_path: None,
+            progress: None,
         }
     }
 
@@ -710,6 +717,23 @@ impl<R: Read + Seek> DwgReader<R> {
             options,
             notifications: NotificationCollection::new(),
             source_path: None,
+            progress: None,
+        }
+    }
+
+    /// Receive monotonic parsing progress in the inclusive range 0..=1000.
+    ///
+    /// The callback may run from Rayon worker threads while object records are
+    /// decoded, so it must be thread-safe and should only perform cheap atomic
+    /// updates.
+    pub fn set_progress_callback(&mut self, progress: std::sync::Arc<dyn Fn(u16) + Send + Sync>) {
+        self.progress = Some(progress);
+    }
+
+    #[inline]
+    fn report_progress(&self, value: u16) {
+        if let Some(progress) = &self.progress {
+            progress(value.min(1000));
         }
     }
 
@@ -728,6 +752,7 @@ impl<R: Read + Seek> DwgReader<R> {
         let failsafe = self.options.failsafe;
         let perf = std::env::var_os("PERF").is_some();
         let total_started = std::time::Instant::now();
+        self.report_progress(0);
 
         // 1. Read the DWG file header and section map
         let stage_started = std::time::Instant::now();
@@ -754,6 +779,7 @@ impl<R: Read + Seek> DwgReader<R> {
         }
         let dxf_version = crate::types::DxfVersion::parse(&info.version_string)
             .unwrap_or(crate::types::DxfVersion::Unknown);
+        self.report_progress(20);
         let mut document = crate::document::CadDocument::with_version(dxf_version);
         document.maintenance_version = info.acad_maintenance_version;
         document.dwg_source_version = Some(dxf_version);
@@ -772,6 +798,7 @@ impl<R: Read + Seek> DwgReader<R> {
                 ),
             }
         }
+        self.report_progress(30);
 
         // 3. Read Header Variables (AcDb:Header)
         if let Ok(header_buf) = self.get_section_buffer("AcDb:Header", &info) {
@@ -787,6 +814,7 @@ impl<R: Read + Seek> DwgReader<R> {
                 ),
             }
         }
+        self.report_progress(40);
 
         // 4. Read Handle Map (AcDb:Handles)
         let handle_map = if let Ok(handle_buf) = self.get_section_buffer("AcDb:Handles", &info) {
@@ -814,6 +842,7 @@ impl<R: Read + Seek> DwgReader<R> {
         } else {
             std::collections::HashMap::new()
         };
+        self.report_progress(50);
 
         // 5. Read Objects (AcDb:AcDbObjects) and build document
         let handle_count = handle_map.len();
@@ -828,6 +857,9 @@ impl<R: Read + Seek> DwgReader<R> {
                     Ok(obj_reader) => {
                         let mut builder = crate::io::dwg::dwg_document_builder::DwgDocumentBuilder::new(obj_reader);
                         builder.set_failsafe(failsafe);
+                        if let Some(progress) = &self.progress {
+                            builder.set_progress_callback(progress.clone());
+                        }
                         let build_notifications = builder.build(&mut document);
                         self.notifications.extend(build_notifications);
                     },
@@ -838,6 +870,7 @@ impl<R: Read + Seek> DwgReader<R> {
                 }
             }
         }
+        self.report_progress(930);
         if perf {
             eprintln!(
                 "[perf] dwg-read objects={:.1}ms handles={} entities={} objects={}",
@@ -877,6 +910,7 @@ impl<R: Read + Seek> DwgReader<R> {
                 );
             }
         }
+        self.report_progress(970);
 
         // 7. Preview / thumbnail image. Stored uncompressed at the raw file
         //    offset in the header's preview seeker (all versions), wrapped in a
@@ -956,6 +990,7 @@ impl<R: Read + Seek> DwgReader<R> {
                 document.classes.iter().count(),
             );
         }
+        self.report_progress(1000);
         Ok(document)
     }
 
