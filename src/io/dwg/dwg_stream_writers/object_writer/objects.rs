@@ -1235,6 +1235,12 @@ impl<'a> DwgObjectWriter<'a> {
     // ── XRecord ─────────────────────────────────────────────────────
 
     fn write_xrecord(&mut self, xrec: &XRecord) {
+        if let Some(raw) = &xrec.raw_dwg_data {
+            if self.raw_passthrough_compatible(xrec.raw_dwg_version) {
+                self.register_raw_object(xrec.handle, raw, xrec.raw_dwg_handle_bits);
+                return;
+            }
+        }
         self.write_common_non_entity_data(
             common::OBJ_XRECORD,
             xrec.handle,

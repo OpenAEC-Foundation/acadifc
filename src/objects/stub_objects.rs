@@ -44,6 +44,9 @@ pub struct VisualStyle {
     pub edge_style: i32,
     /// Internal use only flag (code 291)
     pub internal_use_only: bool,
+    /// Original DXF group-code payload for lossless DXF round-trips.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub raw_dxf_codes: Option<Vec<(i32, String)>>,
 }
 
 impl VisualStyle {
@@ -61,6 +64,7 @@ impl VisualStyle {
             edge_model: 0,
             edge_style: 0,
             internal_use_only: false,
+            raw_dxf_codes: None,
         }
     }
 }
@@ -81,6 +85,9 @@ pub struct Material {
     pub name: String,
     /// Description
     pub description: String,
+    /// Original DXF group-code payload for lossless DXF round-trips.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub raw_dxf_codes: Option<Vec<(i32, String)>>,
 }
 
 impl Material {
@@ -91,6 +98,7 @@ impl Material {
             owner: Handle::NULL,
             name: String::new(),
             description: String::new(),
+            raw_dxf_codes: None,
         }
     }
 }

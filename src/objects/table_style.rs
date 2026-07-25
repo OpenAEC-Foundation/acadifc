@@ -488,6 +488,9 @@ pub struct TableStyle {
     /// Persisted as XDATA under the `AcadAnnotative` application:
     /// `AnnotativeData { 1 <flag> }`.
     pub annotative: bool,
+    /// Original DXF group-code payload for lossless DXF round-trips.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub raw_dxf_codes: Option<Vec<(i32, String)>>,
 }
 
 impl TableStyle {
@@ -518,6 +521,7 @@ impl TableStyle {
             header_row_style: RowCellStyle::header_row(),
             title_row_style: RowCellStyle::title_row(),
             annotative: false,
+            raw_dxf_codes: None,
         }
     }
 
@@ -809,4 +813,3 @@ mod tests {
         assert_eq!(TableBorderType::from(2), TableBorderType::Double);
     }
 }
-

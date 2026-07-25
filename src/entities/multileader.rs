@@ -944,6 +944,12 @@ pub struct MultiLeader {
     pub enable_annotation_scale: bool,
     /// Extend leader to text.
     pub extend_leader_to_text: bool,
+    /// Raw DXF group codes, preserved verbatim for exact-version round-trips.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub raw_dxf_codes: Option<Vec<(i32, String)>>,
+    /// DXF version that produced `raw_dxf_codes`.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub raw_dxf_version: Option<crate::types::DxfVersion>,
     /// Raw DWG record bytes, preserved verbatim for lossless round-trip.
     /// The MLEADER context is a large, intricate structure; until the native
     /// encoder is byte-exact, the DWG reader captures the original record so
@@ -1002,6 +1008,8 @@ impl MultiLeader {
             // or a reader that missed the flag would over-scale every instance.
             enable_annotation_scale: false,
             extend_leader_to_text: false,
+            raw_dxf_codes: None,
+            raw_dxf_version: None,
             raw_dwg_data: None,
             dwg_handle_bits: 0,
             dwg_source_version: None,
@@ -1523,4 +1531,3 @@ mod tests {
         assert_eq!(ctx.leader_roots.len(), 0);
     }
 }
-

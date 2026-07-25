@@ -742,6 +742,8 @@ impl DwgDocumentBuilder {
                     style.last_height = data.last_height;
                     style.font_file = data.font_file.clone();
                     style.big_font_file = data.big_font_file.clone();
+                    style.is_shape_file = data.is_shape_file;
+                    style.is_vertical = data.is_vertical;
                     style.flags.backward = (data.generation & 2) != 0;
                     style.flags.upside_down = (data.generation & 4) != 0;
                     // Only mark xref-dependent if the xref block record handle is valid
@@ -2484,6 +2486,9 @@ impl DwgDocumentBuilder {
                     }
                     e.columns = data.columns;
                     e.rows = data.rows;
+                    e.raw_dwg_data = Some(reader.raw_merged_data());
+                    e.raw_dwg_handle_bits = reader.get_handle_bits();
+                    e.raw_dwg_version = Some(document.version);
                     let _ = document.add_entity(EntityType::Table(e));
                 }
                 OBJ_LWPOLYLINE => {
@@ -3966,6 +3971,9 @@ impl DwgDocumentBuilder {
                     obj.cloning_flags =
                         crate::objects::DictionaryCloningFlags::from_value(data.cloning_flags);
                     obj.raw_data = data.raw_data;
+                    obj.raw_dwg_data = Some(reader.raw_merged_data());
+                    obj.raw_dwg_handle_bits = reader.get_handle_bits();
+                    obj.raw_dwg_version = Some(document.version);
                     document.objects.insert(
                         Handle::from(handle),
                         crate::objects::ObjectType::XRecord(obj),

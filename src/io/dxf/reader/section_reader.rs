@@ -773,7 +773,7 @@ impl<'a> SectionReader<'a> {
                         }
                     }
                     "MULTILEADER" | "MLEADER" => {
-                        if let Some(entity) = self.read_multileader()? {
+                        if let Some(entity) = self.read_multileader(document.version)? {
                             block_entities.push(EntityType::MultiLeader(entity));
                         }
                     }
@@ -808,7 +808,7 @@ impl<'a> SectionReader<'a> {
                         }
                     }
                     "ACAD_TABLE" | "TABLE" => {
-                        if let Some(entity) = self.read_table_entity()? {
+                        if let Some(entity) = self.read_table_entity(document.version)? {
                             block_entities.push(EntityType::Table(entity));
                         }
                     }
@@ -1012,7 +1012,7 @@ impl<'a> SectionReader<'a> {
                         }
                     }
                     "MULTILEADER" | "MLEADER" => {
-                        if let Some(entity) = self.read_multileader()? {
+                        if let Some(entity) = self.read_multileader(document.version)? {
                             let _ = document.add_entity(EntityType::MultiLeader(entity));
                         }
                     }
@@ -1047,7 +1047,7 @@ impl<'a> SectionReader<'a> {
                         }
                     }
                     "ACAD_TABLE" | "TABLE" => {
-                        if let Some(entity) = self.read_table_entity()? {
+                        if let Some(entity) = self.read_table_entity(document.version)? {
                             let _ = document.add_entity(EntityType::Table(entity));
                         }
                     }
@@ -1108,7 +1108,7 @@ impl<'a> SectionReader<'a> {
                         }
                     }
                     "XRECORD" => {
-                        if let Some(obj) = self.read_xrecord()? {
+                        if let Some(obj) = self.read_xrecord(document.version)? {
                             document.objects.insert(obj.handle, ObjectType::XRecord(obj));
                         }
                     }
@@ -1161,7 +1161,7 @@ impl<'a> SectionReader<'a> {
                         }
                     }
                     "SORTENTSTABLE" => {
-                        if let Some(obj) = self.read_sort_entities_table()? {
+                        if let Some(obj) = self.read_sort_entities_table(document.version)? {
                             document.objects.insert(obj.handle, ObjectType::SortEntitiesTable(obj));
                         }
                     }
@@ -1444,8 +1444,10 @@ impl<'a> SectionReader<'a> {
     /// Read a VISUALSTYLE object
     fn read_visualstyle(&mut self) -> Result<Option<VisualStyle>> {
         let mut obj = VisualStyle::new();
+        let mut raw_dxf_codes = Vec::new();
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 { self.reader.push_back(pair); break; }
+            raw_dxf_codes.push((pair.code, pair.value_string.clone()));
             match pair.code {
                 5 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { obj.handle = Handle::new(h); } }
                 330 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { obj.owner = Handle::new(h); } }
@@ -1461,14 +1463,17 @@ impl<'a> SectionReader<'a> {
                 _ => {}
             }
         }
+        obj.raw_dxf_codes = Some(raw_dxf_codes);
         Ok(Some(obj))
     }
 
     /// Read a MATERIAL object
     fn read_material(&mut self) -> Result<Option<Material>> {
         let mut obj = Material::new();
+        let mut raw_dxf_codes = Vec::new();
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 { self.reader.push_back(pair); break; }
+            raw_dxf_codes.push((pair.code, pair.value_string.clone()));
             match pair.code {
                 5 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { obj.handle = Handle::new(h); } }
                 330 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { obj.owner = Handle::new(h); } }
@@ -1477,6 +1482,7 @@ impl<'a> SectionReader<'a> {
                 _ => {}
             }
         }
+        obj.raw_dxf_codes = Some(raw_dxf_codes);
         Ok(Some(obj))
     }
 
@@ -1938,6 +1944,8 @@ impl<'a> SectionReader<'a> {
                 2 => style.name = pair.value_string.clone(),
                 70 => {
                     if let Some(f) = pair.as_i16() {
+                        style.is_shape_file = (f & 0x01) != 0;
+                        style.is_vertical = (f & 0x04) != 0;
                         style.xref_dependent = (f & 0x10) != 0;
                     }
                 }
@@ -5884,20 +5892,50 @@ impl<'a> SectionReader<'a> {
     /// used to leave the context empty: no leader lines, no text — invisible
     /// multileaders from DXF while the same drawing's DWG was fine).
     /// Code mapping mirrors `write_multileader` for round-trip fidelity.
-    fn read_multileader(&mut self) -> Result<Option<MultiLeader>> {
+    fn read_multileader(
+        &mut self,
+        version: crate::types::DxfVersion,
+    ) -> Result<Option<MultiLeader>> {
         use crate::entities::multileader as mlt;
         let mut ml = MultiLeader::new();
         let mut block_scale = PointReader::new();
+        let mut raw_dxf_codes = Vec::new();
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 { self.reader.push_back(pair); break; }
+            raw_dxf_codes.push((pair.code, pair.value_string.clone()));
             match pair.code {
                 8 => ml.common.layer = pair.value_string.clone(),
                 62 => { if let Some(v) = pair.as_i16() { ml.common.color = Color::from_index(v); } }
                 370 => { if let Some(v) = pair.as_i16() { ml.common.line_weight = LineWeight::from_value(v); } }
+                102 => {
+                    let group = pair.value_string.trim().to_string();
+                    if group.starts_with('{') {
+                        while let Some(group_pair) = self.reader.read_pair()? {
+                            raw_dxf_codes
+                                .push((group_pair.code, group_pair.value_string.clone()));
+                            if group_pair.code == 102 && group_pair.value_string.trim() == "}" {
+                                break;
+                            }
+                            if group == "{ACAD_REACTORS" && group_pair.code == 330 {
+                                if let Ok(h) =
+                                    u64::from_str_radix(group_pair.value_string.trim(), 16)
+                                {
+                                    ml.common.reactors.push(Handle::new(h));
+                                }
+                            } else if group == "{ACAD_XDICTIONARY" && group_pair.code == 360 {
+                                if let Ok(h) =
+                                    u64::from_str_radix(group_pair.value_string.trim(), 16)
+                                {
+                                    ml.common.xdictionary_handle = Some(Handle::new(h));
+                                }
+                            }
+                        }
+                    }
+                }
                 270 => {} // class version
                 300 if pair.value_string.starts_with("CONTEXT_DATA") => {
-                    self.read_mleader_context(&mut ml.context)?;
+                    self.read_mleader_context(&mut ml.context, &mut raw_dxf_codes)?;
                 }
                 340 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { ml.style_handle = Some(Handle::new(h)); } }
                 90 => {
@@ -5957,6 +5995,8 @@ impl<'a> SectionReader<'a> {
         if let Some(s) = block_scale.get_point() {
             ml.block_scale = s;
         }
+        ml.raw_dxf_codes = Some(raw_dxf_codes);
+        ml.raw_dxf_version = Some(version);
         Ok(Some(ml))
     }
 
@@ -5965,6 +6005,7 @@ impl<'a> SectionReader<'a> {
     fn read_mleader_context(
         &mut self,
         ctx: &mut crate::entities::multileader::MultiLeaderAnnotContext,
+        raw_dxf_codes: &mut Vec<(i32, String)>,
     ) -> Result<()> {
         use crate::entities::multileader as mlt;
         let mut content_base = PointReader::new();
@@ -5984,10 +6025,11 @@ impl<'a> SectionReader<'a> {
                 self.reader.push_back(pair);
                 break;
             }
+            raw_dxf_codes.push((pair.code, pair.value_string.clone()));
             match pair.code {
                 301 => break, // "}"
                 302 if pair.value_string.starts_with("LEADER") => {
-                    let root = self.read_mleader_leader_root()?;
+                    let root = self.read_mleader_leader_root(raw_dxf_codes)?;
                     ctx.leader_roots.push(root);
                 }
                 40 => { if let Some(v) = pair.as_double() { ctx.scale_factor = v; } }
@@ -6071,6 +6113,7 @@ impl<'a> SectionReader<'a> {
     /// nested `304 LEADER_LINE{ … }` lines.
     fn read_mleader_leader_root(
         &mut self,
+        raw_dxf_codes: &mut Vec<(i32, String)>,
     ) -> Result<crate::entities::multileader::LeaderRoot> {
         use crate::entities::multileader::{LeaderRoot, StartEndPointPair};
         let mut root = LeaderRoot::new(0);
@@ -6085,10 +6128,14 @@ impl<'a> SectionReader<'a> {
                 self.reader.push_back(pair);
                 break;
             }
+            raw_dxf_codes.push((pair.code, pair.value_string.clone()));
             match pair.code {
                 303 => break, // "}"
                 304 if pair.value_string.starts_with("LEADER_LINE") => {
-                    let line = self.read_mleader_leader_line(root.lines.len() as i32)?;
+                    let line = self.read_mleader_leader_line(
+                        root.lines.len() as i32,
+                        raw_dxf_codes,
+                    )?;
                     root.lines.push(line);
                 }
                 290 => { if let Some(v) = pair.as_bool() { root.content_valid = v; } }
@@ -6122,6 +6169,7 @@ impl<'a> SectionReader<'a> {
     fn read_mleader_leader_line(
         &mut self,
         index: i32,
+        raw_dxf_codes: &mut Vec<(i32, String)>,
     ) -> Result<crate::entities::multileader::LeaderLine> {
         use crate::entities::multileader as mlt;
         let mut line = mlt::LeaderLine::from_points(index, Vec::new());
@@ -6131,6 +6179,7 @@ impl<'a> SectionReader<'a> {
                 self.reader.push_back(pair);
                 break;
             }
+            raw_dxf_codes.push((pair.code, pair.value_string.clone()));
             match pair.code {
                 305 => break, // "}"
                 10 => {
@@ -6535,7 +6584,10 @@ impl<'a> SectionReader<'a> {
     }
 
     /// Read a TABLE entity (basic properties)
-    fn read_table_entity(&mut self) -> Result<Option<crate::entities::Table>> {
+    fn read_table_entity(
+        &mut self,
+        version: crate::types::DxfVersion,
+    ) -> Result<Option<crate::entities::Table>> {
         use crate::entities::table::{
             CellContent, CellType, CellValue, CellValueType, TableCell, TableCellContentType,
             TableColumn, TableRow,
@@ -6552,6 +6604,7 @@ impl<'a> SectionReader<'a> {
         let mut cells: Vec<TableCell> = Vec::new();
         let mut ncols: usize = 0;
         let mut cur: Option<TableCell> = None;
+        let mut raw_dxf_codes = Vec::new();
         // True while inside a cell's CELL_VALUE block (301 … 304), so per-cell
         // codes that collide with table-level ones (92, 90) are routed to the
         // cell value rather than the table header.
@@ -6569,6 +6622,7 @@ impl<'a> SectionReader<'a> {
                 self.reader.push_back(pair);
                 break;
             }
+            raw_dxf_codes.push((pair.code, pair.value_string.clone()));
             match pair.code {
                 8 => table.common.layer = pair.value_string.clone(),
                 62 if cur.is_none() => {
@@ -6579,6 +6633,31 @@ impl<'a> SectionReader<'a> {
                 370 if cur.is_none() => {
                     if let Some(v) = pair.as_i16() {
                         table.common.line_weight = LineWeight::from_value(v);
+                    }
+                }
+                102 if cur.is_none() => {
+                    let group = pair.value_string.trim().to_string();
+                    if group.starts_with('{') {
+                        while let Some(group_pair) = self.reader.read_pair()? {
+                            raw_dxf_codes
+                                .push((group_pair.code, group_pair.value_string.clone()));
+                            if group_pair.code == 102 && group_pair.value_string.trim() == "}" {
+                                break;
+                            }
+                            if group == "{ACAD_REACTORS" && group_pair.code == 330 {
+                                if let Ok(h) =
+                                    u64::from_str_radix(group_pair.value_string.trim(), 16)
+                                {
+                                    table.common.reactors.push(Handle::new(h));
+                                }
+                            } else if group == "{ACAD_XDICTIONARY" && group_pair.code == 360 {
+                                if let Ok(h) =
+                                    u64::from_str_radix(group_pair.value_string.trim(), 16)
+                                {
+                                    table.common.xdictionary_handle = Some(Handle::new(h));
+                                }
+                            }
+                        }
                     }
                 }
                 // Block record handle: acadrust writes it under 2, AutoCAD under 343.
@@ -6791,6 +6870,8 @@ impl<'a> SectionReader<'a> {
         if let Some(h) = horizontal.get_point() {
             table.horizontal_direction = h;
         }
+        table.raw_dxf_codes = Some(raw_dxf_codes);
+        table.raw_dxf_version = Some(version);
         Ok(Some(table))
     }
 
@@ -6852,11 +6933,16 @@ impl<'a> SectionReader<'a> {
     // ===== New Object Readers =====
 
     /// Read an XRECORD object
-    fn read_xrecord(&mut self) -> Result<Option<XRecord>> {
+    fn read_xrecord(
+        &mut self,
+        version: crate::types::DxfVersion,
+    ) -> Result<Option<XRecord>> {
         let mut xr = XRecord::new();
+        let mut raw_dxf_codes = Vec::new();
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 { self.reader.push_back(pair); break; }
+            raw_dxf_codes.push((pair.code, pair.value_string.clone()));
             match pair.code {
                 5 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { xr.handle = Handle::new(h); } }
                 330 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { xr.owner = Handle::new(h); } }
@@ -6925,6 +7011,8 @@ impl<'a> SectionReader<'a> {
             }
         }
 
+        xr.raw_dxf_codes = Some(raw_dxf_codes);
+        xr.raw_dxf_version = Some(version);
         Ok(Some(xr))
     }
 
@@ -7115,9 +7203,11 @@ impl<'a> SectionReader<'a> {
     /// Read a TABLESTYLE object
     fn read_table_style(&mut self) -> Result<Option<TableStyle>> {
         let mut ts = TableStyle::new("Standard");
+        let mut raw_dxf_codes = Vec::new();
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 { self.reader.push_back(pair); break; }
+            raw_dxf_codes.push((pair.code, pair.value_string.clone()));
             match pair.code {
                 5 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { ts.handle = Handle::new(h); } }
                 330 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { ts.owner_handle = Handle::new(h); } }
@@ -7129,6 +7219,7 @@ impl<'a> SectionReader<'a> {
             }
         }
 
+        ts.raw_dxf_codes = Some(raw_dxf_codes);
         Ok(Some(ts))
     }
 
@@ -7153,12 +7244,17 @@ impl<'a> SectionReader<'a> {
     }
 
     /// Read a SORTENTSTABLE object
-    fn read_sort_entities_table(&mut self) -> Result<Option<SortEntitiesTable>> {
+    fn read_sort_entities_table(
+        &mut self,
+        version: crate::types::DxfVersion,
+    ) -> Result<Option<SortEntitiesTable>> {
         let mut set = SortEntitiesTable::new();
         let mut entity_handle: Option<Handle> = None;
+        let mut raw_dxf_codes = Vec::new();
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 { self.reader.push_back(pair); break; }
+            raw_dxf_codes.push((pair.code, pair.value_string.clone()));
             match pair.code {
                 5 => {
                     if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) {
@@ -7183,6 +7279,8 @@ impl<'a> SectionReader<'a> {
             }
         }
 
+        set.raw_dxf_codes = Some(raw_dxf_codes);
+        set.raw_dxf_version = Some(version);
         Ok(Some(set))
     }
 

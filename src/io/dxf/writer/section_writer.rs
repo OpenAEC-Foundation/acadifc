@@ -104,6 +104,15 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         for h in document.entity_index.keys() {
             set.insert(*h);
         }
+        // INSERT attributes are inline child entities and are not present in
+        // entity_index, but extension dictionaries may own data through them.
+        for entity in &document.entities {
+            if let EntityType::Insert(insert) = entity.as_ref() {
+                for attribute in &insert.attributes {
+                    set.insert(attribute.common.handle);
+                }
+            }
+        }
         // Table record handles
         for r in document.layers.iter() { set.insert(r.handle()); }
         for r in document.line_types.iter() { set.insert(r.handle()); }
@@ -113,6 +122,15 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         for r in document.views.iter() { set.insert(r.handle()); }
         for r in document.vports.iter() { set.insert(r.handle()); }
         for r in document.ucss.iter() { set.insert(r.handle()); }
+        set.insert(document.layers.handle());
+        set.insert(document.line_types.handle());
+        set.insert(document.text_styles.handle());
+        set.insert(document.dim_styles.handle());
+        set.insert(document.app_ids.handle());
+        set.insert(document.views.handle());
+        set.insert(document.vports.handle());
+        set.insert(document.ucss.handle());
+        set.insert(document.block_records.handle());
         self.root_dict_handle = Self::find_root_dict_handle(&document.objects);
         self.valid_handles = set;
         // Store ByLayer/ByBlock linetype handles for use as default in MLeader etc.
@@ -367,7 +385,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     /// Write VPORT table
     fn write_vport_table(&mut self, document: &CadDocument) -> Result<()> {
         let table_handle = document.vports.handle();
-        self.write_table_header("VPORT", document.vports.len(), table_handle)?;
+        self.write_table_header("VPORT", document.vports.len(), table_handle, document)?;
 
         for vport in document.vports.iter() {
             self.write_vport_entry(vport, table_handle)?;
@@ -473,7 +491,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     /// Write LTYPE table
     fn write_ltype_table(&mut self, document: &CadDocument) -> Result<()> {
         let table_handle = document.line_types.handle();
-        self.write_table_header("LTYPE", document.line_types.len(), table_handle)?;
+        self.write_table_header("LTYPE", document.line_types.len(), table_handle, document)?;
 
         for ltype in document.line_types.iter() {
             self.write_ltype_entry(ltype, table_handle)?;
@@ -538,7 +556,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     /// Write LAYER table
     fn write_layer_table(&mut self, document: &CadDocument) -> Result<()> {
         let table_handle = document.layers.handle();
-        self.write_table_header("LAYER", document.layers.len(), table_handle)?;
+        self.write_table_header("LAYER", document.layers.len(), table_handle, document)?;
 
         for layer in document.layers.iter() {
             self.write_layer_entry(layer, table_handle)?;
@@ -603,7 +621,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     /// Write STYLE table (text styles)
     fn write_style_table(&mut self, document: &CadDocument) -> Result<()> {
         let table_handle = document.text_styles.handle();
-        self.write_table_header("STYLE", document.text_styles.len(), table_handle)?;
+        self.write_table_header("STYLE", document.text_styles.len(), table_handle, document)?;
 
         for style in document.text_styles.iter() {
             self.write_style_entry(style, table_handle)?;
@@ -638,6 +656,8 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_subclass("AcDbTextStyleTableRecord")?;
         self.writer.write_string(2, style.name())?;
         let mut flags: i16 = 0;
+        if style.is_shape_file { flags |= 0x01; }
+        if style.is_vertical { flags |= 0x04; }
         if style.xref_dependent { flags |= 0x10; }
         self.writer.write_i16(70, flags)?;
         self.writer.write_double(40, style.height)?;
@@ -656,7 +676,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     /// Write VIEW table
     fn write_view_table(&mut self, document: &CadDocument) -> Result<()> {
         let table_handle = document.views.handle();
-        self.write_table_header("VIEW", document.views.len(), table_handle)?;
+        self.write_table_header("VIEW", document.views.len(), table_handle, document)?;
 
         for view in document.views.iter() {
             self.write_view_entry(view, table_handle)?;
@@ -694,7 +714,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     /// Write UCS table
     fn write_ucs_table(&mut self, document: &CadDocument) -> Result<()> {
         let table_handle = document.ucss.handle();
-        self.write_table_header("UCS", document.ucss.len(), table_handle)?;
+        self.write_table_header("UCS", document.ucss.len(), table_handle, document)?;
 
         for ucs in document.ucss.iter() {
             self.write_ucs_entry(ucs, table_handle)?;
@@ -727,7 +747,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     /// Write APPID table
     fn write_appid_table(&mut self, document: &CadDocument) -> Result<()> {
         let table_handle = document.app_ids.handle();
-        self.write_table_header("APPID", document.app_ids.len(), table_handle)?;
+        self.write_table_header("APPID", document.app_ids.len(), table_handle, document)?;
 
         for appid in document.app_ids.iter() {
             self.write_appid_entry(appid, table_handle)?;
@@ -754,7 +774,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     /// Write DIMSTYLE table
     fn write_dimstyle_table(&mut self, document: &CadDocument) -> Result<()> {
         let table_handle = document.dim_styles.handle();
-        self.write_table_header("DIMSTYLE", document.dim_styles.len(), table_handle)?;
+        self.write_table_header("DIMSTYLE", document.dim_styles.len(), table_handle, document)?;
         self.writer.write_subclass("AcDbDimStyleTable")?;
         self.writer.write_i16(71, document.dim_styles.len() as i16)?;
 
@@ -873,7 +893,12 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     /// Write BLOCK_RECORD table
     fn write_block_record_table(&mut self, document: &CadDocument) -> Result<()> {
         let table_handle = document.block_records.handle();
-        self.write_table_header("BLOCK_RECORD", document.block_records.len(), table_handle)?;
+        self.write_table_header(
+            "BLOCK_RECORD",
+            document.block_records.len(),
+            table_handle,
+            document,
+        )?;
 
         for block_record in document.block_records.iter() {
             self.write_block_record_entry(block_record, table_handle)?;
@@ -901,10 +926,23 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     }
 
     /// Write table header
-    fn write_table_header(&mut self, name: &str, count: usize, table_handle: Handle) -> Result<()> {
+    fn write_table_header(
+        &mut self,
+        name: &str,
+        count: usize,
+        table_handle: Handle,
+        document: &CadDocument,
+    ) -> Result<()> {
         self.writer.write_string(0, "TABLE")?;
         self.writer.write_string(2, name)?;
         self.writer.write_handle(5, table_handle)?;
+        if let Some((handle, _)) = document.objects.iter().find(|(_, object)| {
+            matches!(object, ObjectType::Dictionary(dict) if dict.owner == table_handle)
+        }) {
+            self.writer.write_string(102, "{ACAD_XDICTIONARY")?;
+            self.writer.write_handle(360, *handle)?;
+            self.writer.write_string(102, "}")?;
+        }
         self.writer.write_handle(330, Handle::new(0))?; // Tables owned by document root (handle 0)
         self.writer.write_subclass("AcDbSymbolTable")?;
         self.writer.write_i16(70, count as i16)?;
@@ -1064,7 +1102,19 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     /// captured bytes verbatim, so they are skipped.
     fn write_entity_with_owner(&mut self, entity: &EntityType, owner: Handle) -> Result<()> {
         self.write_entity_body(entity, owner)?;
-        if !matches!(
+        let raw_table = matches!(
+            entity,
+            EntityType::Table(table)
+                if table.raw_dxf_codes.is_some()
+                    && table.raw_dxf_version == Some(self.dxf_version)
+        );
+        let raw_multileader = matches!(
+            entity,
+            EntityType::MultiLeader(multileader)
+                if multileader.raw_dxf_codes.is_some()
+                    && multileader.raw_dxf_version == Some(self.dxf_version)
+        );
+        if !raw_table && !raw_multileader && !matches!(
             entity,
             EntityType::Polyline(_)
                 | EntityType::Polyline2D(_)
@@ -2656,7 +2706,8 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 continue;
             }
             self.writer.write_string(3, key)?;
-            self.writer.write_handle(350, *handle)?;
+            self.writer
+                .write_handle(if dict.hard_owner { 360 } else { 350 }, *handle)?;
         }
 
         Ok(())
@@ -2769,6 +2820,14 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         use crate::objects::XRecordValue;
 
         self.writer.write_string(0, "XRECORD")?;
+        if xrecord.raw_dxf_version == Some(self.dxf_version) {
+            if let Some(raw_dxf_codes) = &xrecord.raw_dxf_codes {
+                for (code, value) in raw_dxf_codes {
+                    self.writer.write_string(*code, value)?;
+                }
+                return Ok(());
+            }
+        }
         self.writer.write_handle(5, xrecord.handle)?;
         self.writer.write_handle(330, xrecord.owner)?;
         self.writer.write_subclass("AcDbXrecord")?;
@@ -3165,6 +3224,12 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     /// Write TableStyle object
     fn write_table_style(&mut self, style: &TableStyle) -> Result<()> {
         self.writer.write_string(0, "TABLESTYLE")?;
+        if let Some(raw_dxf_codes) = &style.raw_dxf_codes {
+            for (code, value) in raw_dxf_codes {
+                self.writer.write_string(*code, value)?;
+            }
+            return Ok(());
+        }
         self.writer.write_handle(5, style.handle)?;
         self.writer.write_handle(330, style.owner_handle)?;
         self.writer.write_subclass("AcDbTableStyle")?;
@@ -3375,6 +3440,14 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     /// Write SortEntitiesTable object
     fn write_sort_entities_table(&mut self, table: &SortEntitiesTable) -> Result<()> {
         self.writer.write_string(0, "SORTENTSTABLE")?;
+        if table.raw_dxf_version == Some(self.dxf_version) {
+            if let Some(raw_dxf_codes) = &table.raw_dxf_codes {
+                for (code, value) in raw_dxf_codes {
+                    self.writer.write_string(*code, value)?;
+                }
+                return Ok(());
+            }
+        }
         self.writer.write_handle(5, table.handle)?;
         self.writer.write_handle(330, table.owner_handle)?;
         self.writer.write_subclass("AcDbSortentsTable")?;
@@ -3430,6 +3503,12 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     /// Write a VISUALSTYLE object
     fn write_visualstyle(&mut self, obj: &VisualStyle) -> Result<()> {
         self.writer.write_string(0, "VISUALSTYLE")?;
+        if let Some(raw_dxf_codes) = &obj.raw_dxf_codes {
+            for (code, value) in raw_dxf_codes {
+                self.writer.write_string(*code, value)?;
+            }
+            return Ok(());
+        }
         self.writer.write_handle(5, obj.handle)?;
         self.writer.write_handle(330, obj.owner)?;
         self.writer.write_subclass("AcDbVisualStyle")?;
@@ -3441,15 +3520,19 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_i32(90, obj.face_modifier)?;
         self.writer.write_i32(91, obj.edge_model)?;
         self.writer.write_i32(92, obj.edge_style)?;
-        if obj.internal_use_only {
-            self.writer.write_bool(291, obj.internal_use_only)?;
-        }
+        self.writer.write_bool(291, obj.internal_use_only)?;
         Ok(())
     }
 
     /// Write a MATERIAL object
     fn write_material(&mut self, obj: &Material) -> Result<()> {
         self.writer.write_string(0, "MATERIAL")?;
+        if let Some(raw_dxf_codes) = &obj.raw_dxf_codes {
+            for (code, value) in raw_dxf_codes {
+                self.writer.write_string(*code, value)?;
+            }
+            return Ok(());
+        }
         self.writer.write_handle(5, obj.handle)?;
         self.writer.write_handle(330, obj.owner)?;
         self.writer.write_subclass("AcDbMaterial")?;
@@ -3697,6 +3780,14 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     /// Write MULTILEADER entity
     fn write_multileader(&mut self, mleader: &crate::entities::MultiLeader, owner: Handle) -> Result<()> {
         self.writer.write_entity_type("MULTILEADER")?;
+        if mleader.raw_dxf_version == Some(self.dxf_version) {
+            if let Some(raw_dxf_codes) = &mleader.raw_dxf_codes {
+                for (code, value) in raw_dxf_codes {
+                    self.writer.write_string(*code, value)?;
+                }
+                return Ok(());
+            }
+        }
         self.write_common_entity_data(&mleader.common, owner)?;
         self.writer.write_subclass("AcDbMLeader")?;
 
@@ -4035,7 +4126,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         }
 
         // Edge count
-        self.writer.write_i32(94, (mesh.edges.len() * 2) as i32)?;
+        self.writer.write_i32(94, mesh.edges.len() as i32)?;
 
         // Edges: start_index, end_index pairs
         for edge in &mesh.edges {
@@ -4043,17 +4134,14 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             self.writer.write_i32(90, edge.end as i32)?;
         }
 
-        // Edge crease count
-        let creased_edges: Vec<_> = mesh.edges.iter().enumerate()
-            .filter(|(_, e)| e.has_crease())
-            .collect();
-        self.writer.write_i32(95, creased_edges.len() as i32)?;
-
-        // Edge creases: index, crease_value pairs
-        for (idx, edge) in creased_edges {
-            self.writer.write_i32(90, idx as i32)?;
+        // Edge crease count and one value per edge
+        self.writer.write_i32(95, mesh.edges.len() as i32)?;
+        for edge in &mesh.edges {
             self.writer.write_double(140, edge.crease_value())?;
         }
+
+        // Sub-entities with overridden properties
+        self.writer.write_i32(90, 0)?;
 
         Ok(())
     }
@@ -4292,6 +4380,14 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     /// Write ACAD_TABLE entity
     fn write_acad_table(&mut self, table: &table::Table, owner: Handle) -> Result<()> {
         self.writer.write_entity_type("ACAD_TABLE")?;
+        if table.raw_dxf_version == Some(self.dxf_version) {
+            if let Some(raw_dxf_codes) = &table.raw_dxf_codes {
+                for (code, value) in raw_dxf_codes {
+                    self.writer.write_string(*code, value)?;
+                }
+                return Ok(());
+            }
+        }
         self.write_common_entity_data(&table.common, owner)?;
         self.writer.write_subclass("AcDbBlockReference")?;
 
@@ -5016,4 +5112,3 @@ fn get_boundary_path_bits(flags: &BoundaryPathFlags) -> u32 {
     if flags.is_derived() { bits |= 4; }
     bits
 }
-

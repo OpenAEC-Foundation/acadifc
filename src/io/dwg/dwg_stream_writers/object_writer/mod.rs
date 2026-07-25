@@ -653,9 +653,9 @@ impl<'a> DwgObjectWriter<'a> {
         self.write_xref_dependant_bit();
 
         // Shape file flag
-        self.writer.write_bit(false);
+        self.writer.write_bit(style.is_shape_file);
         // Vertical flag
-        self.writer.write_bit(false);
+        self.writer.write_bit(style.is_vertical);
 
         // Fixed height
         self.writer.write_bit_double(style.height);
@@ -2000,7 +2000,7 @@ impl<'a> DwgObjectWriter<'a> {
             (record.block_entity_handle, record.name.as_str(), false)
         };
 
-        let common = block
+        let mut common = block
             .as_ref()
             .map(|b| &b.common)
             .cloned()
@@ -2009,6 +2009,9 @@ impl<'a> DwgObjectWriter<'a> {
                 owner_handle: record.handle,
                 ..Default::default()
             });
+        // The block record is the structural owner even when a damaged or
+        // loosely decoded BLOCK marker carried a different common owner.
+        common.owner_handle = record.handle;
 
         self.write_common_entity_data(
             common::OBJ_BLOCK,
@@ -2054,13 +2057,14 @@ impl<'a> DwgObjectWriter<'a> {
             None
         };
 
-        let common = block_end
+        let mut common = block_end
             .map(|be| be.common)
             .unwrap_or_else(|| EntityCommon {
                 handle: record.block_end_handle,
                 owner_handle: record.handle,
                 ..Default::default()
             });
+        common.owner_handle = record.handle;
 
         self.write_common_entity_data(
             common::OBJ_ENDBLK,

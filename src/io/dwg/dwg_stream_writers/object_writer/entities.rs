@@ -2527,6 +2527,12 @@ impl<'a> DwgObjectWriter<'a> {
     }
 
     fn write_table(&mut self, e: &table::Table) {
+        if let Some(raw) = &e.raw_dwg_data {
+            if self.raw_passthrough_compatible(e.raw_dwg_version) {
+                self.register_raw_object(e.common.handle, raw, e.raw_dwg_handle_bits);
+                return;
+            }
+        }
         let type_code = self.class_type_code("ACAD_TABLE", common::OBJ_TABLE);
         self.entity_preamble(type_code, &e.common);
 

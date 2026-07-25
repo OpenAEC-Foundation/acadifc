@@ -1082,6 +1082,20 @@ pub struct Table {
     pub break_flow_direction: BreakFlowDirection,
     /// Break spacing.
     pub break_spacing: f64,
+    /// Original DXF group codes for exact-version round-trips.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub raw_dxf_codes: Option<Vec<(i32, String)>>,
+    /// DXF version that produced `raw_dxf_codes`.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub raw_dxf_version: Option<crate::types::DxfVersion>,
+    /// Original merged DWG record for exact-version round-trips.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub raw_dwg_data: Option<Vec<u8>>,
+    /// Handle-stream bit count stored alongside `raw_dwg_data`.
+    pub raw_dwg_handle_bits: i64,
+    /// DWG version that produced `raw_dwg_data`.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub raw_dwg_version: Option<crate::types::DxfVersion>,
 }
 
 impl Table {
@@ -1108,6 +1122,11 @@ impl Table {
             break_options: BreakOptionFlags::NONE,
             break_flow_direction: BreakFlowDirection::Right,
             break_spacing: 0.0,
+            raw_dxf_codes: None,
+            raw_dxf_version: None,
+            raw_dwg_data: None,
+            raw_dwg_handle_bits: 0,
+            raw_dwg_version: None,
         }
     }
 
@@ -1608,4 +1627,3 @@ mod tests {
         assert!(!flags.contains(CellStateFlags::LINKED));
     }
 }
-
