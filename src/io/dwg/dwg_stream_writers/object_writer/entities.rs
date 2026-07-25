@@ -661,7 +661,9 @@ impl<'a> DwgObjectWriter<'a> {
                     a.common.handle
                 })
                 .collect();
-            let sh = self.alloc_handle();
+            let sh = e.seqend_handle
+                .filter(|handle| !handle.is_null())
+                .unwrap_or_else(|| self.alloc_handle());
 
             if self.version.r2004_plus() {
                 // owned_object_count = attribs (SEQEND written separately)
@@ -835,7 +837,7 @@ impl<'a> DwgObjectWriter<'a> {
 
         // R2007+: lock position
         if self.version.r2007_plus() {
-            self.writer.write_bit(false);
+            self.writer.write_bit(att.lock_position);
         }
         // R2010–R2013: keep_duplicate_records (RC). AutoCAD does NOT emit this
         // byte for R2018 ATTRIBs (verified against an AutoCAD-authored R2018
@@ -1266,7 +1268,8 @@ impl<'a> DwgObjectWriter<'a> {
                 } else {
                     0
                 });
-            self.writer.write_bit_double(0.0); // color tint
+            self.writer
+                .write_bit_double(e.gradient_color.color_tint);
 
             self.writer
                 .write_bit_long(e.gradient_color.colors.len() as i32);
@@ -1889,10 +1892,10 @@ impl<'a> DwgObjectWriter<'a> {
         // Flags EC 70 NOT bit-pair-coded
         self.writer.write_byte(v.flags.bits() as u8);
 
-        // Point 3BD 10 â€” Z must be 0.0 (elevation from polyline)
+        // Point 3BD 10; real files may carry per-vertex Z.
         self.writer.write_bit_double(v.location.x);
         self.writer.write_bit_double(v.location.y);
-        self.writer.write_bit_double(0.0);
+        self.writer.write_bit_double(v.location.z);
 
         // Start width BD 40 â€” negative = compression trick
         if v.start_width != 0.0 && v.end_width == v.start_width {
@@ -3208,7 +3211,7 @@ impl<'a> DwgObjectWriter<'a> {
 
         // R2007+: lock position
         if self.version.r2007_plus() {
-            self.writer.write_bit(false);
+            self.writer.write_bit(e.lock_position);
         }
 
         // writeAttDefinition: R2010+ version byte (second)
@@ -3272,7 +3275,7 @@ impl<'a> DwgObjectWriter<'a> {
 
         // R2007+: lock position
         if self.version.r2007_plus() {
-            self.writer.write_bit(false);
+            self.writer.write_bit(e.lock_position);
         }
         // R2010–R2013: keep_duplicate_records (RC). Not emitted for R2018.
         if self.version.r2010_plus() && !self.version.r2018_plus(self.dxf_version) {
@@ -3638,10 +3641,12 @@ impl<'a> DwgObjectWriter<'a> {
             // SAT text â€” all DWG versions use the same encoding:
             // BL-sized blocks of encrypted bytes (cipher: 159 - byte)
             // terminated by BL(0).  Per LibreDWG dwg.spec.
+            // DWG SAT blocks are terminated by the following BL(0), not by
+            // the DXF `End-of-ACIS-data` text record.  Including that record
+            // makes some ODA readers continue past the SAT body and interpret
+            // the wireframe payload as modeler data.
             let stripped = AcisData::strip_sat_terminator(&sat_text);
-            let mut full = stripped.clone();
-            full.push_str("End-of-ACIS-data\n");
-            let plain = full.as_bytes();
+            let plain = stripped.as_bytes();
 
             // Encrypt with selective 159-substitution cipher
             // (per LibreDWG dwg.spec: bytes <= 32 pass through, bytes > 32: 159 - byte)
@@ -3703,12 +3708,10 @@ impl<'a> DwgObjectWriter<'a> {
                 self.writer.write_3bit_double(sil.view_direction);
                 self.writer.write_3bit_double(sil.up_vector);
                 self.writer.write_bit(sil.is_perspective);
-                // R2007+: has-wires bit gates the silhouette wire list.
-                if self.version.r2007_plus() {
-                    self.writer.write_bit(!sil.wires.is_empty());
-                    if sil.wires.is_empty() {
-                        continue;
-                    }
+                // COMMON_3DSOLID always stores this gate, including R2000.
+                self.writer.write_bit(!sil.wires.is_empty());
+                if sil.wires.is_empty() {
+                    continue;
                 }
                 self.writer.write_bit_long(sil.wires.len() as i32);
                 for wire in &sil.wires {

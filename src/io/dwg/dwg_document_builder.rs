@@ -1288,6 +1288,9 @@ impl DwgDocumentBuilder {
                     if let Some(attribs) = pending_attributes.remove(&insert_handle) {
                         ins.attributes = attribs;
                     }
+                    if let Some(seqend) = pending.seqends.get(&insert_handle).copied() {
+                        ins.seqend_handle = Some(seqend);
+                    }
                 }
             }
         }
@@ -3501,6 +3504,7 @@ impl DwgDocumentBuilder {
                         &mut reader,
                         self.obj_reader.version(),
                         self.obj_reader.dxf_version(),
+                        entity_common.has_ds_data,
                     );
                     let mut e = Solid3D::new();
                     e.common = entity_common;
@@ -3545,6 +3549,7 @@ impl DwgDocumentBuilder {
                         &mut reader,
                         self.obj_reader.version(),
                         self.obj_reader.dxf_version(),
+                        entity_common.has_ds_data,
                     );
                     let mut e = Region::new();
                     e.common = entity_common;
@@ -3586,6 +3591,7 @@ impl DwgDocumentBuilder {
                         &mut reader,
                         self.obj_reader.version(),
                         self.obj_reader.dxf_version(),
+                        entity_common.has_ds_data,
                     );
                     let mut e = Body::new();
                     e.common = entity_common;
@@ -3639,6 +3645,7 @@ impl DwgDocumentBuilder {
                         &mut reader,
                         self.obj_reader.version(),
                         self.obj_reader.dxf_version(),
+                        entity_common.has_ds_data,
                     );
                     let mut e = Surface::new(kind);
                     e.common = entity_common;
@@ -4269,6 +4276,23 @@ impl DwgDocumentBuilder {
                     obj.observation_from_tag = data.observation_from_tag;
                     obj.observation_to_tag = data.observation_to_tag;
                     obj.observation_coverage_tag = data.observation_coverage_tag;
+                    obj.mesh_points = data
+                        .mesh_points
+                        .into_iter()
+                        .map(|(source, destination)| crate::objects::GeoDataMeshPoint {
+                            source,
+                            destination,
+                        })
+                        .collect();
+                    obj.mesh_faces = data
+                        .mesh_faces
+                        .into_iter()
+                        .map(|(first, second, third)| crate::objects::GeoDataMeshFace {
+                            first,
+                            second,
+                            third,
+                        })
+                        .collect();
                     document.objects.insert(
                         Handle::from(handle),
                         crate::objects::ObjectType::GeoData(obj),

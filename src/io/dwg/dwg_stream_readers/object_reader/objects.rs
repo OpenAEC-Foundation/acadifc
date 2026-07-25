@@ -846,6 +846,8 @@ pub struct GeoDataData {
     pub observation_from_tag: String,
     pub observation_to_tag: String,
     pub observation_coverage_tag: String,
+    pub mesh_points: Vec<(Vector2, Vector2)>,
+    pub mesh_faces: Vec<(i32, i32, i32)>,
 }
 
 /// Read the AcDbGeoData object body (after common non-entity data).
@@ -909,6 +911,21 @@ pub fn read_geodata(reader: &mut DwgMergedReader) -> GeoDataData {
     d.observation_from_tag = reader.read_variable_text();
     d.observation_to_tag = reader.read_variable_text();
     d.observation_coverage_tag = reader.read_variable_text();
+    let point_count = safe_count(reader.read_bit_long()).min(50_000);
+    d.mesh_points.reserve(point_count as usize);
+    for _ in 0..point_count {
+        d.mesh_points
+            .push((reader.read_2raw_double(), reader.read_2raw_double()));
+    }
+    let face_count = safe_count(reader.read_bit_long()).min(50_000);
+    d.mesh_faces.reserve(face_count as usize);
+    for _ in 0..face_count {
+        d.mesh_faces.push((
+            reader.read_bit_long(),
+            reader.read_bit_long(),
+            reader.read_bit_long(),
+        ));
+    }
     d
 }
 
@@ -1043,6 +1060,8 @@ mod tests {
             w.write_variable_text("from"); // observation from
             w.write_variable_text("to"); // observation to
             w.write_variable_text("cov"); // observation coverage
+            w.write_bit_long(0); // transformation mesh points
+            w.write_bit_long(0); // transformation mesh faces
         });
         let g = read_geodata(&mut r);
         assert_eq!(g.version, 3);

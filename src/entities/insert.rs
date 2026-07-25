@@ -45,6 +45,12 @@ pub struct Insert {
     pub row_spacing: f64,
     /// Attribute entities attached to this insert
     pub attributes: Vec<AttributeEntity>,
+    /// SEQEND handle terminating the attribute sequence.
+    ///
+    /// Older DWG versions require this structural record to remain adjacent
+    /// to the INSERT/ATTRIB handle chain. Preserve its source handle when the
+    /// insert came from a file; newly created inserts leave it unset.
+    pub seqend_handle: Option<Handle>,
 }
 
 impl Insert {
@@ -64,6 +70,7 @@ impl Insert {
             column_spacing: 0.0,
             row_spacing: 0.0,
             attributes: Vec::new(),
+            seqend_handle: None,
         }
     }
 

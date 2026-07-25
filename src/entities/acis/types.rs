@@ -337,6 +337,12 @@ impl SatRecord {
         }
     }
 
+    /// Returns whether this record is the requested ACIS class or derives
+    /// from it through a hyphen-separated SAB class name.
+    pub fn is_a(&self, entity_type: &str) -> bool {
+        self.entity_type == entity_type || base_entity_type(&self.entity_type) == entity_type
+    }
+
     /// Returns all pointer references in this record.
     pub fn pointers(&self) -> Vec<SatPointer> {
         let mut ptrs = vec![self.attribute];
@@ -529,7 +535,7 @@ pub struct SatBody<'a> {
 impl<'a> SatBody<'a> {
     /// Wraps a record as a body entity. Returns None if not a body.
     pub fn from_record(record: &'a SatRecord) -> Option<Self> {
-        if record.entity_type == "body" {
+        if record.is_a("body") {
             Some(Self { record })
         } else {
             None
@@ -568,7 +574,7 @@ pub struct SatLump<'a> {
 impl<'a> SatLump<'a> {
     /// Wraps a record as a lump entity. Returns None if not a lump.
     pub fn from_record(record: &'a SatRecord) -> Option<Self> {
-        if record.entity_type == "lump" {
+        if record.is_a("lump") {
             Some(Self { record })
         } else {
             None
@@ -602,7 +608,7 @@ pub struct SatShell<'a> {
 impl<'a> SatShell<'a> {
     /// Wraps a record as a shell entity. Returns None if not a shell.
     pub fn from_record(record: &'a SatRecord) -> Option<Self> {
-        if record.entity_type == "shell" {
+        if record.is_a("shell") {
             Some(Self { record })
         } else {
             None
@@ -646,7 +652,7 @@ pub struct SatFace<'a> {
 impl<'a> SatFace<'a> {
     /// Wraps a record as a face entity.
     pub fn from_record(record: &'a SatRecord) -> Option<Self> {
-        if record.entity_type == "face" {
+        if record.is_a("face") {
             Some(Self { record })
         } else {
             None
@@ -713,7 +719,7 @@ pub struct SatLoop<'a> {
 impl<'a> SatLoop<'a> {
     /// Wraps a record as a loop entity.
     pub fn from_record(record: &'a SatRecord) -> Option<Self> {
-        if record.entity_type == "loop" {
+        if record.is_a("loop") {
             Some(Self { record })
         } else {
             None
@@ -750,7 +756,7 @@ pub struct SatCoedge<'a> {
 impl<'a> SatCoedge<'a> {
     /// Wraps a record as a coedge entity.
     pub fn from_record(record: &'a SatRecord) -> Option<Self> {
-        if record.entity_type == "coedge" {
+        if record.is_a("coedge") {
             Some(Self { record })
         } else {
             None
@@ -786,6 +792,11 @@ impl<'a> SatCoedge<'a> {
     pub fn owner_loop(&self) -> SatPointer {
         self.record.token_pointer(6).unwrap_or(SatPointer::NULL)
     }
+
+    /// Optional parametric curve on the owner face's surface.
+    pub fn pcurve(&self) -> SatPointer {
+        self.record.nth_pointer(6).unwrap_or(SatPointer::NULL)
+    }
 }
 
 /// Accessor for an `edge` entity record.
@@ -799,7 +810,7 @@ pub struct SatEdge<'a> {
 impl<'a> SatEdge<'a> {
     /// Wraps a record as an edge entity.
     pub fn from_record(record: &'a SatRecord) -> Option<Self> {
-        if record.entity_type == "edge" {
+        if record.is_a("edge") {
             Some(Self { record })
         } else {
             None
@@ -853,7 +864,7 @@ pub struct SatVertex<'a> {
 impl<'a> SatVertex<'a> {
     /// Wraps a record as a vertex entity.
     pub fn from_record(record: &'a SatRecord) -> Option<Self> {
-        if record.entity_type == "vertex" {
+        if record.is_a("vertex") {
             Some(Self { record })
         } else {
             None
@@ -990,8 +1001,8 @@ impl<'a> SatEllipseCurve<'a> {
 }
 
 /// Accessor for an `intcurve-curve` entity record — an interpolated spline
-/// curve. Its geometry is an embedded `nubs` (non-uniform B-spline) block:
-/// `... nubs <degree> <rational?> <n_knots> [<knot> <mult>]* [<x> <y> <z>]* ...`.
+/// curve. Its geometry is an embedded `nubs` or rational `nurbs` block:
+/// `... <degree> <form> <n_knots> [<knot> <mult>]* [<x> <y> <z> [w]]* ...`.
 /// Straight and elliptic edges have their own dedicated accessors; this covers
 /// the general spline edges (fillet/blend boundaries), which otherwise decode
 /// to nothing and leave a face un-trimmable.
@@ -1009,13 +1020,15 @@ impl<'a> SatIntCurve<'a> {
         }
     }
 
-    /// Parse the embedded `nubs` block into (degree, expanded knots, control
-    /// points). `None` when the record carries no recognizable nubs data.
-    fn nubs(&self) -> Option<(usize, Vec<f64>, Vec<[f64; 3]>)> {
+    /// Parse the embedded spline block into homogeneous control points.
+    fn bspline(&self) -> Option<(usize, Vec<f64>, Vec<[f64; 4]>)> {
         let t = &self.record.tokens;
-        let ni = t.iter().position(|x| x.as_ident() == Some("nubs"))?;
+        let ni = t
+            .iter()
+            .position(|x| matches!(x.as_ident(), Some("nubs" | "nurbs")))?;
+        let rational = t.get(ni)?.as_ident() == Some("nurbs");
         let degree = t.get(ni + 1)?.as_integer()? as usize;
-        // t[ni + 2] is the rational flag (0 = non-rational — the only form here).
+        // t[ni + 2] is the curve form/closure flag.
         let n_knots = t.get(ni + 3)?.as_integer()? as usize;
         let mut knots: Vec<f64> = Vec::new();
         let mut i = ni + 4;
@@ -1027,17 +1040,41 @@ impl<'a> SatIntCurve<'a> {
             }
             i += 2;
         }
-        if knots.len() < degree + 2 {
+        if knots.len() < 2 {
             return None;
         }
-        let n_ctrl = knots.len() - degree - 1;
-        let mut ctrl: Vec<[f64; 3]> = Vec::with_capacity(n_ctrl);
+        let stride = if rational { 4 } else { 3 };
+        let available = t[i..]
+            .iter()
+            .take_while(|token| token.as_float().is_some())
+            .count()
+            / stride;
+        let base_ctrl = knots.len().checked_sub(degree + 1)?;
+        let n_ctrl = if available >= base_ctrl + 2 {
+            let first = *knots.first()?;
+            let last = *knots.last()?;
+            knots.insert(0, first);
+            knots.push(last);
+            base_ctrl + 2
+        } else {
+            base_ctrl
+        };
+        if n_ctrl <= degree {
+            return None;
+        }
+        let mut ctrl: Vec<[f64; 4]> = Vec::with_capacity(n_ctrl);
         for _ in 0..n_ctrl {
             let x = t.get(i)?.as_float()?;
             let y = t.get(i + 1)?.as_float()?;
             let z = t.get(i + 2)?.as_float()?;
-            ctrl.push([x, y, z]);
-            i += 3;
+            if rational {
+                let w = t.get(i + 3)?.as_float()?;
+                ctrl.push([x * w, y * w, z * w, w]);
+                i += 4;
+            } else {
+                ctrl.push([x, y, z, 1.0]);
+                i += 3;
+            }
         }
         Some((degree, knots, ctrl))
     }
@@ -1045,7 +1082,7 @@ impl<'a> SatIntCurve<'a> {
     /// Sample `segs + 1` points evenly along the curve's full valid parameter
     /// range. Empty when the record has no decodable nubs geometry.
     pub fn sample(&self, segs: usize) -> Vec<(f64, f64, f64)> {
-        let Some((degree, knots, _)) = self.nubs() else {
+        let Some((degree, knots, _)) = self.bspline() else {
             return Vec::new();
         };
         self.sample_range(knots[degree], knots[knots.len() - degree - 1], segs)
@@ -1056,7 +1093,7 @@ impl<'a> SatIntCurve<'a> {
     /// is clamped to the curve's valid parameter interval. Empty when the record
     /// has no decodable nubs geometry or the span is degenerate.
     pub fn sample_range(&self, t0: f64, t1: f64, segs: usize) -> Vec<(f64, f64, f64)> {
-        let Some((degree, knots, ctrl)) = self.nubs() else {
+        let Some((degree, knots, ctrl)) = self.bspline() else {
             return Vec::new();
         };
         let segs = segs.max(1);
@@ -1068,15 +1105,223 @@ impl<'a> SatIntCurve<'a> {
         (0..=segs)
             .map(|s| {
                 let t = a + (b - a) * (s as f64 / segs as f64);
-                let p = de_boor(degree, &knots, &ctrl, t);
-                (p[0], p[1], p[2])
+                let p = de_boor_homogeneous(degree, &knots, &ctrl, t);
+                let w = if p[3].abs() > 1e-12 { p[3] } else { 1.0 };
+                (p[0] / w, p[1] / w, p[2] / w)
             })
             .collect()
     }
 }
 
-/// Evaluate a B-spline curve at parameter `t` via De Boor's algorithm.
-fn de_boor(degree: usize, knots: &[f64], ctrl: &[[f64; 3]], t: f64) -> [f64; 3] {
+/// Accessor for a `pcurve` entity: a 2-D B-spline in surface UV space.
+#[derive(Debug, Clone)]
+pub struct SatPCurve<'a> {
+    record: &'a SatRecord,
+}
+
+impl<'a> SatPCurve<'a> {
+    pub fn from_record(record: &'a SatRecord) -> Option<Self> {
+        if record.entity_type == "pcurve" {
+            Some(Self { record })
+        } else {
+            None
+        }
+    }
+
+    fn bspline_at(
+        tokens: &[SatToken],
+        start: usize,
+    ) -> Option<(usize, Vec<f64>, Vec<[f64; 4]>)> {
+        let rational = tokens.get(start)?.as_ident() == Some("nurbs");
+        let degree = tokens.get(start + 1)?.as_integer()?.max(0) as usize;
+        let knot_count = tokens.get(start + 3)?.as_integer()?.max(0) as usize;
+        let mut position = start + 4;
+        let mut knots = Vec::new();
+        for _ in 0..knot_count {
+            let value = tokens.get(position)?.as_float()?;
+            let multiplicity = tokens.get(position + 1)?.as_integer()?.max(0) as usize;
+            for _ in 0..multiplicity {
+                knots.push(value);
+            }
+            position += 2;
+        }
+        if knots.len() < 2 {
+            return None;
+        }
+        let stride = if rational { 3 } else { 2 };
+        let available = tokens[position..]
+            .iter()
+            .take_while(|token| token.as_float().is_some())
+            .count()
+            / stride;
+        let base_count = knots.len().checked_sub(degree + 1)?;
+        let control_count = if available >= base_count + 2 {
+            let first = *knots.first()?;
+            let last = *knots.last()?;
+            knots.insert(0, first);
+            knots.push(last);
+            base_count + 2
+        } else {
+            base_count
+        };
+        if control_count <= degree {
+            return None;
+        }
+        let mut control = Vec::with_capacity(control_count);
+        for _ in 0..control_count {
+            let u = tokens.get(position)?.as_float()?;
+            let v = tokens.get(position + 1)?.as_float()?;
+            if rational {
+                let weight = tokens.get(position + 2)?.as_float()?;
+                control.push([u * weight, v * weight, 0.0, weight]);
+                position += 3;
+            } else {
+                control.push([u, v, 0.0, 1.0]);
+                position += 2;
+            }
+        }
+        Some((degree, knots, control))
+    }
+
+    fn sample_bspline(
+        spline: (usize, Vec<f64>, Vec<[f64; 4]>),
+        segments: usize,
+    ) -> Vec<(f64, f64)> {
+        let (degree, knots, control) = spline;
+        let start = knots[degree];
+        let end = knots[knots.len() - degree - 1];
+        if end <= start {
+            return Vec::new();
+        }
+        let segments = segments.max(1);
+        (0..=segments)
+            .map(|index| {
+                let parameter = start + (end - start) * (index as f64 / segments as f64);
+                let point = de_boor_homogeneous(degree, &knots, &control, parameter);
+                let weight = if point[3].abs() > 1e-12 {
+                    point[3]
+                } else {
+                    1.0
+                };
+                (point[0] / weight, point[1] / weight)
+            })
+            .collect()
+    }
+
+    fn apply_offsets(&self, points: &mut [(f64, f64)]) {
+        let offsets: Vec<f64> = self
+            .record
+            .tokens
+            .iter()
+            .rev()
+            .filter_map(SatToken::as_float)
+            .take(2)
+            .collect();
+        if offsets.len() != 2 {
+            return;
+        }
+        let (u_offset, v_offset) = (offsets[1], offsets[0]);
+        for point in points {
+            point.0 += u_offset;
+            point.1 += v_offset;
+        }
+    }
+
+    /// Sample the complete UV curve.
+    pub fn sample(&self, segments: usize) -> Vec<(f64, f64)> {
+        let Some(start) = self
+            .record
+            .tokens
+            .iter()
+            .position(|token| matches!(token.as_ident(), Some("nubs" | "nurbs")))
+        else {
+            return Vec::new();
+        };
+        let Some(spline) = Self::bspline_at(&self.record.tokens, start) else {
+            return Vec::new();
+        };
+        let mut points = Self::sample_bspline(spline, segments);
+        self.apply_offsets(&mut points);
+        points
+    }
+
+    /// Sample a UV curve which may reference an `intcurve-curve` subtype.
+    ///
+    /// ACIS shares large interpolated-curve subtypes through `{ ref n }`.
+    /// A pcurve then stores a signed 1-based support-surface index, a pointer
+    /// to the owning intcurve, and periodic U/V offsets. Direct inline pcurves
+    /// remain supported by [`Self::sample`].
+    pub fn sample_in(&self, document: &SatDocument, segments: usize) -> Vec<(f64, f64)> {
+        let direct = self.sample(segments);
+        if !direct.is_empty() {
+            return direct;
+        }
+
+        let selector = self
+            .record
+            .tokens
+            .iter()
+            .find_map(SatToken::as_integer)
+            .unwrap_or(1);
+        let target = self
+            .record
+            .nth_pointer(1)
+            .and_then(|pointer| document.resolve(pointer));
+        let Some(target) = target else {
+            return Vec::new();
+        };
+        let mut target_tokens = target.tokens.as_slice();
+        if let Some(reference) = subtype_reference(target_tokens) {
+            let Some(tokens) = document.subtype_tokens(reference) else {
+                return Vec::new();
+            };
+            target_tokens = tokens;
+        }
+
+        // The first spline block is the 3-D intersection curve. Following
+        // blocks are its UV curves on the supporting surfaces.
+        let blocks: Vec<usize> = target_tokens
+            .iter()
+            .enumerate()
+            .filter_map(|(index, token)| {
+                matches!(token.as_ident(), Some("nubs" | "nurbs")).then_some(index)
+            })
+            .collect();
+        let support_index = selector.unsigned_abs().max(1) as usize;
+        let Some(&start) = blocks.get(support_index) else {
+            return Vec::new();
+        };
+        let Some(spline) = Self::bspline_at(target_tokens, start) else {
+            return Vec::new();
+        };
+        let mut points = Self::sample_bspline(spline, segments);
+        self.apply_offsets(&mut points);
+        points
+    }
+}
+
+fn subtype_reference(tokens: &[SatToken]) -> Option<usize> {
+    let start = tokens
+        .iter()
+        .position(|token| token.as_ident() == Some("{"))?;
+    if tokens.get(start + 1).and_then(SatToken::as_ident) != Some("ref")
+        || tokens.get(start + 3).and_then(SatToken::as_ident) != Some("}")
+    {
+        return None;
+    }
+    tokens
+        .get(start + 2)?
+        .as_integer()
+        .and_then(|index| usize::try_from(index).ok())
+}
+
+/// Evaluate a homogeneous B-spline curve at parameter `t` via De Boor.
+fn de_boor_homogeneous(
+    degree: usize,
+    knots: &[f64],
+    ctrl: &[[f64; 4]],
+    t: f64,
+) -> [f64; 4] {
     // Knot span k: knots[k] <= t < knots[k+1], clamped into the valid interval.
     let n = ctrl.len();
     let mut k = degree;
@@ -1085,7 +1330,7 @@ fn de_boor(degree: usize, knots: &[f64], ctrl: &[[f64; 3]], t: f64) -> [f64; 3] 
     }
     k = k.min(n - 1).max(degree);
     // Working control points for the recursion.
-    let mut d: Vec<[f64; 3]> = (0..=degree)
+    let mut d: Vec<[f64; 4]> = (0..=degree)
         .map(|j| ctrl[(k - degree + j).min(n - 1)])
         .collect();
     for r in 1..=degree {
@@ -1097,7 +1342,7 @@ fn de_boor(degree: usize, knots: &[f64], ctrl: &[[f64; 3]], t: f64) -> [f64; 3] 
             } else {
                 0.0
             };
-            for c in 0..3 {
+            for c in 0..4 {
                 d[j][c] = (1.0 - a) * d[j - 1][c] + a * d[j][c];
             }
         }
@@ -1621,6 +1866,44 @@ impl SatDocument {
         }
     }
 
+    /// Resolve a shared ACIS subtype definition by its file-global index.
+    ///
+    /// Subtypes are numbered in encounter order across all entity records.
+    /// `{ ref n }` blocks reference an earlier definition and do not consume
+    /// an index of their own. The returned slice excludes the surrounding
+    /// braces but includes the subtype identifier and its complete payload.
+    pub fn subtype_tokens(&self, requested: usize) -> Option<&[SatToken]> {
+        let mut current = 0usize;
+        for record in &self.records {
+            let tokens = &record.tokens;
+            for start in 0..tokens.len() {
+                if tokens[start].as_ident() != Some("{")
+                    || tokens.get(start + 1).and_then(SatToken::as_ident) == Some("ref")
+                {
+                    continue;
+                }
+                if current == requested {
+                    let mut depth = 1usize;
+                    for end in start + 1..tokens.len() {
+                        match tokens[end].as_ident() {
+                            Some("{") => depth += 1,
+                            Some("}") => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    return Some(&tokens[start + 1..end]);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    return None;
+                }
+                current += 1;
+            }
+        }
+        None
+    }
+
     /// Validates the document structure.
     ///
     /// Checks that all pointers reference valid records and that
@@ -1878,13 +2161,33 @@ pub fn classify_entity_type(entity_type: &str) -> SatEntityCategory {
         "asmheader" => SatEntityCategory::Header,
         "body" | "lump" | "shell" | "subshell" | "face" | "loop" | "coedge" | "edge"
         | "vertex" | "wire" => SatEntityCategory::Topology,
-        "point" | "straight-curve" | "ellipse-curve" | "intcurve-curve" | "bs3-curve"
+        "point" | "straight-curve" | "ellipse-curve" | "intcurve-curve" | "bs3-curve" | "pcurve"
         | "plane-surface" | "cone-surface" | "sphere-surface" | "torus-surface"
         | "spline-surface" | "meshsurf-surface" | "bs3-surface" => SatEntityCategory::Geometry,
         "transform" => SatEntityCategory::Transform,
+        _ if matches!(
+            base_entity_type(entity_type),
+            "body"
+                | "lump"
+                | "shell"
+                | "subshell"
+                | "face"
+                | "loop"
+                | "coedge"
+                | "edge"
+                | "vertex"
+                | "wire"
+        ) => SatEntityCategory::Topology,
         _ if entity_type.ends_with("-attrib") || entity_type.starts_with("attrib") => {
             SatEntityCategory::Attribute
         }
         _ => SatEntityCategory::Unknown,
     }
+}
+
+/// Returns the base class from a hyphen-separated SAB entity type.
+///
+/// For example, `tcoedge-coedge` derives from `coedge`.
+pub fn base_entity_type(entity_type: &str) -> &str {
+    entity_type.rsplit('-').next().unwrap_or(entity_type)
 }

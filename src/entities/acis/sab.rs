@@ -57,6 +57,8 @@ pub mod tags {
     /// Enumerated value (4-byte int). Emitted by ASM / ShapeManager records
     /// (AutoCAD 2013+); read like an integer.
     pub const ENUM: u8 = 0x15;
+    /// Tagged double used by newer ASM / ShapeManager records.
+    pub const ASM_DOUBLE: u8 = 0x17;
 }
 
 /// SAB header magic string.
@@ -564,9 +566,12 @@ impl SabReader {
             if tag == tags::ENTITY_TYPE || tag == tags::SUBTYPE {
                 let (record, new_pos) = Self::read_record(data, pos, record_index)?;
 
-                // Check for End-of-ACIS-data marker — consume it so the
+                // Check for ACIS/ASM end marker — consume it so the
                 // reported length covers the full payload.
-                if record.entity_type == "End-of-ACIS-data" {
+                if matches!(
+                    record.entity_type.as_str(),
+                    "End-of-ACIS-data" | "End-of-ASM-data"
+                ) {
                     pos = new_pos;
                     break;
                 }
@@ -659,8 +664,11 @@ impl SabReader {
             None
         };
 
-        // Check for End-of-ACIS-data (no record body)
-        if entity_type == "End-of-ACIS-data" {
+        // Check for ACIS/ASM end marker (no record body)
+        if matches!(
+            entity_type.as_str(),
+            "End-of-ACIS-data" | "End-of-ASM-data"
+        ) {
             return Ok((
                 SatRecord {
                     index,
@@ -764,7 +772,7 @@ impl SabReader {
                 let val = read_i32(data, &mut pos)?;
                 Ok((SatToken::Integer(val as i64), pos))
             }
-            tags::DOUBLE => {
+            tags::DOUBLE | tags::ASM_DOUBLE => {
                 let val = read_f64(data, &mut pos)?;
                 Ok((SatToken::Float(val), pos))
             }
@@ -833,7 +841,7 @@ impl SabReader {
 ///   - surface sense: `forward_v` / `reversed_v`
 ///   - surface bounds: `I` (infinite) / `F` (finite)
 fn convert_sab_booleans(entity_type: &str, tokens: &mut Vec<SatToken>) {
-    match entity_type {
+    match base_entity_type(entity_type) {
         "face" => {
             // face: ... sense side #
             // After v700 normalization: tok[0]=sentinel, tok[1..N-2]=ptrs,

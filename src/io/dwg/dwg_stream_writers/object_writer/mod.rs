@@ -1830,6 +1830,9 @@ impl<'a> DwgObjectWriter<'a> {
                         for att in &e.attributes {
                             if !att.common.handle.is_null() { expanded.push(att.common.handle); }
                         }
+                        if let Some(sh) = e.seqend_handle {
+                            if !sh.is_null() { expanded.push(sh); }
+                        }
                     }
                     _ => {}
                 }

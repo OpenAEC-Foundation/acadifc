@@ -3732,6 +3732,7 @@ pub fn read_acis_entity(
     reader: &mut DwgMergedReader,
     version: DwgVersion,
     dxf_version: DxfVersion,
+    has_ds_data: bool,
 ) -> AcisEntityData {
     let acis_empty = reader.read_bit();
 
@@ -3739,6 +3740,28 @@ pub fn read_acis_entity(
     let mut sab_data = Vec::new();
     let mut is_binary = false;
     let mut acis_version: i16 = 0;
+
+    // R2013+ entities with `has_ds_data` keep their SAB geometry in the AcDs
+    // section. Only the leading `acis_empty` bit is meaningful here; bytes
+    // left in the inline main stream are an opaque stub, not COMMON_3DSOLID
+    // wireframe data. Parsing that stub as counts can manufacture huge wire
+    // and silhouette arrays. Handles use an independent stream, and the
+    // document builder attaches the real SAB blob after object decoding.
+    if has_ds_data && version.r2013_plus(dxf_version) {
+        return AcisEntityData {
+            acis_empty,
+            sat_data,
+            sab_data,
+            is_binary,
+            version: acis_version,
+            point: crate::types::Vector3::ZERO,
+            has_history: false,
+            isolines: 0,
+            wires: Vec::new(),
+            silhouettes: Vec::new(),
+            revision: AcisRevision::default(),
+        };
+    }
 
     if !acis_empty {
         // Unknown bit — per ODA spec / LibreDWG / ACadSharp this B
@@ -3885,12 +3908,11 @@ pub fn read_acis_entity(
                 let view_direction = reader.read_3bit_double();
                 let up_vector = reader.read_3bit_double();
                 let is_perspective = reader.read_bit();
-                // R2007+: a has-wires bit gates the silhouette's wire list.
-                let has_sil_wires = if version.r2007_plus() {
-                    reader.read_bit()
-                } else {
-                    true
-                };
+                // COMMON_3DSOLID always stores this gate, including R2000.
+                // Treating pre-R2007 silhouettes as implicitly non-empty
+                // consumes the gate as part of the following BL count and
+                // desynchronizes every remaining modeler-geometry field.
+                let has_sil_wires = reader.read_bit();
                 let mut sil_wires = Vec::new();
                 if has_sil_wires {
                     let num_sw = safe_count(reader.read_bit_long());
@@ -4205,7 +4227,7 @@ mod tests {
         let hsb = w.handle_start_bits();
         let mut r = DwgMergedReader::new(data, d, hsb);
 
-        let result = read_acis_entity(&mut r, v, d);
+        let result = read_acis_entity(&mut r, v, d, false);
         assert!(!result.acis_empty);
         assert!(!result.is_binary);
         assert_eq!(result.version, 1);
@@ -4241,7 +4263,7 @@ mod tests {
         let mut r = DwgMergedReader::new(data, d, hsb);
         r.set_handle_start(hsb); // required for SAB size calculation
 
-        let result = read_acis_entity(&mut r, v, d);
+        let result = read_acis_entity(&mut r, v, d, false);
         assert!(!result.acis_empty);
         assert!(result.is_binary);
         assert_eq!(result.version, 2);
@@ -4263,7 +4285,7 @@ mod tests {
         let hsb = w.handle_start_bits();
         let mut r = DwgMergedReader::new(data, d, hsb);
 
-        let result = read_acis_entity(&mut r, v, d);
+        let result = read_acis_entity(&mut r, v, d, false);
         assert!(result.acis_empty);
         assert!(result.sat_data.is_empty());
         assert!(result.sab_data.is_empty());

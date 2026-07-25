@@ -114,6 +114,21 @@ impl Default for Material {
 /// string on R2009).
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct GeoDataMeshPoint {
+    pub source: Vector2,
+    pub destination: Vector2,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct GeoDataMeshFace {
+    pub first: i32,
+    pub second: i32,
+    pub third: i32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GeoData {
     /// Unique handle
     pub handle: Handle,
@@ -161,6 +176,10 @@ pub struct GeoData {
     pub observation_to_tag: String,
     /// Observation-coverage tag (code 307)
     pub observation_coverage_tag: String,
+    /// Geographic transformation mesh control points (codes 13/14).
+    pub mesh_points: Vec<GeoDataMeshPoint>,
+    /// Geographic transformation mesh triangle indices (codes 97/98/99).
+    pub mesh_faces: Vec<GeoDataMeshFace>,
 }
 
 impl GeoData {
@@ -190,6 +209,8 @@ impl GeoData {
             observation_from_tag: String::new(),
             observation_to_tag: String::new(),
             observation_coverage_tag: String::new(),
+            mesh_points: Vec::new(),
+            mesh_faces: Vec::new(),
         }
     }
 }

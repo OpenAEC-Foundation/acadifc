@@ -212,9 +212,9 @@ impl<'a> DwgObjectWriter<'a> {
             ObjectType::BookColor(b) => self.write_book_color(b),
             ObjectType::WipeoutVariables(w) => self.write_wipeout_variables(w),
             ObjectType::SpatialFilter(s) => self.write_spatial_filter(s),
+            ObjectType::GeoData(g) => self.write_geodata(g),
             // Stub / unsupported objects — skip
-            ObjectType::GeoData(_)
-            | ObjectType::VisualStyle(_)
+            ObjectType::VisualStyle(_)
             | ObjectType::Material(_)
             | ObjectType::TableStyle(_) => {}
             ObjectType::Unknown { handle, raw_dwg_data, raw_dwg_handle_bits, raw_dwg_version, .. } => {
@@ -254,8 +254,7 @@ impl<'a> DwgObjectWriter<'a> {
         match self.document.objects.get(handle) {
             None => false,
             Some(obj) => match obj {
-                ObjectType::GeoData(_)
-                | ObjectType::VisualStyle(_)
+                ObjectType::VisualStyle(_)
                 | ObjectType::Material(_)
                 | ObjectType::TableStyle(_) => false,
                 ObjectType::Unknown { type_name, raw_dwg_data, raw_dwg_version, .. } => {
@@ -1336,6 +1335,81 @@ impl<'a> DwgObjectWriter<'a> {
         }
 
         self.register_object(sf.handle);
+    }
+
+    // ── Geographic Data ─────────────────────────────────────────────
+
+    fn write_geodata(&mut self, geo: &GeoData) {
+        let type_code = self.class_type_code("GEODATA", common::OBJ_GEODATA);
+        self.write_common_non_entity_data(
+            type_code,
+            geo.handle,
+            geo.owner,
+            &[],
+            &None,
+        );
+
+        self.writer.write_bit_long(geo.version);
+        self.writer
+            .write_handle(DwgReferenceType::SoftPointer, geo.host_block.value());
+        self.writer.write_bit_short(geo.coordinate_type);
+
+        if geo.version == 1 {
+            self.writer.write_3bit_double(geo.reference_point);
+            self.writer.write_bit_long(geo.horizontal_units);
+            self.writer.write_3bit_double(geo.design_point);
+            self.writer.write_3bit_double(crate::types::Vector3::ZERO);
+            self.writer.write_3bit_double(geo.up_direction);
+            let north_angle =
+                std::f64::consts::FRAC_PI_2 - geo.north_direction.y.atan2(geo.north_direction.x);
+            self.writer.write_bit_double(north_angle);
+            self.writer.write_3bit_double(crate::types::Vector3::ZERO);
+            self.writer
+                .write_variable_text(&geo.coordinate_system_definition);
+            self.writer.write_variable_text(&geo.geo_rss_tag);
+            self.writer.write_bit_double(geo.horizontal_unit_scale);
+            self.writer.write_variable_text("");
+            self.writer.write_variable_text("");
+        } else {
+            self.writer.write_3bit_double(geo.design_point);
+            self.writer.write_3bit_double(geo.reference_point);
+            self.writer.write_bit_double(geo.horizontal_unit_scale);
+            self.writer.write_bit_long(geo.horizontal_units);
+            self.writer.write_bit_double(geo.vertical_unit_scale);
+            self.writer.write_bit_long(geo.vertical_units);
+            self.writer.write_3bit_double(geo.up_direction);
+            self.writer.write_2raw_double(geo.north_direction);
+            self.writer
+                .write_bit_long(geo.scale_estimation_method);
+            self.writer.write_bit_double(geo.user_scale_factor);
+            self.writer.write_bit(geo.sea_level_correction);
+            self.writer.write_bit_double(geo.sea_level_elevation);
+            self.writer
+                .write_bit_double(geo.coordinate_projection_radius);
+            self.writer
+                .write_variable_text(&geo.coordinate_system_definition);
+            self.writer.write_variable_text(&geo.geo_rss_tag);
+        }
+
+        self.writer
+            .write_variable_text(&geo.observation_from_tag);
+        self.writer
+            .write_variable_text(&geo.observation_to_tag);
+        self.writer
+            .write_variable_text(&geo.observation_coverage_tag);
+        self.writer.write_bit_long(geo.mesh_points.len() as i32);
+        for point in &geo.mesh_points {
+            self.writer.write_2raw_double(point.source);
+            self.writer.write_2raw_double(point.destination);
+        }
+        self.writer.write_bit_long(geo.mesh_faces.len() as i32);
+        for face in &geo.mesh_faces {
+            self.writer.write_bit_long(face.first);
+            self.writer.write_bit_long(face.second);
+            self.writer.write_bit_long(face.third);
+        }
+
+        self.register_object(geo.handle);
     }
 
     // ── PlaceHolder ─────────────────────────────────────────────────

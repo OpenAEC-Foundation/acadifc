@@ -427,9 +427,44 @@ fn extract_acds_sab_blobs(buf: &[u8]) -> Vec<Vec<u8>> {
     blobs
 }
 
+/// Remove AcDs `blob01` continuation frames embedded at 1 MiB boundaries.
+///
+/// Large ASM bodies are split across storage segments. The decompressed AcDs
+/// byte stream places an 80-byte segment header/continuation descriptor between
+/// consecutive SAB chunks:
+/// `AC D5 "blob01" ... 55×8 ...`. Those bytes belong to the datastore, not the
+/// SAB token stream; leaving them in makes the ACIS decoder fail at 0x0f_ffb0.
+fn strip_acds_blob01_frames(blob: Vec<u8>) -> Vec<u8> {
+    const PREFIX: &[u8] = b"\xAC\xD5blob01";
+    const FRAME_LEN: usize = 80;
+    const PADDING: [u8; 8] = [0x55; 8];
+    let mut clean = Vec::with_capacity(blob.len());
+    let mut cursor = 0usize;
+    let mut scan = 0usize;
+    while let Some(relative) = blob[scan..].windows(PREFIX.len()).position(|w| w == PREFIX) {
+        let start = scan + relative;
+        let valid = start + FRAME_LEN <= blob.len()
+            && blob.get(start + 12..start + 16) == Some(&1u32.to_le_bytes())
+            && blob.get(start + 16..start + 24) == Some(&48u64.to_le_bytes())
+            && blob.get(start + 40..start + 48) == Some(&PADDING);
+        if valid {
+            clean.extend_from_slice(&blob[cursor..start]);
+            cursor = start + FRAME_LEN;
+            scan = cursor;
+        } else {
+            scan = start + 1;
+        }
+    }
+    if cursor == 0 {
+        return blob;
+    }
+    clean.extend_from_slice(&blob[cursor..]);
+    clean
+}
+
 /// Fill an `AcisData` from a SAB blob and mark it binary v2.
 fn acds_fill(acis: &mut crate::entities::solid3d::AcisData, blob: Vec<u8>) {
-    acis.sab_data = blob;
+    acis.sab_data = strip_acds_blob01_frames(blob);
     acis.sat_data = String::new();
     acis.is_binary = true;
     acis.version = crate::entities::solid3d::AcisVersion::Version2;

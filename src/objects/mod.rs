@@ -49,7 +49,7 @@ pub use table_style::{
 };
 pub use xrecord::{DictionaryCloningFlags, XRecord, XRecordEntry, XRecordValue, XRecordValueType};
 pub use stub_objects::{
-    VisualStyle, Material, GeoData,
+    VisualStyle, Material, GeoData, GeoDataMeshFace, GeoDataMeshPoint,
     SpatialFilter, RasterVariables, BookColor, PlaceHolder,
     DictionaryWithDefault, WipeoutVariables, StubObject,
 };
@@ -375,5 +375,4 @@ mod tests {
         assert_eq!(layout.tab_order, 0);
     }
 }
-
 
