@@ -1822,6 +1822,33 @@ impl CadDocument {
         Ok(handle)
     }
 
+    /// Reserve and append entities decoded by the DWG loader without routing
+    /// each one through a linear block-record scan. The loader rebuilds block
+    /// membership once after all owner handles are available.
+    pub(crate) fn reserve_loaded_entities(&mut self, additional: usize) {
+        self.entities.reserve(additional);
+        self.entity_index.reserve(additional);
+    }
+
+    pub(crate) fn add_loaded_entity(&mut self, mut entity: EntityType) -> Handle {
+        let handle = if entity.common().handle.is_null() {
+            let handle = self.allocate_handle();
+            entity.as_entity_mut().set_handle(handle);
+            handle
+        } else {
+            let handle = entity.common().handle;
+            if handle.value() >= self.next_handle {
+                self.next_handle = handle.value() + 1;
+                self.header.handle_seed = self.next_handle;
+            }
+            handle
+        };
+        let index = self.entities.len();
+        self.entities.push(Arc::new(entity));
+        self.entity_index.insert(handle, index);
+        handle
+    }
+
     /// Get an entity by handle
     pub fn get_entity(&self, handle: Handle) -> Option<&EntityType> {
         self.entity_index
@@ -2658,5 +2685,4 @@ impl Default for CadDocument {
         Self::new()
     }
 }
-
 
