@@ -34,7 +34,7 @@ nalgebra = "0.32"
 
 # Collections
 indexmap = "2.0"
-ahash = "0.8"
+ahash = { version = "0.8", features = ["serde"] }
 
 # Encoding
 encoding_rs = "0.8"
@@ -69,4 +69,3 @@ codegen-units = 1
 
 [profile.bench]
 inherits = "release"
-

@@ -1043,7 +1043,7 @@ pub struct CadDocument {
     pub(crate) entities: Vec<Arc<EntityType>>,
 
     /// Handle → index mapping for O(1) entity lookup by handle.
-    pub(crate) entity_index: HashMap<Handle, usize>,
+    pub(crate) entity_index: ahash::AHashMap<Handle, usize>,
 
     /// All objects in the document (indexed by handle)
     pub objects: HashMap<Handle, ObjectType>,
@@ -1284,7 +1284,7 @@ impl CadDocument {
             classes: DxfClassCollection::new(),
             notifications: crate::notification::NotificationCollection::new(),
             entities: Vec::new(),
-            entity_index: HashMap::new(),
+            entity_index: ahash::AHashMap::new(),
             objects: HashMap::new(),
             block_visibility_params: HashMap::new(),
             context_scales: HashMap::new(),
@@ -1847,6 +1847,36 @@ impl CadDocument {
         self.entities.push(Arc::new(entity));
         self.entity_index.insert(handle, index);
         handle
+    }
+
+    pub(crate) fn add_loaded_entity_batch(
+        &mut self,
+        entities: &mut Vec<Arc<EntityType>>,
+    ) {
+        if entities.is_empty() {
+            return;
+        }
+
+        let mut next_handle = self.next_handle.max(self.header.handle_seed);
+        for entity in entities.iter_mut() {
+            let handle = entity.common().handle;
+            if handle.is_null() {
+                let handle = Handle::new(next_handle);
+                next_handle += 1;
+                Arc::make_mut(entity).as_entity_mut().set_handle(handle);
+            } else {
+                next_handle = next_handle.max(handle.value() + 1);
+            }
+        }
+
+        let base = self.entities.len();
+        self.entities.append(entities);
+        for (offset, entity) in self.entities[base..].iter().enumerate() {
+            self.entity_index
+                .insert(entity.common().handle, base + offset);
+        }
+        self.next_handle = next_handle;
+        self.header.handle_seed = self.header.handle_seed.max(next_handle);
     }
 
     /// Get an entity by handle
@@ -2685,4 +2715,3 @@ impl Default for CadDocument {
         Self::new()
     }
 }
-

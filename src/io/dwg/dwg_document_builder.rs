@@ -52,7 +52,7 @@ struct Pass2Header {
 struct Pass2Output {
     version: crate::types::DxfVersion,
     header: Pass2Header,
-    entities: Vec<EntityType>,
+    entities: Vec<std::sync::Arc<EntityType>>,
     objects: HashMap<Handle, crate::objects::ObjectType>,
     eed_by_handle: HashMap<Handle, Vec<(u64, Vec<u8>)>>,
     xdic_by_handle: HashMap<Handle, Handle>,
@@ -100,7 +100,7 @@ impl Pass2Output {
 
     fn add_entity(&mut self, entity: EntityType) -> std::result::Result<Handle, ()> {
         let handle = entity.common().handle;
-        self.entities.push(entity);
+        self.entities.push(std::sync::Arc::new(entity));
         Ok(handle)
     }
 }
@@ -233,6 +233,8 @@ impl DwgDocumentBuilder {
     ///
     /// Returns collected notifications (skipped records, warnings).
     pub fn build(mut self, document: &mut CadDocument) -> NotificationCollection {
+        let perf = std::env::var_os("OCS_PERF").is_some();
+        let build_started = std::time::Instant::now();
         let mut handles = self.obj_reader.handles();
         // Sort handles numerically so that entity records are processed in
         // allocation order.  This ensures polyline vertex records are
@@ -302,6 +304,7 @@ impl DwgDocumentBuilder {
         }
         let mut parsed_entries: Vec<ParsedEntry> = Vec::new();
         use rayon::prelude::*;
+        let catalog_started = std::time::Instant::now();
         let record_catalog: Vec<(u64, usize, i16)> = handles
             .par_iter()
             .filter_map(|&handle| {
@@ -317,6 +320,14 @@ impl DwgDocumentBuilder {
                 ))
             })
             .collect();
+        if perf {
+            eprintln!(
+                "[perf] dwg-build catalog={:.1}ms records={}",
+                catalog_started.elapsed().as_secs_f64() * 1000.0,
+                record_catalog.len(),
+            );
+        }
+        let pass1_started = std::time::Instant::now();
 
         for &(handle, offset, type_code) in &record_catalog {
             if is_table_type(type_code) {
@@ -960,7 +971,8 @@ impl DwgDocumentBuilder {
         // from the canonical entity_handles read from the DWG binary
         // (R2004+).  This is needed because entity_mode=1 only says
         // "paper space" without specifying WHICH paper space.
-        let mut binary_entity_owner: HashMap<Handle, Handle> = HashMap::new();
+        let mut binary_entity_owner: ahash::AHashMap<Handle, Handle> =
+            ahash::AHashMap::new();
         for entry in &parsed_entries {
             if let ParsedEntry::Block(h, data) = entry {
                 let br_handle = Handle::from(*h);
@@ -987,6 +999,15 @@ impl DwgDocumentBuilder {
         // (with stale block_record handles) and orphaned dictionary entries
         // that corrupt the file when written back as DXF.
         document.objects.clear();
+        if perf {
+            eprintln!(
+                "[perf] dwg-build pass1={:.1}ms tables={} blocks={} owner-links={}",
+                pass1_started.elapsed().as_secs_f64() * 1000.0,
+                parsed_entries.len(),
+                document.block_records.len(),
+                binary_entity_owner.len(),
+            );
+        }
 
         // ── Pass 2: Read entities and non-table objects ────────────────
         let mut pending = PendingPolylines {
@@ -1010,7 +1031,6 @@ impl DwgDocumentBuilder {
         let worker_count = rayon::current_num_threads().max(1);
         let chunk_size = 512usize;
         let batch_size = chunk_size * worker_count * 4;
-        let perf = std::env::var_os("OCS_PERF").is_some();
         let pass2_started = std::time::Instant::now();
         let mut decode_seconds = 0.0f64;
         let mut commit_seconds = 0.0f64;
@@ -1093,9 +1113,7 @@ impl DwgDocumentBuilder {
                     document.section_view_style = chunk.output.section_view_style.take();
                 }
                 document.objects.extend(chunk.output.objects.drain());
-                for entity in chunk.output.entities.drain(..) {
-                    document.add_loaded_entity(entity);
-                }
+                document.add_loaded_entity_batch(&mut chunk.output.entities);
                 for (owner, mut vertices) in chunk.pending.vertices.drain() {
                     pending
                         .vertices
@@ -1134,6 +1152,7 @@ impl DwgDocumentBuilder {
                 worker_count,
             );
         }
+        let post_started = std::time::Instant::now();
 
         // ── Post-pass: Assemble polyline vertices and add to document ──
         for (poly_handle, mut entity) in pending.polylines {
@@ -1324,22 +1343,18 @@ impl DwgDocumentBuilder {
         // Use the canonical entity_handle lists from the binary block
         // records (R2004+) to correct ownership for entities that belong
         // to non-active paper spaces (*Paper_Space0, *Paper_Space1, etc.).
-        let ownership_started = std::time::Instant::now();
-        if !binary_entity_owner.is_empty() {
-            // 1. Fix entity owner handles from the binary source of truth
-            for entity in &mut document.entities {
-                let eh = entity.common().handle;
-                if let Some(&correct_owner) = binary_entity_owner.get(&eh) {
-                    if entity.common().owner_handle != correct_owner {
-                        std::sync::Arc::make_mut(entity).common_mut().owner_handle = correct_owner;
-                    }
-                }
-            }
+        if perf {
+            eprintln!(
+                "[perf] dwg-build post={:.1}ms",
+                post_started.elapsed().as_secs_f64() * 1000.0,
+            );
         }
+        let ownership_started = std::time::Instant::now();
         // Rebuild block membership in O(entities + blocks). The ordinary
         // add-entity path scans every block record for every entity, which
-        // dominates load time in block-heavy drawings.
-        Self::rebuild_block_membership(document);
+        // dominates load time in block-heavy drawings. Owner correction and
+        // validation share the same parallel pass over the entity arena.
+        Self::rebuild_block_membership(document, Some(&binary_entity_owner));
         if perf {
             eprintln!(
                 "[perf] dwg-build ownership={:.1}ms entities={} blocks={}",
@@ -1348,6 +1363,7 @@ impl DwgDocumentBuilder {
                 document.block_records.len(),
             );
         }
+        let tail_started = std::time::Instant::now();
 
         // ── Post-pass: Resolve root dictionary handle ──────────────────
         //
@@ -1402,6 +1418,7 @@ impl DwgDocumentBuilder {
             document.header.handle_seed = max_from_reader + 1;
         }
 
+        let annotative_started = std::time::Instant::now();
         // ── Annotative flag from `AcadAnnotative` EED (STYLE / DIMSTYLE) ──
         // These records have no native annotative field; the flag is stored as
         // extended data under the `AcadAnnotative` application.
@@ -1435,7 +1452,14 @@ impl DwgDocumentBuilder {
                 }
             }
         }
+        if perf {
+            eprintln!(
+                "[perf] dwg-build annotative={:.1}ms",
+                annotative_started.elapsed().as_secs_f64() * 1000.0,
+            );
+        }
 
+        let eed_started = std::time::Instant::now();
         // ── Decode entity EED blobs into structured records ──────────────────
         // The object reader keeps every EED block as verbatim `raw_dwg_eed`
         // bytes (preserved for a byte-exact re-save). Additionally decode each
@@ -1445,44 +1469,59 @@ impl DwgDocumentBuilder {
         // still emits it verbatim; the writer prefers raw over records per app.
         {
             let wide = self.obj_reader.version().r2007_plus();
-            let app_name_by_handle: std::collections::HashMap<u64, String> = document
+            let app_name_by_handle: ahash::AHashMap<u64, String> = document
                 .app_ids
                 .iter()
                 .map(|a| (a.handle.value(), a.name.clone()))
                 .collect();
-            let layer_name_by_handle: std::collections::HashMap<u64, String> = document
+            let layer_name_by_handle: ahash::AHashMap<u64, String> = document
                 .layers
                 .iter()
                 .map(|l| (l.handle.value(), l.name.clone()))
                 .collect();
             if !app_name_by_handle.is_empty() {
-                for entity in document.entities.iter_mut() {
-                    if entity.common().extended_data.raw_dwg_eed.is_empty() {
-                        continue;
-                    }
-                    let xd = &mut std::sync::Arc::make_mut(entity).common_mut().extended_data;
-                    let blocks = xd.raw_dwg_eed.clone();
-                    for (app_handle, bytes) in &blocks {
-                        let Some(name) = app_name_by_handle.get(app_handle) else {
-                            continue;
-                        };
-                        if xd.get_record(name).is_some() {
-                            continue;
-                        }
-                        if let Some(values) =
-                            crate::io::dwg::eed_codec::decode_values(bytes, wide, |h| {
-                                layer_name_by_handle.get(&h).cloned()
+                document.entities.par_iter_mut().for_each(|entity| {
+                    let records: Vec<crate::xdata::ExtendedDataRecord> = {
+                        let xd = &entity.common().extended_data;
+                        xd.raw_dwg_eed
+                            .iter()
+                            .filter_map(|(app_handle, bytes)| {
+                                let Some(name) = app_name_by_handle.get(app_handle) else {
+                                    return None;
+                                };
+                                if xd.get_record(name).is_some() {
+                                    return None;
+                                }
+                                crate::io::dwg::eed_codec::decode_values(bytes, wide, |h| {
+                                    layer_name_by_handle.get(&h).cloned()
+                                })
+                                .map(|values| {
+                                    let mut rec =
+                                        crate::xdata::ExtendedDataRecord::new(name.clone());
+                                    rec.values = values;
+                                    rec
+                                })
                             })
-                        {
-                            let mut rec = crate::xdata::ExtendedDataRecord::new(name.clone());
-                            rec.values = values;
-                            xd.add_record(rec);
+                            .collect()
+                    };
+                    if !records.is_empty() {
+                        let xd =
+                            &mut std::sync::Arc::make_mut(entity).common_mut().extended_data;
+                        for record in records {
+                            xd.add_record(record);
                         }
                     }
-                }
+                });
             }
         }
+        if perf {
+            eprintln!(
+                "[perf] dwg-build eed={:.1}ms",
+                eed_started.elapsed().as_secs_f64() * 1000.0,
+            );
+        }
 
+        let acis_started = std::time::Instant::now();
         // ── AcDs SAB ordering ──────────────────────────────────────────────
         // R2013+ modeler geometry (3DSOLID/REGION/BODY/SURFACE) is stored as
         // SAB blobs in the AcDs section, one per entity whose `has_ds_data` bit
@@ -1510,7 +1549,14 @@ impl DwgDocumentBuilder {
             ordered.sort_by_key(|h| h.value());
             document.acis_sab_handles = ordered;
         }
+        if perf {
+            eprintln!(
+                "[perf] dwg-build acis-order={:.1}ms",
+                acis_started.elapsed().as_secs_f64() * 1000.0,
+            );
+        }
 
+        let repair_started = std::time::Instant::now();
         // ── Handle-collision repair ────────────────────────────────────────
         // The document is seeded with standard table entries (Standard dim
         // style, default block records, …) at low handles before the file's
@@ -1564,7 +1610,7 @@ impl DwgDocumentBuilder {
         // rebuild any empty owned-list from ownership so the round-trip is
         // lossless.
         {
-            use std::collections::HashMap;
+            let mut added_record = false;
             for (h, is_model) in [
                 (document.header.model_space_block_handle, true),
                 (document.header.paper_space_block_handle, false),
@@ -1593,6 +1639,7 @@ impl DwgDocumentBuilder {
                     || document.dim_styles.handle() == h
                     || document.layers.iter().any(|l| l.handle == h)
                     || document.get_entity(h).is_some();
+                let original_handle = h;
                 let h = if collides {
                     let fresh = document.allocate_handle();
                     if is_model {
@@ -1605,6 +1652,11 @@ impl DwgDocumentBuilder {
                             if l.block_record == h {
                                 l.block_record = fresh;
                             }
+                        }
+                    }
+                    for entity in &mut document.entities {
+                        if entity.common().owner_handle == original_handle {
+                            std::sync::Arc::make_mut(entity).common_mut().owner_handle = fresh;
                         }
                     }
                     fresh
@@ -1625,30 +1677,10 @@ impl DwgDocumentBuilder {
                     }
                 }
                 let _ = document.block_records.add(br);
+                added_record = true;
             }
-            // Fill any empty owned-entity list from `owner_handle`, in document
-            // (draw) order, excluding structural markers and INSERT sub-entities
-            // — the same set the writer excludes.
-            let mut by_owner: HashMap<Handle, Vec<Handle>> = HashMap::new();
-            for e in &document.entities {
-                if matches!(
-                    e.as_ref(),
-                    EntityType::Block(_) | EntityType::BlockEnd(_) | EntityType::AttributeEntity(_)
-                ) {
-                    continue;
-                }
-                let owner = e.common().owner_handle;
-                if owner.is_null() {
-                    continue;
-                }
-                by_owner.entry(owner).or_default().push(e.common().handle);
-            }
-            for br in document.block_records.iter_mut() {
-                if br.entity_handles.is_empty() {
-                    if let Some(list) = by_owner.get(&br.handle) {
-                        br.entity_handles = list.clone();
-                    }
-                }
+            if added_record {
+                Self::rebuild_block_membership(document, None);
             }
         }
 
@@ -1657,6 +1689,18 @@ impl DwgDocumentBuilder {
         // it into the header so consumers (and DXF export) see the real scale
         // rather than the "1:1" default.
         Self::reflect_annotation_scale(document);
+
+        if perf {
+            eprintln!(
+                "[perf] dwg-build repair={:.1}ms",
+                repair_started.elapsed().as_secs_f64() * 1000.0,
+            );
+            eprintln!(
+                "[perf] dwg-build tail={:.1}ms total={:.1}ms",
+                tail_started.elapsed().as_secs_f64() * 1000.0,
+                build_started.elapsed().as_secs_f64() * 1000.0,
+            );
+        }
 
         self.notifications
     }
@@ -1698,44 +1742,56 @@ impl DwgDocumentBuilder {
         }
     }
 
-    fn rebuild_block_membership(document: &mut CadDocument) {
-        use std::collections::{HashMap, HashSet};
+    fn rebuild_block_membership(
+        document: &mut CadDocument,
+        binary_entity_owner: Option<&ahash::AHashMap<Handle, Handle>>,
+    ) {
+        use rayon::prelude::*;
 
-        let valid_owners: HashSet<Handle> =
+        let valid_owners: ahash::AHashSet<Handle> =
             document.block_records.iter().map(|record| record.handle).collect();
         let model_space = document.header.model_space_block_handle;
         let paper_space = document.header.paper_space_block_handle;
-        let mut by_owner: HashMap<Handle, Vec<Handle>> = HashMap::new();
+        let model_is_valid = valid_owners.contains(&model_space);
+        let paper_is_valid = valid_owners.contains(&paper_space);
+        let memberships: Vec<Option<(Handle, Handle)>> = document
+            .entities
+            .par_iter_mut()
+            .map(|entity| {
+                if matches!(
+                    entity.as_ref(),
+                    EntityType::AttributeEntity(_)
+                        | EntityType::Block(_)
+                        | EntityType::BlockEnd(_)
+                ) {
+                    return None;
+                }
 
-        for entity in &mut document.entities {
-            if matches!(
-                entity.as_ref(),
-                EntityType::AttributeEntity(_) | EntityType::Block(_) | EntityType::BlockEnd(_)
-            ) {
-                continue;
-            }
-
-            let common = entity.common();
-            let mut owner = common.owner_handle;
-            if owner.is_null() {
-                owner = if common.entity_mode == Some(1) && valid_owners.contains(&paper_space) {
-                    paper_space
-                } else {
-                    model_space
-                };
-            }
-            if !valid_owners.contains(&owner) && valid_owners.contains(&model_space) {
-                owner = model_space;
-            }
-            if entity.common().owner_handle != owner {
-                std::sync::Arc::make_mut(entity).common_mut().owner_handle = owner;
-            }
-            if valid_owners.contains(&owner) {
-                by_owner
-                    .entry(owner)
-                    .or_default()
-                    .push(entity.common().handle);
-            }
+                let common = entity.common();
+                let handle = common.handle;
+                let mut owner = binary_entity_owner
+                    .and_then(|owners| owners.get(&handle).copied())
+                    .unwrap_or(common.owner_handle);
+                if owner.is_null() {
+                    owner = if common.entity_mode == Some(1) && paper_is_valid {
+                        paper_space
+                    } else {
+                        model_space
+                    };
+                }
+                if !valid_owners.contains(&owner) && model_is_valid {
+                    owner = model_space;
+                }
+                if common.owner_handle != owner {
+                    std::sync::Arc::make_mut(entity).common_mut().owner_handle = owner;
+                }
+                valid_owners.contains(&owner).then_some((owner, handle))
+            })
+            .collect();
+        let mut by_owner: ahash::AHashMap<Handle, Vec<Handle>> =
+            ahash::AHashMap::with_capacity(document.block_records.len());
+        for (owner, handle) in memberships.into_iter().flatten() {
+            by_owner.entry(owner).or_default().push(handle);
         }
 
         for record in document.block_records.iter_mut() {

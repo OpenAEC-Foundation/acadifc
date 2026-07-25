@@ -117,6 +117,13 @@ pub struct DwgObjectWriter<'a> {
     pub(super) linetype_handles: std::collections::HashMap<String, Handle>,
 }
 
+struct ParallelEntityBatch {
+    output: Vec<u8>,
+    handle_map: Vec<(u64, u32)>,
+    object_queue: VecDeque<Handle>,
+    registered_handles: HashSet<u64>,
+}
+
 impl<'a> DwgObjectWriter<'a> {
     // ── Constructor ─────────────────────────────────────────────────
 
@@ -1544,6 +1551,8 @@ impl<'a> DwgObjectWriter<'a> {
 
     /// Write block begin/entities/end for every block record.
     fn write_block_entities(&mut self) {
+        use rayon::prelude::*;
+
         let block_records: Vec<BlockRecord> = self
             .document
             .block_records
@@ -1617,7 +1626,67 @@ impl<'a> DwgObjectWriter<'a> {
                 // never point at a handle that is not in the stream.
                 let handles = &live_handles;
                 let len = handles.len();
-                for (i, eh) in handles.iter().enumerate() {
+                let parallel = self.version.r2004_plus() && handles.len() >= 1_024;
+                let mut i = 0usize;
+                while i < len {
+                    if parallel
+                        && self
+                            .document
+                            .entity_index
+                            .get(&handles[i])
+                            .is_some_and(|idx| {
+                                Self::parallel_entity_safe(self.document.entities[*idx].as_ref())
+                            })
+                    {
+                        let start = i;
+                        i += 1;
+                        while i < len
+                            && self
+                                .document
+                                .entity_index
+                                .get(&handles[i])
+                                .is_some_and(|idx| {
+                                    Self::parallel_entity_safe(
+                                        self.document.entities[*idx].as_ref(),
+                                    )
+                                })
+                        {
+                            i += 1;
+                        }
+                        let run = &handles[start..i];
+                        let mut unique = ahash::AHashSet::new();
+                        let safe_to_batch = run.len() >= 1_024
+                            && run.iter().all(|handle| {
+                                !self.registered_handles.contains(&handle.value())
+                                    && unique.insert(handle.value())
+                            });
+                        if safe_to_batch {
+                            let worker_count = rayon::current_num_threads().max(1);
+                            let chunk_size =
+                                ((run.len() + worker_count * 4 - 1) / (worker_count * 4))
+                                    .max(512);
+                            let batches: Vec<ParallelEntityBatch> = run
+                                .par_chunks(chunk_size)
+                                .map(|chunk| self.serialize_parallel_entity_batch(chunk))
+                                .collect();
+                            for batch in batches {
+                                self.append_parallel_entity_batch(batch);
+                            }
+                            continue;
+                        }
+                        for (offset, eh) in run.iter().enumerate() {
+                            if let Some(&idx) = self.document.entity_index.get(eh) {
+                                self.prev_handle = (start + offset > 0)
+                                    .then(|| handles[start + offset - 1]);
+                                self.next_handle = (start + offset + 1 < len)
+                                    .then(|| handles[start + offset + 1]);
+                                self.write_entity(&self.document.entities[idx]);
+                            }
+                        }
+                        continue;
+                    }
+
+                    let eh = &handles[i];
                     if let Some(&idx) = self.document.entity_index.get(eh) {
                         let entity = &self.document.entities[idx];
                         // Set prev/next for entity linking (pre-R2004)
@@ -1634,6 +1703,7 @@ impl<'a> DwgObjectWriter<'a> {
 
                         self.write_entity(entity);
                     }
+                    i += 1;
                 }
             }
 
@@ -1642,6 +1712,77 @@ impl<'a> DwgObjectWriter<'a> {
 
             self.write_block_end(br);
         }
+    }
+
+    fn parallel_entity_safe(entity: &EntityType) -> bool {
+        !matches!(
+            entity,
+            EntityType::Insert(_)
+                | EntityType::Polyline2D(_)
+                | EntityType::Polyline3D(_)
+                | EntityType::PolyfaceMesh(_)
+                | EntityType::PolygonMesh(_)
+                | EntityType::Polyline(_)
+                | EntityType::Solid3D(_)
+                | EntityType::Region(_)
+                | EntityType::Body(_)
+                | EntityType::Surface(_)
+                | EntityType::Block(_)
+                | EntityType::BlockEnd(_)
+        )
+    }
+
+    fn serialize_parallel_entity_batch(&self, handles: &[Handle]) -> ParallelEntityBatch {
+        let mut worker = Self {
+            version: self.version,
+            dxf_version: self.dxf_version,
+            document: self.document,
+            writer: DwgMergedWriter::new(self.version, self.dxf_version),
+            output: Vec::with_capacity(handles.len().saturating_mul(64)),
+            handle_map: Vec::with_capacity(handles.len()),
+            object_queue: VecDeque::new(),
+            prev_handle: None,
+            next_handle: None,
+            next_alloc_handle: self.next_alloc_handle,
+            model_space_extents: None,
+            sab_entries: Vec::new(),
+            pending_has_ds_data: false,
+            visited_objects: HashSet::new(),
+            registered_handles: HashSet::with_capacity(handles.len()),
+            owner_overrides: std::collections::HashMap::new(),
+            linetype_handles: std::collections::HashMap::new(),
+        };
+        for handle in handles {
+            if let Some(&idx) = worker.document.entity_index.get(handle) {
+                worker.write_entity(&worker.document.entities[idx]);
+            }
+        }
+        ParallelEntityBatch {
+            output: worker.output,
+            handle_map: worker.handle_map,
+            object_queue: worker.object_queue,
+            registered_handles: worker.registered_handles,
+        }
+    }
+
+    fn append_parallel_entity_batch(&mut self, batch: ParallelEntityBatch) {
+        debug_assert!(
+            batch
+                .registered_handles
+                .iter()
+                .all(|handle| !self.registered_handles.contains(handle)),
+            "parallel entity batch emitted a duplicate handle"
+        );
+        let base = self.output.len() as u32;
+        self.output.extend_from_slice(&batch.output);
+        self.handle_map.extend(
+            batch
+                .handle_map
+                .into_iter()
+                .map(|(handle, offset)| (handle, base + offset)),
+        );
+        self.object_queue.extend(batch.object_queue);
+        self.registered_handles.extend(batch.registered_handles);
     }
 
     /// Expand entity_handles to include sub-entity handles (vertices, faces,
