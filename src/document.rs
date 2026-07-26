@@ -20,7 +20,7 @@
 use crate::classes::DxfClassCollection;
 use crate::entities::{EntityCommon, EntityType};
 use std::sync::{Arc, Mutex};
-use crate::objects::ObjectType;
+use crate::objects::{DataObjectData, ObjectType};
 use crate::tables::*;
 use crate::types::{DxfVersion, Color, Handle, Vector2, Vector3};
 use crate::Result;
@@ -539,6 +539,8 @@ pub struct HeaderVariables {
     pub dimstyle_control_handle: Handle,
     /// VPEntHdr table control object
     pub vpent_hdr_control_handle: Handle,
+    /// Current legacy viewport-entity table record (R13-R2000)
+    pub current_vx_handle: Handle,
     
     // ==================== Dictionary Handles ====================
     /// Named objects dictionary
@@ -867,6 +869,7 @@ impl Default for HeaderVariables {
             appid_control_handle: Handle::NULL,
             dimstyle_control_handle: Handle::NULL,
             vpent_hdr_control_handle: Handle::NULL,
+            current_vx_handle: Handle::NULL,
             
             // Dictionary handles
             named_objects_dict_handle: Handle::NULL,
@@ -1026,6 +1029,13 @@ pub struct CadDocument {
     
     /// UCS table
     pub ucss: Table<Ucs>,
+
+    /// Legacy viewport-entity table (R13-R2000)
+    pub vx_table: Table<VxTableRecord>,
+
+    /// Ordered soft-owner references stored by VX_CONTROL. This preserves
+    /// dangling records and source ordering as well as the decoded records.
+    pub vx_control_entries: Vec<Handle>,
     
     /// DXF class definitions (CLASSES section)
     pub classes: DxfClassCollection,
@@ -1292,6 +1302,8 @@ impl CadDocument {
             views: Table::new(),
             vports: Table::new(),
             ucss: Table::new(),
+            vx_table: Table::new(),
+            vx_control_entries: Vec::new(),
             classes: DxfClassCollection::new(),
             notifications: crate::notification::NotificationCollection::new(),
             entities: Vec::new(),
@@ -1337,10 +1349,9 @@ impl CadDocument {
     /// Whether writing this document to `target` would lose or corrupt data
     /// that was captured verbatim from the source DWG version.
     ///
-    /// Unsupported objects (e.g. AEC/Civil3D), raw graphical records
-    /// (Surface/MLEADER/unknown entities) and EED blobs are stored as the
-    /// source version's bytes; they can only be re-emitted to the exact source
-    /// version. When `target` differs the writer must drop
+    /// Unsupported objects (e.g. AEC/Civil3D), unknown graphical records and
+    /// EED blobs are stored as the source version's bytes; they can only be
+    /// re-emitted to the exact source version. When `target` differs the writer must drop
     /// them, so a caller that wants a lossless round-trip should save in
     /// [`dwg_source_version`](Self::dwg_source_version) instead. Returns false
     /// when there is nothing version-locked (or the document is not from DWG).
@@ -1359,15 +1370,10 @@ impl CadDocument {
         if raw_objects {
             return true;
         }
-        // Raw graphical records + per-entity EED.
+        // Unknown graphical records + per-entity EED.
         let raw_entities = self.entities.iter().any(|e| {
             let raw = match e.as_ref() {
                 crate::entities::EntityType::Unknown(u) => u.raw_dwg_data.is_some(),
-                crate::entities::EntityType::Surface(s) => s.raw_dwg_data.is_some(),
-                crate::entities::EntityType::MultiLeader(m) => m.raw_dwg_data.is_some(),
-                crate::entities::EntityType::Light(l) => l.raw_dwg_data.is_some(),
-                crate::entities::EntityType::SectionSymbol(s) => s.raw_dwg_data.is_some(),
-                crate::entities::EntityType::ViewBorder(b) => b.raw_dwg_data.is_some(),
                 _ => false,
             };
             raw || !e.common().extended_data.raw_dwg_eed.is_empty()
@@ -1404,6 +1410,8 @@ impl CadDocument {
         self.vports.set_handle(self.header.vport_control_handle);
         self.app_ids.set_handle(self.header.appid_control_handle);
         self.dim_styles.set_handle(self.header.dimstyle_control_handle);
+        self.vx_table
+            .set_handle(self.header.vpent_hdr_control_handle);
 
         // Add standard layer "0"
         let mut layer0 = Layer::layer_0();
@@ -1735,6 +1743,8 @@ impl CadDocument {
             "ACDB_RADIMOBJECTCONTEXTDATA_CLASS" => "AcDbRadialDimensionObjectContextData",
             "ACDB_RADIMLGOBJECTCONTEXTDATA_CLASS" => "AcDbRadialDimensionLargeObjectContextData",
             "ACDB_ORDDIMOBJECTCONTEXTDATA_CLASS" => "AcDbOrdinateDimensionObjectContextData",
+            "ACDB_HATCHSCALECONTEXTDATA_CLASS" => "AcDbHatchScaleContextData",
+            "ACDB_HATCHVIEWCONTEXTDATA_CLASS" => "AcDbHatchViewContextData",
             _ => return,
         };
         if self.classes.get_by_name(dxf_name).is_some() {
@@ -2064,7 +2074,27 @@ impl CadDocument {
                 ))
             })?;
 
-        self.add_entity_to_block(entity, &block_name)
+        let is_viewport = matches!(&entity, EntityType::Viewport(_));
+        let handle = self.add_entity_to_block(entity, &block_name)?;
+        if is_viewport {
+            if let Some(ObjectType::Layout(layout)) =
+                self.objects.values_mut().find(|object| {
+                    matches!(
+                        object,
+                        ObjectType::Layout(layout)
+                            if layout.name == layout_name
+                    )
+                })
+            {
+                if !layout.viewports.contains(&handle) {
+                    layout.viewports.push(handle);
+                }
+                if layout.viewport.is_null() {
+                    layout.viewport = handle;
+                }
+            }
+        }
+        Ok(handle)
     }
 
     /// Add an entity to a named block record.
@@ -2216,6 +2246,7 @@ impl CadDocument {
         overall_vp.common.handle = overall_vp_handle;
         overall_vp.common.owner_handle = br_handle;
         layout.viewport = overall_vp_handle;
+        layout.viewports.push(overall_vp_handle);
 
         if let Some(br) = self.block_records.get_mut(&block_name) {
             br.entity_handles.push(overall_vp_handle);
@@ -2401,6 +2432,7 @@ impl CadDocument {
         scan_table!(self.views);
         scan_table!(self.vports);
         scan_table!(self.ucss);
+        scan_table!(self.vx_table);
 
         self.next_handle = max_handle;
 
@@ -2416,6 +2448,7 @@ impl CadDocument {
         for e in self.ucss.iter()          { if !e.handle().is_null() { used_handles.insert(e.handle().value()); } }
         for e in self.app_ids.iter()       { if !e.handle().is_null() { used_handles.insert(e.handle().value()); } }
         for e in self.dim_styles.iter()    { if !e.handle().is_null() { used_handles.insert(e.handle().value()); } }
+        for e in self.vx_table.iter()      { if !e.handle().is_null() { used_handles.insert(e.handle().value()); } }
         for e in self.block_records.iter() { if !e.handle().is_null() { used_handles.insert(e.handle().value()); } }
         for e in self.entities.iter()      { let h = e.common().handle.value(); if h > 0 { used_handles.insert(h); } }
         // Snapshot the handles used by NON-object records. Object keys are
@@ -2465,6 +2498,10 @@ impl CadDocument {
             let h = Handle::new(self.next_handle); self.next_handle += 1;
             self.block_records.set_handle(h); self.header.block_control_handle = h;
         }
+        if used_handles.contains(&self.vx_table.handle().value()) {
+            let h = Handle::new(self.next_handle); self.next_handle += 1;
+            self.vx_table.set_handle(h); self.header.vpent_hdr_control_handle = h;
+        }
 
         // --- 1c. Resolve block entity/end handle collisions ---
         // block_entity_handle and block_end_handle are pre-allocated during
@@ -2498,15 +2535,7 @@ impl CadDocument {
         }
         for (old_h, new_h) in &remap {
             if let Some(mut obj) = self.objects.remove(old_h) {
-                // Update the object's own handle field
-                match &mut obj {
-                    ObjectType::Dictionary(d) => d.handle = *new_h,
-                    ObjectType::Layout(l) => l.handle = *new_h,
-                    ObjectType::MLineStyle(m) => m.handle = *new_h,
-                    ObjectType::PlaceHolder(p) => p.handle = *new_h,
-                    ObjectType::DictionaryWithDefault(d) => d.handle = *new_h,
-                    _ => {}
-                }
+                obj.set_handle(*new_h);
                 self.objects.insert(*new_h, obj);
             }
         }
@@ -2514,6 +2543,13 @@ impl CadDocument {
         if !remap.is_empty() {
             let remap_map: std::collections::HashMap<u64, Handle> =
                 remap.iter().map(|(o, n)| (o.value(), *n)).collect();
+            let mut remap_object_handle = |handle: &mut Handle| {
+                if let Some(new_handle) =
+                    remap_map.get(&handle.value())
+                {
+                    *handle = *new_handle;
+                }
+            };
 
             // Update dictionary entry values that reference remapped handles
             for (_, obj) in self.objects.iter_mut() {
@@ -2528,10 +2564,90 @@ impl CadDocument {
                             }
                         }
                     }
-                    ObjectType::Layout(l) => {
-                        if let Some(new_owner) = remap_map.get(&l.owner.value()) {
-                            l.owner = *new_owner;
+                    ObjectType::XRecord(x) => {
+                        if let Some(new_owner) = remap_map.get(&x.owner.value()) {
+                            x.owner = *new_owner;
                         }
+                        for reactor in &mut x.reactors {
+                            if let Some(new_handle) =
+                                remap_map.get(&reactor.value())
+                            {
+                                *reactor = *new_handle;
+                            }
+                        }
+                        if let Some(xdictionary) =
+                            x.xdictionary_handle.as_mut()
+                        {
+                            if let Some(new_handle) =
+                                remap_map.get(&xdictionary.value())
+                            {
+                                *xdictionary = *new_handle;
+                            }
+                        }
+                        for entry in &mut x.entries {
+                            if let crate::objects::XRecordValue::Handle(handle) =
+                                &mut entry.value
+                            {
+                                if let Some(new_handle) =
+                                    remap_map.get(&handle.value())
+                                {
+                                    *handle = *new_handle;
+                                }
+                            }
+                        }
+                    }
+                    ObjectType::Layout(l) => {
+                        remap_object_handle(&mut l.owner);
+                        for reactor in &mut l.reactors {
+                            remap_object_handle(reactor);
+                        }
+                        if let Some(xdictionary) =
+                            l.xdictionary_handle.as_mut()
+                        {
+                            remap_object_handle(xdictionary);
+                        }
+                        remap_object_handle(&mut l.block_record);
+                        remap_object_handle(&mut l.viewport);
+                        for viewport in &mut l.viewports {
+                            remap_object_handle(viewport);
+                        }
+                        remap_object_handle(&mut l.base_ucs);
+                        remap_object_handle(&mut l.named_ucs);
+                        remap_object_handle(&mut l.plot_view_handle);
+                        remap_object_handle(&mut l.visual_style_handle);
+                        if let Some(codes) =
+                            l.raw_plot_settings_codes.as_mut()
+                        {
+                            for (code, value) in codes {
+                                if *code == 333 {
+                                    if let Ok(old_handle) =
+                                        u64::from_str_radix(value, 16)
+                                    {
+                                        if let Some(new_handle) =
+                                            remap_map.get(&old_handle)
+                                        {
+                                            *value = format!(
+                                                "{:X}",
+                                                new_handle.value(),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    ObjectType::PlotSettings(p) => {
+                        remap_object_handle(&mut p.owner);
+                        for reactor in &mut p.reactors {
+                            remap_object_handle(reactor);
+                        }
+                        if let Some(xdictionary) =
+                            p.xdictionary_handle.as_mut()
+                        {
+                            remap_object_handle(xdictionary);
+                        }
+                        remap_object_handle(&mut p.plot_view_handle);
+                        remap_object_handle(&mut p.visual_style_handle);
                     }
                     ObjectType::MLineStyle(m) => {
                         if let Some(new_owner) = remap_map.get(&m.owner.value()) {
@@ -2553,7 +2669,473 @@ impl CadDocument {
                             }
                         }
                     }
+                    ObjectType::GeoData(g) => {
+                        if let Some(new_owner) = remap_map.get(&g.owner.value()) {
+                            g.owner = *new_owner;
+                        }
+                        for reactor in &mut g.reactors {
+                            if let Some(new_handle) =
+                                remap_map.get(&reactor.value())
+                            {
+                                *reactor = *new_handle;
+                            }
+                        }
+                        if let Some(xdictionary) =
+                            g.xdictionary_handle.as_mut()
+                        {
+                            if let Some(new_handle) =
+                                remap_map.get(&xdictionary.value())
+                            {
+                                *xdictionary = *new_handle;
+                            }
+                        }
+                        if let Some(new_host) =
+                            remap_map.get(&g.host_block.value())
+                        {
+                            g.host_block = *new_host;
+                        }
+                    }
+                    ObjectType::DynamicBlock(d) => {
+                        d.visit_handles_mut(&mut remap_object_handle);
+                    }
+                    ObjectType::DataObject(d) => {
+                        if let Some(new_owner) = remap_map.get(&d.owner.value()) {
+                            d.owner = *new_owner;
+                        }
+                        for reactor in &mut d.reactors {
+                            if let Some(new_handle) =
+                                remap_map.get(&reactor.value())
+                            {
+                                *reactor = *new_handle;
+                            }
+                        }
+                        if let Some(xdictionary) =
+                            d.xdictionary_handle.as_mut()
+                        {
+                            if let Some(new_handle) =
+                                remap_map.get(&xdictionary.value())
+                            {
+                                *xdictionary = *new_handle;
+                            }
+                        }
+                        match &mut d.data {
+                            DataObjectData::BreakData(value) => {
+                                if let Some(new_handle) = remap_map
+                                    .get(&value.dimension_reference.value())
+                                {
+                                    value.dimension_reference = *new_handle;
+                                }
+                                if let Some(new_handle) =
+                                    remap_map.get(&value.reserved_reference.value())
+                                {
+                                    value.reserved_reference = *new_handle;
+                                }
+                            }
+                            DataObjectData::IdBuffer(value) => {
+                                for reference in &mut value.object_ids {
+                                    if let Some(new_handle) =
+                                        remap_map.get(&reference.value())
+                                    {
+                                        *reference = *new_handle;
+                                    }
+                                }
+                            }
+                            DataObjectData::LayerIndex(value) => {
+                                for entry in &mut value.entries {
+                                    if let Some(new_handle) =
+                                        remap_map.get(&entry.id_buffer.value())
+                                    {
+                                        entry.id_buffer = *new_handle;
+                                    }
+                                }
+                            }
+                            DataObjectData::CellStyleMap(value) => {
+                                for cell in &mut value.cells {
+                                    let format =
+                                        &mut cell.cell_style.content_format;
+                                    if let Some(new_handle) = remap_map
+                                        .get(&format.text_style.value())
+                                    {
+                                        format.text_style = *new_handle;
+                                    }
+                                    for border in &mut cell.cell_style.borders {
+                                        if let Some(new_handle) = remap_map
+                                            .get(&border.line_type.value())
+                                        {
+                                            border.line_type = *new_handle;
+                                        }
+                                    }
+                                }
+                            }
+                            DataObjectData::TableGeometry(value) => {
+                                for cell in &mut value.cells {
+                                    if let Some(new_handle) = remap_map
+                                        .get(&cell.table_geometry.value())
+                                    {
+                                        cell.table_geometry = *new_handle;
+                                    }
+                                }
+                            }
+                            DataObjectData::BreakPointRef
+                            | DataObjectData::AcDsRecord
+                            | DataObjectData::AcDsSchema
+                            | DataObjectData::Dummy
+                            | DataObjectData::Index(_)
+                            | DataObjectData::LongTransaction
+                            | DataObjectData::ObjectPointer
+                            | DataObjectData::PartialViewingFilter(_) => {}
+                        }
+                    }
+                    ObjectType::ClassObject(value) => {
+                        value.visit_handles_mut(&mut remap_object_handle);
+                    }
+                    ObjectType::RegisteredClass(value) => {
+                        if let Some(new_handle) =
+                            remap_map.get(&value.owner.value())
+                        {
+                            value.owner = *new_handle;
+                        }
+                        for reactor in &mut value.reactors {
+                            if let Some(new_handle) =
+                                remap_map.get(&reactor.value())
+                            {
+                                *reactor = *new_handle;
+                            }
+                        }
+                        if let Some(xdictionary) =
+                            value.xdictionary_handle.as_mut()
+                        {
+                            if let Some(new_handle) =
+                                remap_map.get(&xdictionary.value())
+                            {
+                                *xdictionary = *new_handle;
+                            }
+                        }
+                        for property in &mut value.properties {
+                            if let crate::objects::SemanticPropertyValue::Handle(
+                                handle,
+                            ) = &mut property.value
+                            {
+                                if let Some(new_handle) =
+                                    remap_map.get(&handle.value())
+                                {
+                                    *handle = *new_handle;
+                                }
+                            }
+                        }
+                        for reference in &mut value.object_ids {
+                            if let Some(new_handle) =
+                                remap_map.get(&reference.handle.value())
+                            {
+                                reference.handle = *new_handle;
+                            }
+                        }
+                    }
+                    ObjectType::DgnLineStyle(value) => {
+                        if let Some(new_handle) =
+                            remap_map.get(&value.owner.value())
+                        {
+                            value.owner = *new_handle;
+                        }
+                        for reactor in &mut value.reactors {
+                            if let Some(new_handle) =
+                                remap_map.get(&reactor.value())
+                            {
+                                *reactor = *new_handle;
+                            }
+                        }
+                        if let Some(xdictionary) =
+                            value.xdictionary_handle.as_mut()
+                        {
+                            if let Some(new_handle) =
+                                remap_map.get(&xdictionary.value())
+                            {
+                                *xdictionary = *new_handle;
+                            }
+                        }
+                        match &mut value.data {
+                            crate::objects::DgnLineStyleData::Definition {
+                                root_component,
+                                properties,
+                                ..
+                            } => {
+                                if let Some(new_handle) =
+                                    remap_map.get(&root_component.value())
+                                {
+                                    *root_component = *new_handle;
+                                }
+                                for property in properties {
+                                    if let crate::objects::SemanticPropertyValue::Handle(
+                                        handle,
+                                    ) = &mut property.value
+                                    {
+                                        if let Some(new_handle) =
+                                            remap_map.get(&handle.value())
+                                        {
+                                            *handle = *new_handle;
+                                        }
+                                    }
+                                }
+                            }
+                            crate::objects::DgnLineStyleData::Component {
+                                component,
+                                properties,
+                                ..
+                            } => {
+                                match component {
+                                    crate::objects::DgnLsComponentData::Symbol(value) => {
+                                        if let Some(new_handle) =
+                                            remap_map.get(&value.block.value())
+                                        {
+                                            value.block = *new_handle;
+                                        }
+                                    }
+                                    crate::objects::DgnLsComponentData::Compound(value) => {
+                                        for entry in &mut value.entries {
+                                            if let Some(new_handle) =
+                                                remap_map.get(&entry.component.value())
+                                            {
+                                                entry.component = *new_handle;
+                                            }
+                                        }
+                                    }
+                                    crate::objects::DgnLsComponentData::Point(value) => {
+                                        if let Some(new_handle) =
+                                            remap_map.get(&value.stroke_component.value())
+                                        {
+                                            value.stroke_component = *new_handle;
+                                        }
+                                        for symbol in &mut value.symbols {
+                                            if let Some(new_handle) = remap_map
+                                                .get(&symbol.symbol_component.value())
+                                            {
+                                                symbol.symbol_component = *new_handle;
+                                            }
+                                        }
+                                    }
+                                    crate::objects::DgnLsComponentData::Stroke(_)
+                                    | crate::objects::DgnLsComponentData::Internal(_) => {}
+                                }
+                                for property in properties {
+                                    if let crate::objects::SemanticPropertyValue::Handle(
+                                        handle,
+                                    ) = &mut property.value
+                                    {
+                                        if let Some(new_handle) =
+                                            remap_map.get(&handle.value())
+                                        {
+                                            *handle = *new_handle;
+                                        }
+                                    }
+                                }
+                            }
+                            crate::objects::DgnLineStyleData::Registered {
+                                properties,
+                                object_ids,
+                                ..
+                            } => {
+                                for property in properties {
+                                    if let crate::objects::SemanticPropertyValue::Handle(
+                                        handle,
+                                    ) = &mut property.value
+                                    {
+                                        if let Some(new_handle) =
+                                            remap_map.get(&handle.value())
+                                        {
+                                            *handle = *new_handle;
+                                        }
+                                    }
+                                }
+                                for reference in object_ids {
+                                    if let Some(new_handle) =
+                                        remap_map.get(&reference.handle.value())
+                                    {
+                                        reference.handle = *new_handle;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    ObjectType::ObjectContextData(value) => {
+                        remap_object_handle(&mut value.owner_handle);
+                        for reactor in &mut value.reactors {
+                            remap_object_handle(reactor);
+                        }
+                        if let Some(xdictionary) =
+                            value.xdictionary_handle.as_mut()
+                        {
+                            remap_object_handle(xdictionary);
+                        }
+                        remap_object_handle(&mut value.scale);
+                        match &mut value.kind {
+                            crate::objects::ObjectContextKind::Dim(dimension) => {
+                                remap_object_handle(&mut dimension.block);
+                            }
+                            crate::objects::ObjectContextKind::HatchView(hatch) => {
+                                remap_object_handle(&mut hatch.view);
+                            }
+                            crate::objects::ObjectContextKind::MTextAttribute(
+                                attribute,
+                            ) => {
+                                if let Some(context) =
+                                    attribute.context.as_mut()
+                                {
+                                    remap_object_handle(&mut context.scale);
+                                }
+                            }
+                            crate::objects::ObjectContextKind::MLeader(
+                                context,
+                            ) => {
+                                if let Some(handle) =
+                                    context.text_style_handle.as_mut()
+                                {
+                                    remap_object_handle(handle);
+                                }
+                                if let Some(handle) =
+                                    context.block_content_handle.as_mut()
+                                {
+                                    remap_object_handle(handle);
+                                }
+                                if let Some(handle) =
+                                    context.scale_handle.as_mut()
+                                {
+                                    remap_object_handle(handle);
+                                }
+                                for root in &mut context.leader_roots {
+                                    for line in &mut root.lines {
+                                        if let Some(handle) =
+                                            line.line_type_handle.as_mut()
+                                        {
+                                            remap_object_handle(handle);
+                                        }
+                                        if let Some(handle) =
+                                            line.arrowhead_handle.as_mut()
+                                        {
+                                            remap_object_handle(handle);
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    ObjectType::TableContent(value) => {
+                        value.visit_object_handles_mut(
+                            &mut remap_object_handle,
+                        );
+                    }
+                    ObjectType::BlockVisibilityParameter(value) => {
+                        value.visit_handles_mut(&mut remap_object_handle);
+                    }
+                    ObjectType::Associative(value) => {
+                        value.visit_handles_mut(&mut remap_object_handle);
+                    }
+                    ObjectType::Field(value) => {
+                        value.visit_handles_mut(&mut remap_object_handle);
+                    }
+                    ObjectType::FieldList(value) => {
+                        value.visit_handles_mut(&mut remap_object_handle);
+                    }
+                    ObjectType::ProxyObject(value) => {
+                        if let Some(new_handle) =
+                            remap_map.get(&value.owner.value())
+                        {
+                            value.owner = *new_handle;
+                        }
+                        for reactor in &mut value.reactors {
+                            if let Some(new_handle) =
+                                remap_map.get(&reactor.value())
+                            {
+                                *reactor = *new_handle;
+                            }
+                        }
+                        if let Some(xdictionary) =
+                            value.xdictionary_handle.as_mut()
+                        {
+                            if let Some(new_handle) =
+                                remap_map.get(&xdictionary.value())
+                            {
+                                *xdictionary = *new_handle;
+                            }
+                        }
+                        for reference in &mut value.object_ids {
+                            if let Some(new_handle) =
+                                remap_map.get(&reference.handle.value())
+                            {
+                                reference.handle = *new_handle;
+                            }
+                        }
+                    }
                     _ => {}
+                }
+            }
+
+            for (old_handle, new_handle) in &remap {
+                if let Some(mut value) =
+                    self.block_visibility_params.remove(old_handle)
+                {
+                    value.visit_handles_mut(&mut remap_object_handle);
+                    self.block_visibility_params.insert(*new_handle, value);
+                }
+                if let Some(mut value) = self.fields.remove(old_handle) {
+                    remap_object_handle(&mut value.handle);
+                    remap_object_handle(&mut value.owner);
+                    for handle in &mut value.objects {
+                        remap_object_handle(handle);
+                    }
+                    self.fields.insert(*new_handle, value);
+                }
+                if let Some(mut value) =
+                    self.context_scales.remove(old_handle)
+                {
+                    remap_object_handle(&mut value);
+                    self.context_scales.insert(*new_handle, value);
+                }
+                if let Some(mut value) =
+                    self.block_representations.remove(old_handle)
+                {
+                    remap_object_handle(&mut value);
+                    self.block_representations.insert(*new_handle, value);
+                }
+                if let Some(value) = self.eed_by_handle.remove(old_handle) {
+                    self.eed_by_handle.insert(*new_handle, value);
+                }
+                if let Some(mut value) =
+                    self.xdic_by_handle.remove(old_handle)
+                {
+                    remap_object_handle(&mut value);
+                    self.xdic_by_handle.insert(*new_handle, value);
+                }
+                if let Some(mut values) =
+                    self.reactors_by_handle.remove(old_handle)
+                {
+                    for handle in &mut values {
+                        remap_object_handle(handle);
+                    }
+                    self.reactors_by_handle.insert(*new_handle, values);
+                }
+            }
+            for value in self.block_visibility_params.values_mut() {
+                value.visit_handles_mut(&mut remap_object_handle);
+            }
+            for value in self.fields.values_mut() {
+                remap_object_handle(&mut value.owner);
+                for handle in &mut value.objects {
+                    remap_object_handle(handle);
+                }
+            }
+            for value in self.context_scales.values_mut() {
+                remap_object_handle(value);
+            }
+            for value in self.block_representations.values_mut() {
+                remap_object_handle(value);
+            }
+            for value in self.xdic_by_handle.values_mut() {
+                remap_object_handle(value);
+            }
+            for values in self.reactors_by_handle.values_mut() {
+                for handle in values {
+                    remap_object_handle(handle);
                 }
             }
 
@@ -2583,11 +3165,28 @@ impl CadDocument {
                 }
             }
 
+            for view in self.views.iter_mut() {
+                remap_object_handle(&mut view.background_handle);
+                remap_object_handle(&mut view.live_section_handle);
+                remap_object_handle(&mut view.visual_style_handle);
+                remap_object_handle(&mut view.sun_handle);
+            }
+            for vport in self.vports.iter_mut() {
+                remap_object_handle(&mut vport.background_handle);
+                remap_object_handle(&mut vport.visual_style_handle);
+                remap_object_handle(&mut vport.sun_handle);
+            }
+
             // Update entity -> object references so a genuinely remapped
             // definition object stays linked (RasterImage/Underlay renderers
             // look the definition up by this handle to find the file path).
             for entity in self.entities.iter_mut() {
                 match Arc::make_mut(entity) {
+                    EntityType::Insert(insert) => {
+                        if let Some(handle) = &mut insert.view_rep_handle {
+                            remap_object_handle(handle);
+                        }
+                    }
                     EntityType::Underlay(u) => {
                         if let Some(new_h) = remap_map.get(&u.definition_handle.value()) {
                             u.definition_handle = *new_h;
@@ -2600,12 +3199,85 @@ impl CadDocument {
                             }
                         }
                     }
+                    EntityType::SectionSymbol(symbol) => {
+                        if let Some(new_handle) =
+                            remap_map.get(&symbol.style_handle.value())
+                        {
+                            symbol.style_handle = *new_handle;
+                        }
+                        if let Some(new_handle) =
+                            remap_map.get(&symbol.view_rep_handle.value())
+                        {
+                            symbol.view_rep_handle = *new_handle;
+                        }
+                    }
+                    EntityType::ViewBorder(border) => {
+                        if let Some(new_handle) =
+                            remap_map.get(&border.active_viewport.value())
+                        {
+                            border.active_viewport = *new_handle;
+                        }
+                        if let Some(new_handle) =
+                            remap_map.get(&border.scale_handle.value())
+                        {
+                            border.scale_handle = *new_handle;
+                        }
+                    }
+                    EntityType::Extended(entity) => {
+                        match &mut entity.data {
+                            crate::entities::ExtendedEntityData::RegisteredClass(
+                                value,
+                            ) => {
+                                for property in &mut value.properties {
+                                    if let crate::objects::SemanticPropertyValue::Handle(
+                                        handle,
+                                    ) = &mut property.value
+                                    {
+                                        if let Some(new_handle) =
+                                            remap_map.get(&handle.value())
+                                        {
+                                            *handle = *new_handle;
+                                        }
+                                    }
+                                }
+                                for reference in &mut value.object_ids {
+                                    if let Some(new_handle) =
+                                        remap_map.get(&reference.handle.value())
+                                    {
+                                        reference.handle = *new_handle;
+                                    }
+                                }
+                            }
+                            crate::entities::ExtendedEntityData::Proxy(value) => {
+                                for reference in &mut value.object_ids {
+                                    if let Some(new_handle) =
+                                        remap_map.get(&reference.handle.value())
+                                    {
+                                        reference.handle = *new_handle;
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                     _ => {}
                 }
             }
         }
         let model_handle = self.header.model_space_block_handle;
         let paper_handle = self.header.paper_space_block_handle;
+        let paper_handles: std::collections::HashSet<Handle> = self
+            .block_records
+            .iter()
+            .filter_map(|record| {
+                let name = record.name.to_ascii_uppercase();
+                (name == "*PAPER_SPACE"
+                    || (name.starts_with("*PAPER_SPACE")
+                        && name.len() > 12
+                        && name[12..].bytes().all(|b| b.is_ascii_digit())))
+                .then_some(record.handle)
+            })
+            .collect();
 
         // Block record entities — set owner handle on entities looked up from
         // the entity map. This MUST run before the model-space default below:
@@ -2655,6 +3327,15 @@ impl CadDocument {
                     model_handle
                 };
             }
+            common.entity_mode = Some(
+                if common.owner_handle == model_handle {
+                    2
+                } else if paper_handles.contains(&common.owner_handle) {
+                    1
+                } else {
+                    0
+                },
+            );
         }
 
         // Paper-space entities — if an entity's owner is the paper space block,
@@ -2745,6 +3426,7 @@ fn get_common_mut(entity: &mut EntityType) -> &mut EntityCommon {
         EntityType::Seqend(e) => &mut e.common,
         EntityType::Ole2Frame(e) => &mut e.common,
         EntityType::PolygonMesh(e) => &mut e.common,
+        EntityType::Extended(e) => &mut e.common,
         EntityType::Unknown(e) => &mut e.common,
     }
 }

@@ -234,6 +234,10 @@ impl DwgMergedWriter {
         self.main.write_bit_long_long(value);
     }
 
+    pub fn encode_legacy_text(&self, text: &str) -> Vec<u8> {
+        self.main.encode_legacy_text(text)
+    }
+
     pub fn write_bit_double_with_default(&mut self, def: f64, value: f64) {
         self.main.write_bit_double_with_default(def, value);
     }
@@ -272,6 +276,10 @@ impl DwgMergedWriter {
 
     pub fn write_cm_color(&mut self, color: &Color) {
         self.main.write_cm_color(color);
+    }
+
+    pub fn write_cm_true_color(&mut self, color: &Color) {
+        self.main.write_cm_true_color(color);
     }
 
     pub fn write_en_color(&mut self, color: &Color, transparency: &Transparency) {
@@ -314,6 +322,14 @@ impl DwgMergedWriter {
         }
     }
 
+    /// Write one preserved opaque bit to the text stream.
+    pub fn write_text_bit(&mut self, value: bool) {
+        match self.mode {
+            MergeMode::ThreeStream => self.text.write_bit(value),
+            MergeMode::TwoStream => self.main.write_bit(value),
+        }
+    }
+
     /// Write a Unicode text string.
     pub fn write_text_unicode(&mut self, value: &str) {
         match self.mode {
@@ -329,6 +345,11 @@ impl DwgMergedWriter {
     /// Write a handle reference to the handle stream.
     pub fn write_handle(&mut self, ref_type: DwgReferenceType, handle: u64) {
         self.handle.write_handle(ref_type, handle);
+    }
+
+    /// Write a compact handle offset relative to the current object's handle.
+    pub fn write_handle_relative(&mut self, reference_handle: u64, handle: u64) {
+        self.handle.write_handle_relative(reference_handle, handle);
     }
 
     /// Write a handle reference into the MAIN (data) stream, for objects that

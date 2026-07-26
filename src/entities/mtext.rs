@@ -101,6 +101,11 @@ pub struct MText {
     pub rectangle_height: Option<f64>,
     /// Rotation angle in radians
     pub rotation: f64,
+    /// Exact DWG X-axis direction used to derive `rotation`. Kept only while
+    /// it still describes the public rotation, avoiding needless last-bit
+    /// drift from an `atan2` followed by `sin`/`cos`.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub dwg_x_direction: Option<Vector3>,
     /// Text style name
     pub style: String,
     /// Attachment point
@@ -148,6 +153,7 @@ impl MText {
             rectangle_width: 10.0,
             rectangle_height: None,
             rotation: 0.0,
+            dwg_x_direction: None,
             style: "Standard".to_string(),
             attachment_point: AttachmentPoint::TopLeft,
             drawing_direction: DrawingDirection::LeftToRight,
@@ -275,5 +281,4 @@ impl Entity for MText {
         super::mirror::mirror_mtext(self, transform);
     }
 }
-
 

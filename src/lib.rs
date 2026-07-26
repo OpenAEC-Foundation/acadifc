@@ -127,6 +127,8 @@
 #![warn(rustdoc::missing_crate_level_docs)]
 
 pub mod classes;
+pub mod compound_file;
+pub mod vba;
 pub mod entities;
 pub mod error;
 pub mod notification;
@@ -147,13 +149,14 @@ pub use types::{
 
 // Re-export entity types
 pub use entities::{
-    Arc, Circle, Ellipse, Entity, EntityType, Line, LwPolyline, MText, Point, Polyline, Spline,
-    Text,
+    Arc, Circle, Ellipse, EmbeddedEntity, Entity, EntityType, Line, LwPolyline, MText, Point,
+    Polyline, Spline, Text,
 };
 
 // Re-export table types
 pub use tables::{
-    AppId, BlockRecord, DimStyle, Layer, LineType, Table, TableEntry, TextStyle, Ucs, VPort, View,
+    AppId, BlockRecord, DimStyle, Layer, LineType, Table, TableEntry, TextStyle, Ucs, VPort,
+    View, VxTableRecord,
 };
 
 // Re-export document

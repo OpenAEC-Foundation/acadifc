@@ -79,29 +79,31 @@ impl XRecordValueType {
     /// Determine value type from DXF group code
     pub fn from_code(code: i32) -> Self {
         match code {
-            // Handle references - check specific codes first
-            5 | 105 => XRecordValueType::Handle,
-            320..=329 | 480..=481 => XRecordValueType::Handle,
-            330..=369 => XRecordValueType::ObjectId,
-            // Strings (0-9 but not 5, plus 100-102, 300-309)
-            0..=4 | 6..=9 | 100..=102 | 300..=309 => XRecordValueType::String,
-            // 3D points
-            10..=39 => XRecordValueType::Point3D,
-            // Doubles
-            40..=59 | 110..=149 | 210..=239 | 460..=469 => XRecordValueType::Double,
-            // Bytes
+            code if code < 0 => XRecordValueType::Handle,
+            5 | 105 | 320..=329 | 480..=481 => {
+                XRecordValueType::Handle
+            }
+            330..=369 | 390..=399 | 1005..=1009 => {
+                XRecordValueType::ObjectId
+            }
+            0..=4 | 6..=9 | 100..=102 | 300..=309 | 410..=419
+            | 430..=439 | 470..=479 | 999 | 1000..=1003 => {
+                XRecordValueType::String
+            }
+            10..=37 | 110..=139 | 210..=269 | 1010..=1039
+            | 1043..=1069 => XRecordValueType::Point3D,
+            38..=59 | 140..=149 | 460..=469 | 1040..=1042 => {
+                XRecordValueType::Double
+            }
             280..=289 => XRecordValueType::Byte,
-            // 16-bit integers
-            60..=79 | 170..=179 | 270..=279 => XRecordValueType::Int16,
-            // 32-bit integers
-            90..=99 | 420..=459 => XRecordValueType::Int32,
-            // 64-bit integers
+            60..=79 | 170..=179 | 270..=279 | 370..=389
+            | 400..=409 | 1070 => XRecordValueType::Int16,
+            80..=99 | 420..=429 | 440..=459 | 1071 => {
+                XRecordValueType::Int32
+            }
             160..=169 => XRecordValueType::Int64,
-            // Booleans
             290..=299 => XRecordValueType::Bool,
-            // Binary chunks
-            310..=319 => XRecordValueType::Chunk,
-            // Unknown
+            310..=319 | 1004 => XRecordValueType::Chunk,
             _ => XRecordValueType::Unknown,
         }
     }
@@ -273,6 +275,10 @@ pub struct XRecord {
     pub handle: Handle,
     /// Owner handle
     pub owner: Handle,
+    /// Objects notified when this record changes.
+    pub reactors: Vec<Handle>,
+    /// Extension dictionary attached to this record.
+    pub xdictionary_handle: Option<Handle>,
     /// Record name (optional, for named XRecords)
     pub name: String,
     /// Cloning behavior flags
@@ -306,6 +312,8 @@ impl XRecord {
         Self {
             handle: Handle::NULL,
             owner: Handle::NULL,
+            reactors: Vec::new(),
+            xdictionary_handle: None,
             name: String::new(),
             cloning_flags: DictionaryCloningFlags::NotApplicable,
             entries: Vec::new(),

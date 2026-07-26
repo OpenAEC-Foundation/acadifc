@@ -812,10 +812,11 @@ impl<R: Read + Seek> DwgReader<R> {
 
         // 2. Read Classes (AcDb:Classes)
         if let Ok(classes_buf) = self.get_section_buffer("AcDb:Classes", &info) {
-            match crate::io::dwg::dwg_stream_readers::classes_reader::read_classes(
+            match crate::io::dwg::dwg_stream_readers::classes_reader::read_classes_with_encoding(
                 &classes_buf,
                 dxf_version,
                 info.acad_maintenance_version,
+                crate::io::dxf::code_page::encoding_from_dwg_code_page(info.code_page),
             ) {
                 Ok(classes) => document.classes = classes,
                 Err(e) => self.notifications.notify(
@@ -828,10 +829,11 @@ impl<R: Read + Seek> DwgReader<R> {
 
         // 3. Read Header Variables (AcDb:Header)
         if let Ok(header_buf) = self.get_section_buffer("AcDb:Header", &info) {
-            match crate::io::dwg::dwg_stream_readers::header_reader::read_header(
+            match crate::io::dwg::dwg_stream_readers::header_reader::read_header_with_encoding(
                 &header_buf,
                 dxf_version,
                 info.acad_maintenance_version,
+                crate::io::dxf::code_page::encoding_from_dwg_code_page(info.code_page),
             ) {
                 Ok(header_vars) => document.header = header_vars,
                 Err(e) => self.notifications.notify(
@@ -840,6 +842,8 @@ impl<R: Read + Seek> DwgReader<R> {
                 ),
             }
         }
+        document.header.code_page =
+            crate::io::dxf::code_page::dwg_code_page_name(info.code_page).to_string();
         self.report_progress(40);
 
         // 4. Read Handle Map (AcDb:Handles)
@@ -875,10 +879,11 @@ impl<R: Read + Seek> DwgReader<R> {
         let objects_started = web_time::Instant::now();
         if !handle_map.is_empty() {
             if let Ok(objects_buf) = self.get_section_buffer("AcDb:AcDbObjects", &info) {
-                match crate::io::dwg::dwg_stream_readers::object_reader::DwgObjectReader::new(
+                match crate::io::dwg::dwg_stream_readers::object_reader::DwgObjectReader::with_encoding(
                     objects_buf,
                     dxf_version,
                     handle_map,
+                    crate::io::dxf::code_page::encoding_from_dwg_code_page(info.code_page),
                 ) {
                     Ok(obj_reader) => {
                         let mut builder = crate::io::dwg::dwg_document_builder::DwgDocumentBuilder::new(obj_reader);

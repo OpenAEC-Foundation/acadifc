@@ -3,15 +3,22 @@
 //! This module contains writers for each section of a DXF file:
 //! HEADER, CLASSES, TABLES, BLOCKS, ENTITIES, and OBJECTS.
 
+mod associative;
+
 use crate::document::CadDocument;
 use crate::entities::*;
 use crate::error::Result;
 use crate::objects::{
-    Dictionary, DictionaryVariable, DictionaryWithDefault, Group, ImageDefinition,
-    ImageDefinitionReactor, Layout, MLineStyle, Material, MultiLeaderStyle,
+    BlockEvalValue, BlockVisibilityParameter, DataObject, DataObjectData,
+    Dictionary, DictionaryVariable,
+    DictionaryWithDefault, Group, ImageDefinition,
+    GeoData, ImageDefinitionReactor, Layout, MLineStyle, Material, MaterialColor,
+    MaterialMap, MaterialProceduralValue, MaterialTexture, MultiLeaderStyle,
     DimSubtype, ObjectContextData, ObjectContextKind,
     ObjectType, PlotSettings, RasterVariables, Scale, SortEntitiesTable, SpatialFilter,
-    TableStyle, VisualStyle, BookColor, WipeoutVariables, XRecord,
+    TableStyle, VisualStyle, VisualStyleProperty, VisualStylePropertyValue,
+    BookColor, WipeoutVariables, XRecord, XRecordEntry,
+    DynamicBlockData, DynamicBlockObject,
 };
 use crate::tables::*;
 use crate::types::{Color, DxfVersion, Handle, Vector3};
@@ -362,7 +369,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_section_end()?;
         Ok(())
     }
-    
+
     /// Write the TABLES section
     pub fn write_tables(&mut self, document: &CadDocument) -> Result<()> {
         self.writer.write_section_start("TABLES")?;
@@ -401,7 +408,11 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_subclass("AcDbSymbolTableRecord")?;
         self.writer.write_subclass("AcDbViewportTableRecord")?;
         self.writer.write_string(2, vport.name())?;
-        self.writer.write_i16(70, 0)?;
+        let mut flags = 0;
+        if vport.xref_dependent { flags |= 0x10; }
+        if vport.xref_resolved { flags |= 0x20; }
+        if vport.xref_reference { flags |= 0x40; }
+        self.writer.write_i16(70, flags)?;
 
         // Lower-left corner
         self.writer.write_double(10, vport.lower_left.x)?;
@@ -453,13 +464,18 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_double(44, vport.back_clip)?;
 
         // Snap rotation
-        self.writer.write_double(50, vport.snap_rotation)?;
+        self.writer.write_double(50, vport.snap_rotation.to_degrees())?;
 
         // View twist angle
-        self.writer.write_double(51, vport.view_twist)?;
+        self.writer.write_double(51, vport.view_twist.to_degrees())?;
 
-        // View mode (bit flags: bit 2 = UCS follow)
-        self.writer.write_i16(71, if vport.ucsfollow { 4 } else { 0 })?;
+        let mut view_mode = 0;
+        if vport.perspective { view_mode |= 1; }
+        if vport.front_clipping { view_mode |= 2; }
+        if vport.back_clipping { view_mode |= 4; }
+        if vport.ucsfollow { view_mode |= 8; }
+        if vport.front_clip_at_eye { view_mode |= 16; }
+        self.writer.write_i16(71, view_mode)?;
 
         // Circle zoom
         self.writer.write_i16(72, vport.circle_zoom)?;
@@ -467,8 +483,10 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // Fast zoom
         self.writer.write_i16(73, if vport.fast_zoom { 1 } else { 0 })?;
 
-        // UCSICON
-        self.writer.write_i16(74, 3)?;
+        let mut ucsicon = 0;
+        if vport.ucsicon_lower { ucsicon |= 1; }
+        if vport.ucsicon_origin { ucsicon |= 2; }
+        self.writer.write_i16(74, ucsicon)?;
 
         // Snap on
         self.writer.write_i16(75, if vport.snap_on { 1 } else { 0 })?;
@@ -482,8 +500,48 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // Snap isopair
         self.writer.write_i16(78, vport.snap_isopair)?;
 
-        // Render mode / visual style
-        self.writer.write_i16(281, vport.render_mode.to_value())?;
+        if self.dxf_version >= DxfVersion::AC1015 {
+            self.writer.write_i16(281, vport.render_mode.to_value())?;
+            self.writer.write_i16(65, if vport.ucs_per_viewport { 1 } else { 0 })?;
+            self.writer.write_double(110, vport.ucs_origin.x)?;
+            self.writer.write_double(120, vport.ucs_origin.y)?;
+            self.writer.write_double(130, vport.ucs_origin.z)?;
+            self.writer.write_double(111, vport.ucs_x_axis.x)?;
+            self.writer.write_double(121, vport.ucs_x_axis.y)?;
+            self.writer.write_double(131, vport.ucs_x_axis.z)?;
+            self.writer.write_double(112, vport.ucs_y_axis.x)?;
+            self.writer.write_double(122, vport.ucs_y_axis.y)?;
+            self.writer.write_double(132, vport.ucs_y_axis.z)?;
+            self.writer.write_i16(79, vport.ucs_ortho_type)?;
+            self.writer.write_double(146, vport.ucs_elevation)?;
+            if !vport.named_ucs_handle.is_null() {
+                self.writer.write_handle(345, vport.named_ucs_handle)?;
+            }
+            if !vport.base_ucs_handle.is_null() {
+                self.writer.write_handle(346, vport.base_ucs_handle)?;
+            }
+        }
+        if self.dxf_version >= DxfVersion::AC1021 {
+            self.writer.write_i16(60, vport.grid_flags.to_bits())?;
+            self.writer.write_i16(61, vport.grid_major)?;
+            if !vport.background_handle.is_null() {
+                self.writer.write_handle(332, vport.background_handle)?;
+            }
+            if !vport.visual_style_handle.is_null() {
+                self.writer.write_handle(348, vport.visual_style_handle)?;
+            }
+            if !vport.sun_handle.is_null() {
+                self.writer.write_handle(361, vport.sun_handle)?;
+            }
+            self.writer.write_bool(292, vport.use_default_lights)?;
+            self.writer.write_i16(282, vport.default_lighting_type)?;
+            self.writer.write_double(141, vport.brightness)?;
+            self.writer.write_double(142, vport.contrast)?;
+            self.writer.write_color(63, vport.ambient_color)?;
+            if let Some(rgb) = vport.ambient_color.to_true_color_value() {
+                self.writer.write_i32(421, rgb)?;
+            }
+        }
 
         Ok(())
     }
@@ -590,6 +648,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         let color_index = match layer.color {
             Color::Index(i) => i as i16,
             Color::ByLayer => 7,
+            Color::None => 7,
             Color::ByBlock => 0,
             Color::Rgb { .. } => 7,
         };
@@ -692,7 +751,12 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_subclass("AcDbSymbolTableRecord")?;
         self.writer.write_subclass("AcDbViewTableRecord")?;
         self.writer.write_string(2, view.name())?;
-        self.writer.write_i16(70, 0)?;
+        let mut flags = 0;
+        if view.paper_space { flags |= 1; }
+        if view.xref_dependent { flags |= 0x10; }
+        if view.xref_resolved { flags |= 0x20; }
+        if view.xref_reference { flags |= 0x40; }
+        self.writer.write_i16(70, flags)?;
         self.writer.write_double(40, view.height)?;
         self.writer.write_double(10, view.center.x)?;
         self.writer.write_double(20, view.center.y)?;
@@ -706,8 +770,60 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_double(42, view.lens_length)?;
         self.writer.write_double(43, view.front_clip)?;
         self.writer.write_double(44, view.back_clip)?;
-        self.writer.write_double(50, view.twist_angle)?;
+        self.writer.write_double(50, view.twist_angle.to_degrees())?;
+        let mut view_mode = 0;
+        if view.perspective { view_mode |= 1; }
+        if view.front_clipping { view_mode |= 2; }
+        if view.back_clipping { view_mode |= 4; }
+        if view.front_clip_at_eye { view_mode |= 16; }
+        self.writer.write_i16(71, view_mode)?;
 
+        if self.dxf_version >= DxfVersion::AC1015 {
+            self.writer.write_i16(72, if view.ucs_associated { 1 } else { 0 })?;
+            self.writer.write_i16(281, view.render_mode.to_value())?;
+            if view.ucs_associated {
+                self.writer.write_double(110, view.ucs_origin.x)?;
+                self.writer.write_double(120, view.ucs_origin.y)?;
+                self.writer.write_double(130, view.ucs_origin.z)?;
+                self.writer.write_double(111, view.ucs_x_axis.x)?;
+                self.writer.write_double(121, view.ucs_x_axis.y)?;
+                self.writer.write_double(131, view.ucs_x_axis.z)?;
+                self.writer.write_double(112, view.ucs_y_axis.x)?;
+                self.writer.write_double(122, view.ucs_y_axis.y)?;
+                self.writer.write_double(132, view.ucs_y_axis.z)?;
+                self.writer.write_double(146, view.ucs_elevation)?;
+                self.writer.write_i16(79, view.ucs_ortho_type)?;
+                if !view.named_ucs_handle.is_null() {
+                    self.writer.write_handle(345, view.named_ucs_handle)?;
+                }
+                if !view.base_ucs_handle.is_null() {
+                    self.writer.write_handle(346, view.base_ucs_handle)?;
+                }
+            }
+        }
+        if self.dxf_version >= DxfVersion::AC1021 {
+            self.writer.write_i16(73, if view.camera_plottable { 1 } else { 0 })?;
+            if !view.background_handle.is_null() {
+                self.writer.write_handle(332, view.background_handle)?;
+            }
+            if !view.live_section_handle.is_null() {
+                self.writer.write_handle(334, view.live_section_handle)?;
+            }
+            if !view.visual_style_handle.is_null() {
+                self.writer.write_handle(348, view.visual_style_handle)?;
+            }
+            if !view.sun_handle.is_null() {
+                self.writer.write_handle(361, view.sun_handle)?;
+            }
+            self.writer.write_bool(292, view.use_default_lights)?;
+            self.writer.write_i16(282, view.default_lighting_type)?;
+            self.writer.write_double(141, view.brightness)?;
+            self.writer.write_double(142, view.contrast)?;
+            self.writer.write_color(63, view.ambient_color)?;
+            if let Some(rgb) = view.ambient_color.to_true_color_value() {
+                self.writer.write_i32(421, rgb)?;
+            }
+        }
         Ok(())
     }
 
@@ -730,7 +846,11 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_subclass("AcDbSymbolTableRecord")?;
         self.writer.write_subclass("AcDbUCSTableRecord")?;
         self.writer.write_string(2, ucs.name())?;
-        self.writer.write_i16(70, 0)?;
+        let mut flags = 0;
+        if ucs.xref_dependent { flags |= 0x10; }
+        if ucs.xref_resolved { flags |= 0x20; }
+        if ucs.xref_reference { flags |= 0x40; }
+        self.writer.write_i16(70, flags)?;
         self.writer.write_double(10, ucs.origin.x)?;
         self.writer.write_double(20, ucs.origin.y)?;
         self.writer.write_double(30, ucs.origin.z)?;
@@ -741,6 +861,14 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_double(22, ucs.y_axis.y)?;
         self.writer.write_double(32, ucs.y_axis.z)?;
 
+        if self.dxf_version >= DxfVersion::AC1015 {
+            self.writer.write_i16(71, ucs.ortho_type)?;
+            self.writer.write_i16(79, ucs.ortho_view_type)?;
+            self.writer.write_double(146, ucs.elevation)?;
+            if !ucs.base_ucs_handle.is_null() {
+                self.writer.write_handle(346, ucs.base_ucs_handle)?;
+            }
+        }
         Ok(())
     }
 
@@ -793,11 +921,26 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_subclass("AcDbSymbolTableRecord")?;
         self.writer.write_subclass("AcDbDimStyleTableRecord")?;
         self.writer.write_string(2, dimstyle.name())?;
-        self.writer.write_i16(70, 0)?;
+        let mut flags = 0;
+        if dimstyle.xref_dependent { flags |= 0x10; }
+        if dimstyle.xref_resolved { flags |= 0x20; }
+        if dimstyle.xref_reference { flags |= 0x40; }
+        self.writer.write_i16(70, flags)?;
 
         // Postfix / suffix
         if !dimstyle.dimpost.is_empty() && dimstyle.dimpost != "<>" { self.writer.write_string(3, &dimstyle.dimpost)?; }
         if !dimstyle.dimapost.is_empty() { self.writer.write_string(4, &dimstyle.dimapost)?; }
+        if self.dxf_version <= DxfVersion::AC1014 {
+            if !dimstyle.dimblk_name.is_empty() {
+                self.writer.write_string(5, &dimstyle.dimblk_name)?;
+            }
+            if !dimstyle.dimblk1_name.is_empty() {
+                self.writer.write_string(6, &dimstyle.dimblk1_name)?;
+            }
+            if !dimstyle.dimblk2_name.is_empty() {
+                self.writer.write_string(7, &dimstyle.dimblk2_name)?;
+            }
+        }
 
         // Scale / floats (codes 40-50)
         self.writer.write_double(40, dimstyle.dimscale)?;
@@ -827,7 +970,10 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         if dimstyle.dimaltrnd != 0.0 { self.writer.write_double(148, dimstyle.dimaltrnd)?; }
 
         // Int16 flags (69-79)
-        if dimstyle.dimtfill != 0 { self.writer.write_i16(69, dimstyle.dimtfill)?; }
+        if self.dxf_version >= DxfVersion::AC1021 && dimstyle.dimtfill != 0 {
+            self.writer.write_i16(69, dimstyle.dimtfill)?;
+            self.writer.write_i16(70, dimstyle.dimtfillclr)?;
+        }
         self.writer.write_i16(71, if dimstyle.dimtol { 1 } else { 0 })?;
         self.writer.write_i16(72, if dimstyle.dimlim { 1 } else { 0 })?;
         self.writer.write_i16(73, if dimstyle.dimtih { 1 } else { 0 })?;
@@ -852,6 +998,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_i16(179, dimstyle.dimadec)?;
 
         // Int16 (270-290)
+        if self.dxf_version <= DxfVersion::AC1014 {
+            self.writer.write_i16(270, dimstyle.dimunit)?;
+        }
         self.writer.write_i16(271, dimstyle.dimdec)?;
         self.writer.write_i16(272, dimstyle.dimtdec)?;
         self.writer.write_i16(273, dimstyle.dimaltu)?;
@@ -868,23 +1017,38 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_i16(284, dimstyle.dimtzin)?;
         self.writer.write_i16(285, dimstyle.dimaltz)?;
         self.writer.write_i16(286, dimstyle.dimalttz)?;
-        self.writer.write_i16(289, dimstyle.dimatfit)?;
-        if dimstyle.dimfxlon { self.writer.write_bool(290, true)?; }
-        if dimstyle.dimtxtdirection { self.writer.write_bool(295, true)?; }
+        self.writer.write_i16(288, if dimstyle.dimupt { 1 } else { 0 })?;
+        if self.dxf_version <= DxfVersion::AC1014 {
+            self.writer.write_i16(287, dimstyle.dimfit)?;
+        } else {
+            self.writer.write_i16(289, dimstyle.dimatfit)?;
+        }
+        if self.dxf_version >= DxfVersion::AC1021 && dimstyle.dimfxlon {
+            self.writer.write_bool(290, true)?;
+        }
+        if self.dxf_version >= DxfVersion::AC1024 && dimstyle.dimtxtdirection {
+            self.writer.write_bool(295, true)?;
+        }
 
         // Handle references
         if !dimstyle.dimtxsty_handle.is_null() { self.writer.write_handle(340, dimstyle.dimtxsty_handle)?; }
-        if !dimstyle.dimldrblk.is_null() { self.writer.write_handle(341, dimstyle.dimldrblk)?; }
-        if !dimstyle.dimblk.is_null() { self.writer.write_handle(342, dimstyle.dimblk)?; }
-        if !dimstyle.dimblk1.is_null() { self.writer.write_handle(343, dimstyle.dimblk1)?; }
-        if !dimstyle.dimblk2.is_null() { self.writer.write_handle(344, dimstyle.dimblk2)?; }
-        if !dimstyle.dimltex_handle.is_null() { self.writer.write_handle(345, dimstyle.dimltex_handle)?; }
-        if !dimstyle.dimltex1_handle.is_null() { self.writer.write_handle(346, dimstyle.dimltex1_handle)?; }
-        if !dimstyle.dimltex2_handle.is_null() { self.writer.write_handle(347, dimstyle.dimltex2_handle)?; }
+        if self.dxf_version >= DxfVersion::AC1015 {
+            if !dimstyle.dimldrblk.is_null() { self.writer.write_handle(341, dimstyle.dimldrblk)?; }
+            if !dimstyle.dimblk.is_null() { self.writer.write_handle(342, dimstyle.dimblk)?; }
+            if !dimstyle.dimblk1.is_null() { self.writer.write_handle(343, dimstyle.dimblk1)?; }
+            if !dimstyle.dimblk2.is_null() { self.writer.write_handle(344, dimstyle.dimblk2)?; }
+        }
+        if self.dxf_version >= DxfVersion::AC1021 {
+            if !dimstyle.dimltex_handle.is_null() { self.writer.write_handle(345, dimstyle.dimltex_handle)?; }
+            if !dimstyle.dimltex1_handle.is_null() { self.writer.write_handle(346, dimstyle.dimltex1_handle)?; }
+            if !dimstyle.dimltex2_handle.is_null() { self.writer.write_handle(347, dimstyle.dimltex2_handle)?; }
+        }
 
         // Line weights
-        self.writer.write_i16(371, dimstyle.dimlwd)?;
-        self.writer.write_i16(372, dimstyle.dimlwe)?;
+        if self.dxf_version >= DxfVersion::AC1015 {
+            self.writer.write_i16(371, dimstyle.dimlwd)?;
+            self.writer.write_i16(372, dimstyle.dimlwe)?;
+        }
         self.write_annotative_xdata(dimstyle.annotative)?;
 
         Ok(())
@@ -977,7 +1141,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     fn write_block_definition(&mut self, block_record: &BlockRecord, document: &CadDocument) -> Result<()> {
         let owner = block_record.handle();
         let is_paper_space = block_record.name().starts_with("*Paper_Space");
-        
+
         // Determine block flags from stored BlockFlags
         let mut flags: i16 = 0;
         // Anonymous flag: use stored flag, or infer for truly anonymous blocks
@@ -1003,7 +1167,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         if block_record.flags.is_external {
             flags |= 16; // externally dependent
         }
-        
+
         // Write BLOCK entity
         self.writer.write_string(0, "BLOCK")?;
         self.writer.write_handle(5, block_record.block_entity_handle)?;
@@ -1124,10 +1288,6 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 | EntityType::PolygonMesh(_)
                 | EntityType::AttributeEntity(_)
                 | EntityType::Unknown(_)
-                // No DXF body is emitted for these (raw-DWG-only records), so
-                // their XDATA must not be emitted either.
-                | EntityType::SectionSymbol(_)
-                | EntityType::ViewBorder(_)
         ) {
             self.write_xdata(&entity.common().extended_data)?;
         }
@@ -1171,14 +1331,14 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             EntityType::Solid3D(e) => self.write_solid3d(e, owner),
             EntityType::Region(e) => self.write_region(e, owner),
             EntityType::Body(e) => self.write_body(e, owner),
-            // DXF surface export not yet supported; skip rather than emit
-            // malformed geometry.
-            EntityType::Surface(_) => Ok(()),
-            // Light glyphs are preserved via the DWG raw record; there is no
-            // native DXF encoder, so skip on DXF write (same as Surface).
-            EntityType::Light(_) => Ok(()),
-            // Same policy: preserved via the DWG raw record, no DXF encoder.
-            EntityType::SectionSymbol(_) | EntityType::ViewBorder(_) => Ok(()),
+            EntityType::Surface(e) => self.write_surface(e, owner),
+            EntityType::Light(e) => self.write_light(e, owner),
+            EntityType::SectionSymbol(e) => {
+                self.write_section_symbol_dxf(e, owner)
+            }
+            EntityType::ViewBorder(e) => {
+                self.write_view_border_dxf(e, owner)
+            }
             EntityType::Table(e) => self.write_acad_table(e, owner),
             EntityType::Tolerance(e) => self.write_tolerance(e, owner),
             EntityType::PolyfaceMesh(e) => self.write_polyface_mesh(e, owner),
@@ -1188,8 +1348,1458 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             EntityType::Seqend(e) => self.write_seqend(e, owner),
             EntityType::Ole2Frame(e) => self.write_ole2frame(e, owner),
             EntityType::PolygonMesh(e) => self.write_polygon_mesh(e, owner),
+            EntityType::Extended(e) => self.write_extended_entity(e, owner),
             EntityType::Unknown(e) => self.write_unknown_entity(e, owner),
         }
+    }
+
+    fn write_extended_entity(&mut self, e: &ExtendedEntity, owner: Handle) -> Result<()> {
+        if let ExtendedEntityData::Format(value) = &e.data {
+            if let Some(raw) = &value.raw_dxf_codes {
+                self.writer.write_entity_type(e.class_name())?;
+                for (code, item) in raw {
+                    self.writer.write_string(*code, item)?;
+                }
+                return Ok(());
+            }
+        }
+        if let ExtendedEntityData::RegisteredClass(data) = &e.data {
+            if data.payload.bit_count != 0 {
+                self.writer.write_entity_type("ACAD_PROXY_ENTITY")?;
+                self.write_common_entity_data(&e.common, owner)?;
+                self.writer.write_subclass("AcDbProxyEntity")?;
+                self.writer.write_i32(90, 499)?;
+                if self.dxf_version < DxfVersion::AC1032 {
+                    self.writer.write_i32(91, 499)?;
+                }
+                self.writer.write_i32(95, 0)?;
+                self.writer.write_bool(70, false)?;
+                let graphics = e
+                    .common
+                    .graphic_data
+                    .as_deref()
+                    .unwrap_or_default();
+                self.writer.write_i32(92, graphics.len() as i32)?;
+                for chunk in graphics.chunks(127) {
+                    self.writer.write_binary(310, chunk)?;
+                }
+                let payload =
+                    crate::objects::semantic_property::encode_registered_class_envelope(
+                        &data.dxf_name,
+                        &data.cpp_class_name,
+                        &data.properties,
+                        &data.payload,
+                    );
+                self.writer.write_i32(93, payload.bit_count as i32)?;
+                let payload_data = payload.data();
+                for chunk in payload_data.chunks(127) {
+                    self.writer.write_binary(310, chunk)?;
+                }
+                self.write_proxy_references_dxf(&data.object_ids)?;
+                return Ok(());
+            }
+        }
+        self.writer.write_entity_type(e.class_name())?;
+        self.write_common_entity_data(&e.common, owner)?;
+        match &e.data {
+            ExtendedEntityData::Camera { view_handle } => {
+                self.writer.write_subclass("AcDbCamera")?;
+                self.writer.write_handle(340, *view_handle)?;
+            }
+            ExtendedEntityData::SectionObject(data) => {
+                self.writer.write_subclass("AcDbSection")?;
+                self.writer.write_i32(90, data.state)?;
+                self.writer.write_i32(91, data.flags)?;
+                self.writer.write_string(1, &data.name)?;
+                self.writer.write_point3d(10, data.vertical_direction)?;
+                self.writer.write_double(40, data.top_height)?;
+                self.writer.write_double(41, data.bottom_height)?;
+                self.writer.write_i16(70, data.indicator_alpha)?;
+                self.writer.write_color(62, data.indicator_color)?;
+                self.writer.write_i32(92, data.vertices.len() as i32)?;
+                for point in &data.vertices {
+                    self.writer.write_point3d(11, *point)?;
+                }
+                self.writer
+                    .write_i32(93, data.back_line_vertices.len() as i32)?;
+                for point in &data.back_line_vertices {
+                    self.writer.write_point3d(12, *point)?;
+                }
+                self.writer.write_handle(360, data.settings_handle)?;
+            }
+            ExtendedEntityData::ArcAlignedText(data) => {
+                self.writer.write_subclass("AcDbArcAlignedText")?;
+                self.writer.write_string(1, &data.text)?;
+                self.writer.write_string(2, &data.font_name)?;
+                self.writer.write_string(3, &data.big_font_name)?;
+                self.writer.write_string(7, &data.style_name)?;
+                self.writer.write_point3d(10, data.center)?;
+                self.writer.write_double(40, data.radius)?;
+                self.writer.write_double(41, data.x_scale)?;
+                self.writer.write_double(42, data.text_size)?;
+                self.writer.write_double(43, data.character_spacing)?;
+                self.writer.write_double(44, data.offset_from_arc)?;
+                self.writer.write_double(45, data.right_offset)?;
+                self.writer.write_double(46, data.left_offset)?;
+                self.writer.write_double(50, data.start_angle)?;
+                self.writer.write_double(51, data.end_angle)?;
+                self.writer.write_i16(70, data.reverse as i16)?;
+                self.writer.write_i16(71, data.text_direction)?;
+                self.writer.write_i16(72, data.alignment)?;
+                self.writer.write_i16(73, data.text_position)?;
+                self.writer.write_i16(74, data.bold as i16)?;
+                self.writer.write_i16(75, data.italic as i16)?;
+                self.writer.write_i16(76, data.underlined as i16)?;
+                self.writer.write_i16(77, data.character_set)?;
+                self.writer.write_i16(78, data.pitch_and_family)?;
+                self.writer.write_i16(79, data.is_shx as i16)?;
+                self.writer.write_i32(90, data.text_color)?;
+                self.writer.write_point3d(210, data.normal)?;
+                self.writer.write_bool(280, data.wizard_flag)?;
+                self.writer.write_handle(330, data.arc_handle)?;
+            }
+            ExtendedEntityData::RemoteText(data) => {
+                self.writer.write_subclass("AcDbRText")?;
+                self.writer.write_point3d(10, data.position)?;
+                self.writer.write_point3d(210, data.normal)?;
+                self.writer.write_double(50, data.rotation)?;
+                self.writer.write_double(40, data.height)?;
+                self.writer.write_string(7, &data.style_name)?;
+                self.writer.write_i16(70, data.flags)?;
+                self.writer.write_string(1, &data.text)?;
+            }
+            ExtendedEntityData::GeoPositionMarker(data) => {
+                self.writer.write_subclass("AcDbGeoPositionMarker")?;
+                self.writer.write_i32(90, data.class_version)?;
+                self.writer.write_point3d(10, data.position)?;
+                self.writer.write_double(40, data.radius)?;
+                self.writer.write_string(1, &data.notes)?;
+                self.writer.write_double(40, data.landing_gap)?;
+                self.writer.write_bool(290, data.mtext_visible)?;
+                self.writer.write_byte(280, data.text_alignment)?;
+                self.writer.write_bool(290, data.enable_frame_text)?;
+                if let Some(mtext) = &data.embedded_mtext {
+                    self.writer.write_subclass("AcDbMTextObjectEmbedded")?;
+                    self.writer.write_point3d(10, mtext.insertion_point)?;
+                    self.writer.write_point3d(210, mtext.normal)?;
+                    self.writer.write_double(40, mtext.height)?;
+                    self.writer.write_double(41, mtext.rectangle_width)?;
+                    self.writer.write_string(1, &mtext.value)?;
+                    self.writer.write_string(7, &mtext.style)?;
+                }
+            }
+            ExtendedEntityData::CoordinationModel(data) => {
+                self.writer.write_subclass("AcDbNavisworksModel")?;
+                self.writer.write_i16(70, data.flags)?;
+                self.writer.write_handle(340, data.definition_handle)?;
+                for value in data.transform {
+                    self.writer.write_double(40, value)?;
+                }
+                self.writer.write_double(40, data.unit_factor)?;
+            }
+            ExtendedEntityData::PointCloud(data) => {
+                self.write_point_cloud_dxf(data)?;
+            }
+            ExtendedEntityData::PointCloudEx(data) => {
+                self.write_point_cloud_ex_dxf(data)?;
+            }
+            ExtendedEntityData::Proxy(data) => {
+                self.writer.write_subclass("AcDbProxyEntity")?;
+                self.writer.write_i32(90, data.proxy_id)?;
+                if self.dxf_version >= DxfVersion::AC1032 {
+                    self.writer.write_i32(71, data.dwg_version)?;
+                    self.writer
+                        .write_i32(97, data.maintenance_version)?;
+                } else {
+                    self.writer.write_i32(91, data.class_id)?;
+                    self.writer.write_i32(
+                        95,
+                        (data.maintenance_version << 16)
+                            | (data.dwg_version & 0xffff),
+                    )?;
+                }
+                self.writer.write_bool(70, data.from_dxf)?;
+                let graphics = data.graphics.data();
+                self.writer
+                    .write_i32(92, graphics.len() as i32)?;
+                for chunk in graphics.chunks(127) {
+                    self.writer.write_binary(310, chunk)?;
+                }
+                self.writer.write_i32(93, data.payload.bit_count as i32)?;
+                let payload = data.payload.data();
+                for chunk in payload.chunks(127) {
+                    self.writer.write_binary(310, chunk)?;
+                }
+                for object_id in &data.object_ids {
+                    let code = match object_id.kind {
+                        crate::objects::ProxyReferenceKind::Undefined
+                        | crate::objects::ProxyReferenceKind::SoftPointer => 350,
+                        crate::objects::ProxyReferenceKind::SoftOwnership => 330,
+                        crate::objects::ProxyReferenceKind::HardOwnership => 340,
+                        crate::objects::ProxyReferenceKind::HardPointer => 360,
+                    };
+                    self.writer.write_handle(code, object_id.handle)?;
+                }
+                if !data.object_ids.is_empty() {
+                    self.writer.write_i32(94, 0)?;
+                }
+            }
+            ExtendedEntityData::OleFrame(data) => {
+                self.writer.write_subclass("AcDbOleFrame")?;
+                self.writer.write_i16(70, data.flag)?;
+                self.writer.write_i16(71, data.mode)?;
+                let bytes = data.storage.encode();
+                self.writer.write_i32(90, bytes.len() as i32)?;
+                for chunk in bytes.chunks(127) {
+                    self.writer.write_binary(310, chunk)?;
+                }
+            }
+            ExtendedEntityData::LayoutPrintConfig(data) => {
+                self.writer.write_subclass("CAcLayoutPrintConfig")?;
+                self.writer.write_i16(93, data.flag)?;
+            }
+            ExtendedEntityData::Format(_) => {
+                self.writer.write_subclass("mcsDbObjectFormat")?;
+            }
+            ExtendedEntityData::Legacy(LegacyEntityData::Repeat) => {}
+            ExtendedEntityData::Legacy(LegacyEntityData::EndRepeat {
+                columns,
+                rows,
+                column_spacing,
+                row_spacing,
+            }) => {
+                self.writer.write_i16(70, *columns)?;
+                self.writer.write_i16(71, *rows)?;
+                self.writer.write_double(40, *column_spacing)?;
+                self.writer.write_double(41, *row_spacing)?;
+            }
+            ExtendedEntityData::Legacy(LegacyEntityData::Load {
+                filename,
+            }) => {
+                self.writer.write_string(1, filename)?;
+            }
+            ExtendedEntityData::Legacy(LegacyEntityData::Jump {
+                address,
+            }) => {
+                self.writer.write_i32(90, *address as i32)?;
+            }
+            ExtendedEntityData::DynamicBlock(data) => {
+                if let crate::objects::DynamicBlockData::AngularConstraintParameterEntity(
+                    value,
+                ) = data
+                {
+                    self.write_dynamic_constraint_dxf(&value.constraint)?;
+                    self.writer.write_subclass(
+                        "AcDbBlockAngularConstraintParameterEntity",
+                    )?;
+                    self.writer.write_point3d(1011, value.center_point)?;
+                    self.writer.write_point3d(1012, value.label_point)?;
+                    self.writer.write_string(305, &value.expression_name)?;
+                    self.writer
+                        .write_string(306, &value.expression_description)?;
+                    self.writer.write_double(140, value.angle)?;
+                    self.writer
+                        .write_bool(280, value.orientation_on_both_grips)?;
+                    self.write_dynamic_value_set_dxf(
+                        &value.value_set,
+                        96,
+                        128,
+                        175,
+                        307,
+                    )?;
+                } else if let Some(cpp_name) = data.entity_cpp_name() {
+                    self.writer.write_subclass(cpp_name)?;
+                }
+            }
+            ExtendedEntityData::RegisteredClass(data) => {
+                self.write_semantic_properties(&data.properties)?;
+                self.write_proxy_references_dxf(&data.object_ids)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn write_section_symbol_dxf(
+        &mut self,
+        entity: &SectionSymbol,
+        owner: Handle,
+    ) -> Result<()> {
+        self.writer.write_entity_type("SECTIONLINE")?;
+        self.write_common_entity_data(&entity.common, owner)?;
+        self.writer.write_subclass("AcDbViewSymbol")?;
+        self.writer.write_i16(70, entity.view_symbol_version)?;
+        self.writer.write_handle(340, entity.style_handle)?;
+        self.writer.write_double(40, entity.symbol_scale)?;
+        self.writer.write_handle(330, entity.view_rep_handle)?;
+        self.writer.write_i16(70, entity.raw_view_symbol_70)?;
+        self.writer.write_subclass("AcDbSectionSymbol")?;
+        self.writer.write_i16(70, entity.version)?;
+        self.writer.write_i32(90, entity.raw_point_count_90)?;
+        self.writer.write_i32(90, entity.raw_flags_90)?;
+        self.writer.write_i32(90, entity.raw_point_record_count)?;
+        for point in &entity.points {
+            self.writer.write_double(10, point.point.x)?;
+            self.writer.write_double(20, point.point.y)?;
+            self.writer.write_double(30, point.point.z)?;
+            self.writer.write_double(40, point.bulge)?;
+            self.writer.write_string(1, &point.label)?;
+            self.writer.write_double(11, point.label_offset.x)?;
+            self.writer.write_double(21, point.label_offset.y)?;
+            self.writer.write_double(31, point.label_offset.z)?;
+            self.writer.write_i16(280, point.raw_flag_280 as i16)?;
+        }
+        Ok(())
+    }
+
+    fn write_view_border_dxf(
+        &mut self,
+        entity: &ViewBorder,
+        owner: Handle,
+    ) -> Result<()> {
+        self.writer.write_entity_type("DRAWINGVIEW")?;
+        self.write_common_entity_data(&entity.common, owner)?;
+        self.writer.write_subclass("AcDbViewBorder")?;
+        self.writer.write_i16(70, entity.version)?;
+        self.writer.write_double(10, entity.min[0])?;
+        self.writer.write_double(20, entity.min[1])?;
+        self.writer.write_double(10, entity.max[0])?;
+        self.writer.write_double(20, entity.max[1])?;
+        self.writer
+            .write_handle(330, entity.active_viewport)?;
+        self.writer.write_double(40, entity.scale)?;
+        self.writer.write_double(40, entity.rotation_angle)?;
+        self.writer.write_double(40, entity.center[0])?;
+        self.writer.write_double(40, entity.center[1])?;
+        self.writer
+            .write_handle(340, entity.scale_handle)?;
+        Ok(())
+    }
+
+    fn write_semantic_properties(
+        &mut self,
+        properties: &[crate::objects::SemanticProperty],
+    ) -> Result<()> {
+        use crate::objects::SemanticPropertyValue as Value;
+        let mut subclass = "";
+        for property in properties {
+            if property.subclass != subclass {
+                subclass = &property.subclass;
+                if !subclass.is_empty() {
+                    self.writer.write_subclass(subclass)?;
+                }
+            }
+            match &property.value {
+                Value::Text(value) => {
+                    self.writer.write_string(property.code, value)?;
+                }
+                Value::Bool(value) => {
+                    self.writer.write_bool(property.code, *value)?;
+                }
+                Value::Byte(value) => {
+                    self.writer.write_byte(property.code, *value)?;
+                }
+                Value::Int16(value) => {
+                    self.writer.write_i16(property.code, *value)?;
+                }
+                Value::Int32(value) => {
+                    self.writer.write_i32(property.code, *value)?;
+                }
+                Value::Int64(value) => {
+                    self.writer.write_i64(property.code, *value)?;
+                }
+                Value::Double(value) => {
+                    self.writer.write_double(property.code, *value)?;
+                }
+                Value::Handle(value) => {
+                    self.writer.write_handle(property.code, *value)?;
+                }
+                Value::Binary(value) => {
+                    self.writer.write_binary(property.code, value)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn write_dynamic_eval_dxf(
+        &mut self,
+        value: &crate::objects::BlockEvalExpression,
+    ) -> Result<()> {
+        self.writer.write_subclass("AcDbEvalExpr")?;
+        self.writer.write_i32(90, value.node_id)?;
+        self.writer.write_i32(98, value.major)?;
+        self.writer.write_i32(99, value.minor)?;
+        self.writer.write_i16(70, value.value_code)?;
+        match &value.value {
+            BlockEvalValue::Real(item) => self.writer.write_double(40, *item)?,
+            BlockEvalValue::Point(item) => {
+                let code = if matches!(value.value_code, 10 | 11) {
+                    value.value_code as i32
+                } else {
+                    10
+                };
+                self.writer.write_double(code, item[0])?;
+                self.writer.write_double(code + 10, item[1])?;
+            }
+            BlockEvalValue::Text(item) => self.writer.write_string(1, item)?,
+            BlockEvalValue::Long(item) => self.writer.write_i32(90, *item)?,
+            BlockEvalValue::Handle(item) => self.writer.write_handle(91, *item)?,
+            BlockEvalValue::Short(item) => self.writer.write_i16(70, *item)?,
+            BlockEvalValue::None => {}
+        }
+        Ok(())
+    }
+
+    fn write_dynamic_element_dxf(
+        &mut self,
+        value: &crate::objects::BlockElement,
+    ) -> Result<()> {
+        self.write_dynamic_eval_dxf(&value.eval)?;
+        self.writer.write_subclass("AcDbBlockElement")?;
+        self.writer.write_string(300, &value.name)?;
+        self.writer.write_i32(98, value.major)?;
+        self.writer.write_i32(99, value.minor)?;
+        self.writer.write_i32(1071, value.eed_1071)?;
+        Ok(())
+    }
+
+    fn write_dynamic_parameter_dxf(
+        &mut self,
+        value: &crate::objects::BlockParameter,
+    ) -> Result<()> {
+        self.write_dynamic_element_dxf(&value.element)?;
+        self.writer.write_subclass("AcDbBlockParameter")?;
+        self.writer.write_bool(280, value.show_properties)?;
+        self.writer.write_bool(281, value.chain_actions)?;
+        Ok(())
+    }
+
+    fn write_dynamic_property_dxf(
+        &mut self,
+        value: &crate::objects::BlockParameterProperty,
+        count_code: i32,
+        value_code: i32,
+        name_code: i32,
+    ) -> Result<()> {
+        self.writer
+            .write_i32(count_code, value.connections.len() as i32)?;
+        for connection in &value.connections {
+            self.writer.write_i32(value_code, connection.code)?;
+            self.writer.write_string(name_code, &connection.name)?;
+        }
+        Ok(())
+    }
+
+    fn write_dynamic_two_point_dxf(
+        &mut self,
+        value: &crate::objects::BlockTwoPointParameter,
+    ) -> Result<()> {
+        self.write_dynamic_parameter_dxf(&value.parameter)?;
+        self.writer.write_subclass("AcDbBlock2PtParameter")?;
+        self.writer
+            .write_point3d(1010, value.definition_base_point)?;
+        self.writer
+            .write_point3d(1011, value.definition_end_point)?;
+        self.writer.write_i32(170, 4)?;
+        for state in value.property_states {
+            self.writer.write_i32(91, state)?;
+        }
+        for (index, property) in value.properties.iter().enumerate() {
+            self.write_dynamic_property_dxf(
+                property,
+                171 + index as i32,
+                92 + index as i32,
+                301 + index as i32,
+            )?;
+        }
+        self.writer
+            .write_i16(177, value.parameter_base_location)?;
+        Ok(())
+    }
+
+    fn write_dynamic_constraint_dxf(
+        &mut self,
+        value: &crate::objects::BlockConstraintParameter,
+    ) -> Result<()> {
+        self.write_dynamic_two_point_dxf(&value.parameter)?;
+        self.writer
+            .write_subclass("AcDbBlockConstraintParameter")?;
+        self.writer.write_handle(330, value.dependency)?;
+        Ok(())
+    }
+
+    fn write_dynamic_value_set_dxf(
+        &mut self,
+        value: &crate::objects::BlockParameterValueSet,
+        flags_code: i32,
+        double_code: i32,
+        count_code: i32,
+        description_code: i32,
+    ) -> Result<()> {
+        self.writer
+            .write_string(description_code, &value.description)?;
+        self.writer.write_i32(flags_code, value.flags)?;
+        self.writer.write_double(double_code, value.minimum)?;
+        self.writer.write_double(double_code + 1, value.maximum)?;
+        self.writer.write_double(double_code + 2, value.increment)?;
+        self.writer
+            .write_i16(count_code, value.values.len() as i16)?;
+        for item in &value.values {
+            self.writer.write_double(double_code + 3, *item)?;
+        }
+        Ok(())
+    }
+
+    fn write_dynamic_one_point_dxf(
+        &mut self,
+        value: &crate::objects::BlockOnePointParameter,
+    ) -> Result<()> {
+        self.write_dynamic_parameter_dxf(&value.parameter)?;
+        self.writer.write_subclass("AcDbBlock1PtParameter")?;
+        self.writer.write_point3d(1010, value.definition_point)?;
+        self.writer.write_i32(93, value.property_count)?;
+        for (index, property) in value.properties.iter().enumerate() {
+            self.write_dynamic_property_dxf(
+                property,
+                170 + index as i32,
+                91 + index as i32,
+                301 + index as i32,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn write_dynamic_grip_dxf(
+        &mut self,
+        value: &crate::objects::BlockGrip,
+    ) -> Result<()> {
+        self.write_dynamic_element_dxf(&value.element)?;
+        self.writer.write_subclass("AcDbBlockGrip")?;
+        self.writer.write_i32(91, value.flags_91)?;
+        self.writer.write_i32(92, value.flags_92)?;
+        self.writer.write_point3d(1010, value.location)?;
+        self.writer.write_bool(280, value.insert_cycling)?;
+        self.writer
+            .write_i32(93, value.insert_cycling_weight)?;
+        Ok(())
+    }
+
+    fn write_dynamic_action_dxf(
+        &mut self,
+        value: &crate::objects::BlockAction,
+    ) -> Result<()> {
+        self.write_dynamic_element_dxf(&value.element)?;
+        self.writer.write_subclass("AcDbBlockAction")?;
+        self.writer.write_i32(70, value.action_ids.len() as i32)?;
+        for id in &value.action_ids {
+            self.writer.write_i32(91, *id)?;
+        }
+        self.writer
+            .write_i32(71, value.dependencies.len() as i32)?;
+        for handle in &value.dependencies {
+            self.writer.write_handle(330, *handle)?;
+        }
+        self.writer.write_point3d(1010, value.display_location)?;
+        Ok(())
+    }
+
+    fn write_dynamic_connections_dxf(
+        &mut self,
+        values: &[crate::objects::BlockConnection],
+        code: i32,
+        name_code: i32,
+    ) -> Result<()> {
+        for (index, value) in values.iter().enumerate() {
+            self.writer.write_i32(code + index as i32, value.code)?;
+        }
+        for (index, value) in values.iter().enumerate() {
+            self.writer
+                .write_string(name_code + index as i32, &value.name)?;
+        }
+        Ok(())
+    }
+
+    fn write_dynamic_action_with_base_dxf(
+        &mut self,
+        value: &crate::objects::BlockActionWithBasePoint,
+    ) -> Result<()> {
+        self.write_dynamic_action_dxf(&value.action)?;
+        self.writer
+            .write_subclass("AcDbBlockActionWithBasePt")?;
+        self.write_dynamic_connections_dxf(&value.connections, 92, 301)?;
+        self.writer.write_point3d(1011, value.offset)?;
+        self.writer.write_bool(280, value.dependent)?;
+        self.writer.write_point3d(1012, value.base_point)?;
+        Ok(())
+    }
+
+    fn write_dynamic_linear_constraint_dxf(
+        &mut self,
+        value: &crate::objects::BlockLinearConstraintParameter,
+    ) -> Result<()> {
+        self.write_dynamic_constraint_dxf(&value.constraint)?;
+        self.writer
+            .write_subclass("AcDbBlockLinearConstraintParameter")?;
+        self.writer.write_string(305, &value.expression_name)?;
+        self.writer
+            .write_string(306, &value.expression_description)?;
+        self.writer.write_double(140, value.value)?;
+        self.write_dynamic_value_set_dxf(&value.value_set, 96, 128, 175, 307)?;
+        Ok(())
+    }
+
+    fn write_solid_history_base_dxf(
+        &mut self,
+        value: &crate::objects::SolidHistoryNodeBase,
+    ) -> Result<()> {
+        self.write_dynamic_eval_dxf(&value.eval)?;
+        self.writer.write_subclass("AcDbShHistoryNode")?;
+        self.writer.write_i32(90, value.major)?;
+        self.writer.write_i32(91, value.minor)?;
+        for item in value.transform {
+            self.writer.write_double(40, item)?;
+        }
+        self.writer.write_color(62, value.color)?;
+        if let Some(true_color) = value.color.to_true_color_value() {
+            self.writer.write_i32(420, true_color)?;
+        }
+        self.writer.write_i32(92, value.step_id)?;
+        self.writer.write_handle(347, value.material)?;
+        Ok(())
+    }
+
+    fn write_solid_history_sweep_dxf(
+        &mut self,
+        value: &crate::objects::SolidHistorySweep,
+        subclass: &str,
+    ) -> Result<()> {
+        self.write_solid_history_base_dxf(&value.base)?;
+        self.writer.write_subclass("AcDbShPrimitive")?;
+        self.writer.write_subclass("AcDbShSweepBase")?;
+        self.writer.write_i32(90, value.operation_major)?;
+        self.writer.write_i32(91, value.operation_minor)?;
+        self.writer.write_point3d(10, value.direction)?;
+        if let Some(entity) = &value.sweep_entity {
+            let encoded = crate::io::dwg::embedded_entity::encode_embedded_entity(
+                entity,
+                crate::io::dwg::DwgVersion::from_dxf_version(self.dxf_version)
+                    .unwrap_or(crate::io::dwg::DwgVersion::AC24),
+                self.dxf_version,
+            );
+            self.writer.write_i32(92, encoded.type_code)?;
+            self.writer.write_i32(90, encoded.bit_length as i32)?;
+            for chunk in encoded.bytes.chunks(127) {
+                self.writer.write_binary(310, chunk)?;
+            }
+        } else {
+            self.writer.write_i32(92, 0)?;
+        }
+        if let Some(entity) = &value.path_entity {
+            let encoded = crate::io::dwg::embedded_entity::encode_embedded_entity(
+                entity,
+                crate::io::dwg::DwgVersion::from_dxf_version(self.dxf_version)
+                    .unwrap_or(crate::io::dwg::DwgVersion::AC24),
+                self.dxf_version,
+            );
+            self.writer.write_i32(93, encoded.type_code)?;
+            self.writer.write_i32(90, encoded.bit_length as i32)?;
+            for chunk in encoded.bytes.chunks(127) {
+                self.writer.write_binary(310, chunk)?;
+            }
+        } else {
+            self.writer.write_i32(93, 0)?;
+        }
+        self.writer.write_double(42, value.draft_angle)?;
+        self.writer
+            .write_double(43, value.start_draft_distance)?;
+        self.writer.write_double(44, value.end_draft_distance)?;
+        self.writer.write_double(45, value.scale_factor)?;
+        self.writer.write_double(48, value.twist_angle)?;
+        self.writer.write_double(49, value.align_angle)?;
+        for item in value.sweep_entity_transform {
+            self.writer.write_double(46, item)?;
+        }
+        for item in value.path_entity_transform {
+            self.writer.write_double(47, item)?;
+        }
+        self.writer.write_byte(70, value.align_option)?;
+        self.writer.write_byte(71, value.miter_option)?;
+        self.writer.write_bool(290, value.has_align_start)?;
+        self.writer.write_bool(292, value.bank)?;
+        self.writer.write_bool(293, value.check_intersections)?;
+        self.writer.write_bool(294, value.flags_294_296[0])?;
+        self.writer.write_bool(295, value.flags_294_296[1])?;
+        self.writer.write_bool(296, value.flags_294_296[2])?;
+        self.writer.write_point3d(11, value.reference_point)?;
+        self.writer.write_subclass(subclass)?;
+        Ok(())
+    }
+
+    fn write_solid_history_operation_dxf(
+        &mut self,
+        value: &crate::objects::SolidHistoryOperation,
+    ) -> Result<()> {
+        use crate::objects::SolidHistoryOperation;
+
+        match value {
+            SolidHistoryOperation::Unknown => {}
+            SolidHistoryOperation::Box(value) => {
+                self.write_solid_history_base_dxf(&value.base)?;
+                self.writer.write_subclass("AcDbShPrimitive")?;
+                self.writer.write_subclass("AcDbShBox")?;
+                self.writer.write_i32(90, value.operation_major)?;
+                self.writer.write_i32(91, value.operation_minor)?;
+                self.writer.write_double(40, value.length)?;
+                self.writer.write_double(41, value.width)?;
+                self.writer.write_double(42, value.height)?;
+            }
+            SolidHistoryOperation::Wedge(value) => {
+                self.write_solid_history_base_dxf(&value.base)?;
+                self.writer.write_subclass("AcDbShPrimitive")?;
+                self.writer.write_subclass("AcDbShWedge")?;
+                self.writer.write_i32(90, value.operation_major)?;
+                self.writer.write_i32(91, value.operation_minor)?;
+                self.writer.write_double(40, value.length)?;
+                self.writer.write_double(41, value.width)?;
+                self.writer.write_double(42, value.height)?;
+            }
+            SolidHistoryOperation::Sphere(value) => {
+                self.write_solid_history_base_dxf(&value.base)?;
+                self.writer.write_subclass("AcDbShPrimitive")?;
+                self.writer.write_subclass("AcDbShSphere")?;
+                self.writer.write_i32(90, value.operation_major)?;
+                self.writer.write_i32(91, value.operation_minor)?;
+                self.writer.write_double(40, value.radius)?;
+            }
+            SolidHistoryOperation::Cylinder(value) => {
+                self.write_solid_history_base_dxf(&value.base)?;
+                self.writer.write_subclass("AcDbShPrimitive")?;
+                self.writer.write_subclass("AcDbShCylinder")?;
+                self.writer.write_i32(90, value.operation_major)?;
+                self.writer.write_i32(91, value.operation_minor)?;
+                self.writer.write_double(40, value.height)?;
+                self.writer.write_double(41, value.major_radius)?;
+                self.writer.write_double(42, value.minor_radius)?;
+                self.writer.write_double(43, value.x_radius)?;
+            }
+            SolidHistoryOperation::Cone(value) => {
+                self.write_solid_history_base_dxf(&value.base)?;
+                self.writer.write_subclass("AcDbShPrimitive")?;
+                self.writer.write_subclass("AcDbShCone")?;
+                self.writer.write_i32(90, value.operation_major)?;
+                self.writer.write_i32(91, value.operation_minor)?;
+                self.writer.write_double(40, value.height)?;
+                self.writer.write_double(41, value.major_radius)?;
+                self.writer.write_double(42, value.minor_radius)?;
+                self.writer.write_double(43, value.x_radius)?;
+            }
+            SolidHistoryOperation::Pyramid(value) => {
+                self.write_solid_history_base_dxf(&value.base)?;
+                self.writer.write_subclass("AcDbShPrimitive")?;
+                self.writer.write_subclass("AcDbShPyramid")?;
+                self.writer.write_i32(90, value.operation_major)?;
+                self.writer.write_i32(91, value.operation_minor)?;
+                self.writer.write_double(40, value.height)?;
+                self.writer.write_i32(92, value.sides)?;
+                self.writer.write_double(41, value.radius)?;
+                self.writer.write_double(42, value.top_radius)?;
+            }
+            SolidHistoryOperation::Torus(value) => {
+                self.write_solid_history_base_dxf(&value.base)?;
+                self.writer.write_subclass("AcDbShPrimitive")?;
+                self.writer.write_subclass("AcDbShTorus")?;
+                self.writer.write_i32(90, value.operation_major)?;
+                self.writer.write_i32(91, value.operation_minor)?;
+                self.writer.write_double(40, value.major_radius)?;
+                self.writer.write_double(41, value.minor_radius)?;
+            }
+            SolidHistoryOperation::Boolean(value) => {
+                self.write_solid_history_base_dxf(&value.base)?;
+                self.writer.write_subclass("AcDbShBoolean")?;
+                self.writer.write_i32(90, value.operation_major)?;
+                self.writer.write_i32(91, value.operation_minor)?;
+                self.writer.write_byte(280, value.operation)?;
+                self.writer.write_i32(92, value.first_operand)?;
+                self.writer.write_i32(93, value.second_operand)?;
+            }
+            SolidHistoryOperation::Brep(value) => {
+                self.write_solid_history_base_dxf(&value.base)?;
+                self.writer.write_subclass("AcDbShPrimitive")?;
+                self.writer.write_subclass("AcDbShBrep")?;
+                self.writer.write_i32(90, value.operation_major)?;
+                self.writer.write_i32(91, value.operation_minor)?;
+                self.writer.write_subclass("AcDbModelerGeometry")?;
+                self.writer.write_i16(70, 1)?;
+                self.write_acis_data(&value.acis_data)?;
+            }
+            SolidHistoryOperation::Fillet(value) => {
+                self.write_solid_history_base_dxf(&value.base)?;
+                self.writer.write_subclass("AcDbShFillet")?;
+                self.writer.write_i32(90, value.operation_major)?;
+                self.writer.write_i32(91, value.operation_minor)?;
+                self.writer.write_i32(92, value.method)?;
+                self.writer.write_i32(93, value.edges.len() as i32)?;
+                for item in &value.edges {
+                    self.writer.write_i32(94, *item)?;
+                }
+                self.writer.write_i32(95, value.radii.len() as i32)?;
+                for item in &value.radii {
+                    self.writer.write_double(41, *item)?;
+                }
+                self.writer
+                    .write_i32(96, value.start_setbacks.len() as i32)?;
+                self.writer
+                    .write_i32(97, value.end_setbacks.len() as i32)?;
+                for item in &value.end_setbacks {
+                    self.writer.write_double(43, *item)?;
+                }
+                for item in &value.start_setbacks {
+                    self.writer.write_double(42, *item)?;
+                }
+            }
+            SolidHistoryOperation::Chamfer(value) => {
+                self.write_solid_history_base_dxf(&value.base)?;
+                self.writer.write_subclass("AcDbShChamfer")?;
+                self.writer.write_i32(90, value.operation_major)?;
+                self.writer.write_i32(91, value.operation_minor)?;
+                self.writer.write_i32(92, value.method)?;
+                self.writer.write_double(41, value.base_distance)?;
+                self.writer.write_double(42, value.other_distance)?;
+                self.writer.write_i32(93, value.edges.len() as i32)?;
+                for item in &value.edges {
+                    self.writer.write_i32(94, *item)?;
+                }
+                self.writer.write_i32(95, value.base_face)?;
+            }
+            SolidHistoryOperation::Sweep(value) => {
+                self.write_solid_history_sweep_dxf(value, "AcDbShSweep")?;
+            }
+            SolidHistoryOperation::Extrusion(value) => {
+                self.write_solid_history_sweep_dxf(value, "AcDbShExtrusion")?;
+            }
+            SolidHistoryOperation::Loft(value) => {
+                self.write_solid_history_base_dxf(&value.base)?;
+                self.writer.write_subclass("AcDbShPrimitive")?;
+                self.writer.write_subclass("AcDbShLoft")?;
+                self.writer.write_i32(90, value.operation_major)?;
+                self.writer.write_i32(91, value.operation_minor)?;
+                self.writer
+                    .write_i32(92, value.cross_sections.len() as i32)?;
+                for entity in &value.cross_sections {
+                    let encoded =
+                        crate::io::dwg::embedded_entity::encode_embedded_entity(
+                            entity,
+                            crate::io::dwg::DwgVersion::from_dxf_version(
+                                self.dxf_version,
+                            )
+                            .unwrap_or(crate::io::dwg::DwgVersion::AC24),
+                            self.dxf_version,
+                        );
+                    self.writer.write_i32(93, encoded.type_code)?;
+                    self.writer.write_i32(94, encoded.bit_length as i32)?;
+                    for chunk in encoded.bytes.chunks(127) {
+                        self.writer.write_binary(310, chunk)?;
+                    }
+                }
+                self.writer.write_i32(95, value.guides.len() as i32)?;
+                for entity in &value.guides {
+                    let encoded =
+                        crate::io::dwg::embedded_entity::encode_embedded_entity(
+                            entity,
+                            crate::io::dwg::DwgVersion::from_dxf_version(
+                                self.dxf_version,
+                            )
+                            .unwrap_or(crate::io::dwg::DwgVersion::AC24),
+                            self.dxf_version,
+                        );
+                    self.writer.write_i32(96, encoded.type_code)?;
+                    self.writer.write_i32(97, encoded.bit_length as i32)?;
+                    for chunk in encoded.bytes.chunks(127) {
+                        self.writer.write_binary(310, chunk)?;
+                    }
+                }
+            }
+            SolidHistoryOperation::Revolve(value) => {
+                self.write_solid_history_base_dxf(&value.base)?;
+                self.writer.write_subclass("AcDbShPrimitive")?;
+                self.writer.write_subclass("AcDbShRevolve")?;
+                self.writer.write_i32(90, value.operation_major)?;
+                self.writer.write_i32(91, value.operation_minor)?;
+                self.writer.write_point3d(10, value.axis_point)?;
+                self.writer.write_double(11, value.direction.x)?;
+                self.writer.write_double(21, value.direction.y)?;
+                self.writer.write_double(31, 0.0)?;
+                self.writer.write_double(40, value.revolve_angle)?;
+                self.writer.write_double(41, value.start_angle)?;
+                self.writer.write_double(43, value.draft_angle)?;
+                self.writer.write_double(44, value.field_44)?;
+                self.writer.write_double(45, value.field_45)?;
+                self.writer.write_double(46, value.twist_angle)?;
+                self.writer.write_bool(290, value.flag_290)?;
+                self.writer.write_bool(291, value.close_to_axis)?;
+                if let Some(entity) = &value.sweep_entity {
+                    let encoded =
+                        crate::io::dwg::embedded_entity::encode_embedded_entity(
+                            entity,
+                            crate::io::dwg::DwgVersion::from_dxf_version(
+                                self.dxf_version,
+                            )
+                            .unwrap_or(crate::io::dwg::DwgVersion::AC24),
+                            self.dxf_version,
+                        );
+                    self.writer.write_i32(90, encoded.type_code)?;
+                    self.writer.write_i32(90, encoded.bit_length as i32)?;
+                    for chunk in encoded.bytes.chunks(127) {
+                        self.writer.write_binary(310, chunk)?;
+                    }
+                } else {
+                    self.writer.write_i32(90, 0)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn write_dynamic_block_object_dxf(
+        &mut self,
+        object: &DynamicBlockObject,
+    ) -> Result<()> {
+        if let DynamicBlockData::VisibilityParameter(value) = &object.data {
+            return self.write_block_visibility_parameter(value);
+        }
+        self.writer.write_string(0, &object.dxf_name)?;
+        self.writer.write_handle(5, object.handle)?;
+        if !object.reactors.is_empty() {
+            self.writer.write_string(102, "{ACAD_REACTORS")?;
+            for reactor in &object.reactors {
+                self.writer.write_handle(330, *reactor)?;
+            }
+            self.writer.write_string(102, "}")?;
+        }
+        if let Some(xdictionary) = object.xdictionary_handle {
+            self.writer.write_string(102, "{ACAD_XDICTIONARY")?;
+            self.writer.write_handle(360, xdictionary)?;
+            self.writer.write_string(102, "}")?;
+        }
+        self.writer.write_handle(330, object.owner)?;
+        match &object.data {
+            DynamicBlockData::Unknown => {}
+            DynamicBlockData::Representation(value) => {
+                self.writer.write_subclass(&object.cpp_class_name)?;
+                self.writer.write_i16(70, value.flags)?;
+                self.writer.write_handle(340, value.block)?;
+            }
+            DynamicBlockData::ProxyNode(value) => {
+                self.write_dynamic_eval_dxf(value)?;
+                self.writer
+                    .write_subclass("AcDbDynamicBlockProxyNode")?;
+            }
+            DynamicBlockData::GripLocationComponent(value) => {
+                self.write_dynamic_eval_dxf(&value.eval)?;
+                self.writer.write_subclass("AcDbBlockGripExpr")?;
+                self.writer.write_i32(91, value.grip_type)?;
+                self.writer.write_string(300, &value.expression)?;
+            }
+            DynamicBlockData::AlignmentGrip(value) => {
+                self.write_dynamic_grip_dxf(&value.grip)?;
+                self.writer.write_subclass("AcDbBlockAlignmentGrip")?;
+                self.writer.write_point3d(140, value.orientation)?;
+            }
+            DynamicBlockData::FlipGrip(value) => {
+                self.write_dynamic_grip_dxf(&value.grip)?;
+                self.writer.write_subclass("AcDbBlockFlipGrip")?;
+                self.writer.write_point3d(140, value.orientation)?;
+                self.writer.write_i32(93, value.combined_state)?;
+            }
+            DynamicBlockData::LinearGrip(value) => {
+                self.write_dynamic_grip_dxf(&value.grip)?;
+                self.writer.write_subclass("AcDbBlockLinearGrip")?;
+                self.writer.write_point3d(140, value.orientation)?;
+            }
+            DynamicBlockData::LookupGrip(value)
+            | DynamicBlockData::PolarGrip(value)
+            | DynamicBlockData::RotationGrip(value)
+            | DynamicBlockData::VisibilityGrip(value)
+            | DynamicBlockData::XYGrip(value)
+            | DynamicBlockData::PropertiesTableGrip(value) => {
+                self.write_dynamic_grip_dxf(value)?;
+                self.writer.write_subclass(&object.cpp_class_name)?;
+            }
+            DynamicBlockData::AlignmentParameter(value) => {
+                self.write_dynamic_two_point_dxf(&value.parameter)?;
+                self.writer
+                    .write_subclass("AcDbBlockAlignmentParameter")?;
+                self.writer.write_bool(280, value.align_perpendicular)?;
+            }
+            DynamicBlockData::BasePointParameter(value) => {
+                self.write_dynamic_one_point_dxf(&value.parameter)?;
+                self.writer
+                    .write_subclass("AcDbBlockBasepointParameter")?;
+                self.writer.write_point3d(1011, value.point)?;
+                self.writer.write_point3d(1012, value.base_point)?;
+            }
+            DynamicBlockData::FlipParameter(value) => {
+                self.write_dynamic_two_point_dxf(&value.parameter)?;
+                self.writer.write_subclass("AcDbBlockFlipParameter")?;
+                self.writer.write_string(305, &value.flip_label)?;
+                self.writer
+                    .write_string(306, &value.flip_label_description)?;
+                self.writer
+                    .write_string(307, &value.base_state_label)?;
+                self.writer
+                    .write_string(308, &value.flipped_state_label)?;
+                self.writer
+                    .write_point3d(1012, value.definition_label_point)?;
+                self.writer.write_i32(96, value.flags_96)?;
+                self.writer.write_string(309, &value.tooltip)?;
+            }
+            DynamicBlockData::LinearParameter(value) => {
+                self.write_dynamic_two_point_dxf(&value.parameter)?;
+                self.writer.write_subclass("AcDbBlockLinearParameter")?;
+                self.writer.write_string(305, &value.distance_name)?;
+                self.writer
+                    .write_string(306, &value.distance_description)?;
+                self.writer.write_double(140, value.distance)?;
+                self.write_dynamic_value_set_dxf(
+                    &value.value_set,
+                    96,
+                    141,
+                    175,
+                    307,
+                )?;
+            }
+            DynamicBlockData::LookupParameter(value) => {
+                self.write_dynamic_one_point_dxf(&value.parameter)?;
+                self.writer.write_subclass("AcDbBlockLookupParameter")?;
+                self.writer.write_i32(94, value.index)?;
+                self.writer.write_string(303, &value.lookup_name)?;
+                self.writer
+                    .write_string(304, &value.lookup_description)?;
+            }
+            DynamicBlockData::PointParameter(value) => {
+                self.write_dynamic_one_point_dxf(&value.parameter)?;
+                self.writer.write_subclass("AcDbBlockPointParameter")?;
+                self.writer.write_string(303, &value.position_name)?;
+                self.writer
+                    .write_string(304, &value.position_description)?;
+                self.writer
+                    .write_point3d(1011, value.definition_label_point)?;
+            }
+            DynamicBlockData::PolarParameter(value) => {
+                self.write_dynamic_two_point_dxf(&value.parameter)?;
+                self.writer.write_subclass("AcDbBlockPolarParameter")?;
+                self.writer.write_string(305, &value.angle_name)?;
+                self.writer
+                    .write_string(306, &value.angle_description)?;
+                self.writer.write_string(305, &value.distance_name)?;
+                self.writer
+                    .write_string(306, &value.distance_description)?;
+                self.writer.write_double(140, value.offset)?;
+                self.write_dynamic_value_set_dxf(
+                    &value.angle_value_set,
+                    96,
+                    142,
+                    175,
+                    410,
+                )?;
+                self.write_dynamic_value_set_dxf(
+                    &value.distance_value_set,
+                    97,
+                    146,
+                    176,
+                    309,
+                )?;
+            }
+            DynamicBlockData::RotationParameter(value) => {
+                self.write_dynamic_two_point_dxf(&value.parameter)?;
+                self.writer
+                    .write_subclass("AcDbBlockRotationParameter")?;
+                self.writer
+                    .write_point3d(1011, value.definition_base_angle_point)?;
+                self.writer.write_string(305, &value.angle_name)?;
+                self.writer
+                    .write_string(306, &value.angle_description)?;
+                self.writer.write_double(140, value.angle)?;
+                self.write_dynamic_value_set_dxf(
+                    &value.value_set,
+                    96,
+                    141,
+                    175,
+                    307,
+                )?;
+            }
+            DynamicBlockData::XYParameter(value) => {
+                self.write_dynamic_two_point_dxf(&value.parameter)?;
+                self.writer.write_subclass("AcDbBlockXYParameter")?;
+                self.writer.write_string(305, &value.x_label)?;
+                self.writer
+                    .write_string(306, &value.x_label_description)?;
+                self.writer.write_string(307, &value.y_label)?;
+                self.writer
+                    .write_string(308, &value.y_label_description)?;
+                self.writer.write_double(142, value.x_value)?;
+                self.writer.write_double(141, value.y_value)?;
+                self.write_dynamic_value_set_dxf(
+                    &value.y_value_set,
+                    97,
+                    146,
+                    176,
+                    309,
+                )?;
+                self.write_dynamic_value_set_dxf(
+                    &value.x_value_set,
+                    96,
+                    142,
+                    175,
+                    410,
+                )?;
+            }
+            DynamicBlockData::UserParameter(value) => {
+                self.write_dynamic_one_point_dxf(&value.parameter)?;
+                self.writer.write_subclass("AcDbBlockUserParameter")?;
+                self.writer.write_i16(90, value.flags)?;
+                self.writer
+                    .write_handle(330, value.associated_variable)?;
+                self.writer.write_string(301, &value.expression)?;
+                self.writer.write_i16(70, value.value_code)?;
+                match &value.value {
+                    BlockEvalValue::Real(item) => self.writer.write_double(40, *item)?,
+                    BlockEvalValue::Text(item) => self.writer.write_string(1, item)?,
+                    BlockEvalValue::Long(item) => self.writer.write_i32(90, *item)?,
+                    BlockEvalValue::Handle(item) => {
+                        self.writer.write_handle(91, *item)?
+                    }
+                    BlockEvalValue::Short(item) => self.writer.write_i16(70, *item)?,
+                    BlockEvalValue::Point(item) => {
+                        self.writer.write_double(10, item[0])?;
+                        self.writer.write_double(20, item[1])?;
+                    }
+                    BlockEvalValue::None => {}
+                }
+                self.writer.write_i16(170, value.value_type)?;
+            }
+            DynamicBlockData::VisibilityParameter(_) => unreachable!(),
+            DynamicBlockData::AngularConstraintParameter(value) => {
+                self.write_dynamic_constraint_dxf(&value.constraint)?;
+                self.writer
+                    .write_subclass("AcDbBlockAngularConstraintParameter")?;
+                self.writer.write_point3d(1011, value.center_point)?;
+                self.writer.write_point3d(1012, value.end_point)?;
+                self.writer.write_string(305, &value.expression_name)?;
+                self.writer
+                    .write_string(306, &value.expression_description)?;
+                self.writer.write_double(140, value.angle)?;
+                self.writer
+                    .write_bool(280, value.orientation_on_both_grips)?;
+                self.write_dynamic_value_set_dxf(
+                    &value.value_set,
+                    96,
+                    128,
+                    175,
+                    307,
+                )?;
+            }
+            DynamicBlockData::DiametricConstraintParameter(value)
+            | DynamicBlockData::RadialConstraintParameter(value) => {
+                self.write_dynamic_constraint_dxf(&value.constraint)?;
+                self.writer.write_subclass(&object.cpp_class_name)?;
+                self.writer.write_string(305, &value.expression_name)?;
+                self.writer
+                    .write_string(306, &value.expression_description)?;
+                self.writer.write_double(140, value.distance)?;
+                self.write_dynamic_value_set_dxf(
+                    &value.value_set,
+                    96,
+                    128,
+                    175,
+                    307,
+                )?;
+            }
+            DynamicBlockData::AlignedConstraintParameter(value)
+            | DynamicBlockData::LinearConstraintParameter(value)
+            | DynamicBlockData::HorizontalConstraintParameter(value)
+            | DynamicBlockData::VerticalConstraintParameter(value) => {
+                self.write_dynamic_linear_constraint_dxf(value)?;
+                if object.dxf_name != "BLOCKLINEARCONSTRAINTPARAMETER" {
+                    self.writer.write_subclass(&object.cpp_class_name)?;
+                }
+            }
+            DynamicBlockData::ParameterDependencyBody(value) => {
+                self.writer.write_subclass("AcDbAssocDependencyBody")?;
+                self.writer
+                    .write_i16(90, value.dependency_body_version)?;
+                self.writer
+                    .write_subclass("AcDbImpAssocDimDependencyBodyBase")?;
+                self.writer
+                    .write_i16(90, value.dimension_base_version)?;
+                self.writer.write_string(1, &value.name)?;
+                self.writer
+                    .write_subclass("AcDbBlockParameterDependencyBody")?;
+                self.writer.write_i16(90, value.class_version)?;
+            }
+            DynamicBlockData::MoveAction(value) => {
+                self.write_dynamic_action_dxf(&value.action)?;
+                self.writer.write_subclass("AcDbBlockMoveAction")?;
+                self.write_dynamic_connections_dxf(
+                    &value.connections,
+                    92,
+                    301,
+                )?;
+                self.writer.write_double(140, value.offsets.offset_x)?;
+                self.writer.write_double(141, value.offsets.offset_y)?;
+                self.writer.write_byte(280, 1)?;
+            }
+            DynamicBlockData::FlipAction(value) => {
+                self.write_dynamic_action_dxf(&value.action)?;
+                self.writer.write_subclass("AcDbBlockFlipAction")?;
+                self.write_dynamic_connections_dxf(
+                    &value.connections,
+                    92,
+                    301,
+                )?;
+            }
+            DynamicBlockData::RotateAction(value)
+            | DynamicBlockData::ScaleAction(value) => {
+                self.write_dynamic_action_with_base_dxf(&value.action)?;
+                self.writer.write_subclass(&object.cpp_class_name)?;
+                self.write_dynamic_connections_dxf(
+                    &value.connections,
+                    94,
+                    303,
+                )?;
+            }
+            DynamicBlockData::ArrayAction(value) => {
+                self.write_dynamic_action_dxf(&value.action)?;
+                self.writer.write_subclass("AcDbBlockArrayAction")?;
+                self.write_dynamic_connections_dxf(
+                    &value.connections,
+                    92,
+                    301,
+                )?;
+                self.writer.write_double(140, value.column_offset)?;
+                self.writer.write_double(141, value.row_offset)?;
+            }
+            DynamicBlockData::LookupAction(value) => {
+                self.write_dynamic_action_dxf(&value.action)?;
+                self.writer.write_subclass("AcDbBlockLookupAction")?;
+                self.writer.write_i32(92, value.row_count)?;
+                self.writer.write_i32(93, value.column_count)?;
+                for expression in &value.expressions {
+                    self.writer.write_string(302, expression)?;
+                }
+                self.writer.write_string(301, "")?;
+                for row in &value.rows {
+                    self.write_dynamic_connections_dxf(
+                        &row.connections,
+                        94,
+                        303,
+                    )?;
+                    self.writer.write_bool(282, row.flag_282)?;
+                    self.writer.write_bool(281, row.flag_281)?;
+                }
+                self.writer.write_bool(280, value.flag_280)?;
+            }
+            DynamicBlockData::StretchAction(value) => {
+                self.write_dynamic_action_dxf(&value.action)?;
+                self.writer.write_subclass("AcDbBlockStretchAction")?;
+                self.write_dynamic_connections_dxf(
+                    &value.connections,
+                    92,
+                    301,
+                )?;
+                self.writer.write_i32(72, value.points.len() as i32)?;
+                for point in &value.points {
+                    self.writer.write_point2d(1011, *point)?;
+                }
+                self.writer.write_i32(73, value.handles.len() as i32)?;
+                for item in &value.handles {
+                    self.writer.write_handle(331, item.handle)?;
+                    self.writer.write_i16(74, item.indexes.len() as i16)?;
+                    for index in &item.indexes {
+                        self.writer.write_i32(94, *index)?;
+                    }
+                }
+                self.writer.write_i32(75, value.codes.len() as i32)?;
+                for item in &value.codes {
+                    self.writer.write_i32(95, item.code)?;
+                    self.writer.write_i16(76, item.indexes.len() as i16)?;
+                    for index in &item.indexes {
+                        self.writer.write_i32(94, *index)?;
+                    }
+                }
+                self.writer.write_double(140, value.offsets.offset_x)?;
+                self.writer.write_double(141, value.offsets.offset_y)?;
+            }
+            DynamicBlockData::PolarStretchAction(value) => {
+                self.write_dynamic_action_dxf(&value.action)?;
+                self.writer
+                    .write_subclass("AcDbBlockPolarStretchAction")?;
+                self.write_dynamic_connections_dxf(
+                    &value.connections,
+                    92,
+                    301,
+                )?;
+                self.writer.write_i32(72, value.points.len() as i32)?;
+                for point in &value.points {
+                    self.writer.write_point2d(10, *point)?;
+                }
+                self.writer.write_i32(73, value.handles.len() as i32)?;
+                for handle in &value.handles {
+                    self.writer.write_handle(331, *handle)?;
+                }
+                for flag in &value.handle_flags {
+                    self.writer.write_i16(74, *flag)?;
+                }
+                self.writer.write_i32(75, value.codes.len() as i32)?;
+                for code in &value.codes {
+                    self.writer.write_i32(76, *code)?;
+                }
+            }
+            DynamicBlockData::PropertiesTable => {
+                self.writer.write_subclass("AcDbBlockPropertiesTable")?;
+            }
+            DynamicBlockData::EvaluationGraph(value) => {
+                self.writer.write_subclass("AcDbEvalGraph")?;
+                self.writer.write_i32(96, value.first_node_id)?;
+                self.writer.write_i32(97, value.first_node_id_copy)?;
+                for node in &value.nodes {
+                    self.writer.write_i32(91, node.id)?;
+                    self.writer.write_i32(93, node.edge_flags)?;
+                    self.writer.write_i32(95, node.next_id)?;
+                    self.writer.write_handle(360, node.expression)?;
+                    for item in node.node_data {
+                        self.writer.write_i32(92, item)?;
+                    }
+                    if let Some(active) = node.active_cycles {
+                        self.writer.write_bool(290, active)?;
+                    }
+                }
+                for edge in &value.edges {
+                    self.writer.write_i32(92, edge.id)?;
+                    self.writer.write_i32(93, edge.next_id)?;
+                    self.writer.write_i32(94, edge.incoming_edge)?;
+                    self.writer.write_i32(91, edge.source_node)?;
+                    self.writer.write_i32(91, edge.destination_node)?;
+                    for item in edge.outgoing_edges {
+                        self.writer.write_i32(92, item)?;
+                    }
+                }
+            }
+            DynamicBlockData::AlignmentParameterEntity
+            | DynamicBlockData::BasePointParameterEntity
+            | DynamicBlockData::FlipParameterEntity
+            | DynamicBlockData::LinearParameterEntity
+            | DynamicBlockData::PointParameterEntity
+            | DynamicBlockData::RotationParameterEntity
+            | DynamicBlockData::VisibilityParameterEntity
+            | DynamicBlockData::XYParameterEntity
+            | DynamicBlockData::FlipGripEntity
+            | DynamicBlockData::LinearGripEntity
+            | DynamicBlockData::PolarGripEntity
+            | DynamicBlockData::RotationGripEntity
+            | DynamicBlockData::VisibilityGripEntity
+            | DynamicBlockData::XYGripEntity
+            | DynamicBlockData::AngularConstraintParameterEntity(_) => {}
+            DynamicBlockData::SolidHistory(value) => {
+                self.writer.write_subclass("AcDbShHistory")?;
+                self.writer.write_i32(90, value.major)?;
+                self.writer.write_i32(91, value.minor)?;
+                self.writer.write_handle(360, value.owner)?;
+                self.writer.write_i32(92, value.history_node_id)?;
+                self.writer.write_bool(280, value.show_history)?;
+                self.writer.write_bool(281, value.record_history)?;
+            }
+            DynamicBlockData::SolidHistoryNode(value) => {
+                self.write_solid_history_operation_dxf(value)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn write_point_cloud_dxf(&mut self, data: &PointCloudData) -> Result<()> {
+        self.writer.write_subclass("AcDbPointCloud")?;
+        self.writer.write_i16(70, data.class_version)?;
+        self.writer.write_point3d(10, data.origin)?;
+        self.writer.write_string(1, &data.saved_filename)?;
+        self.writer
+            .write_i32(90, data.source_files.len() as i32)?;
+        if data.source_files.is_empty() {
+            self.writer.write_point3d(11, data.extents_min)?;
+            self.writer.write_point3d(12, data.extents_max)?;
+            self.writer.write_i64(92, data.point_count)?;
+            self.writer.write_string(3, &data.ucs_name)?;
+            self.writer.write_point3d(13, data.ucs_origin)?;
+            self.writer.write_point3d(210, data.ucs_x_direction)?;
+            self.writer.write_point3d(211, data.ucs_y_direction)?;
+            self.writer.write_point3d(212, data.ucs_z_direction)?;
+            self.writer.write_handle(330, data.definition_handle)?;
+            self.writer.write_handle(360, data.reactor_handle)?;
+            self.writer.write_bool(290, data.show_intensity)?;
+            self.writer.write_i16(71, data.intensity_scheme)?;
+            self.writer.write_double(40, data.minimum_intensity)?;
+            self.writer.write_double(41, data.maximum_intensity)?;
+            self.writer
+                .write_double(42, data.low_intensity_threshold)?;
+            self.writer
+                .write_double(43, data.high_intensity_threshold)?;
+        }
+        for source_file in &data.source_files {
+            self.writer.write_string(2, source_file)?;
+        }
+        Ok(())
+    }
+
+    fn write_point_cloud_ex_dxf(&mut self, data: &PointCloudExData) -> Result<()> {
+        self.writer.write_subclass("AcDbPointCloud")?;
+        self.writer.write_i16(70, data.class_version)?;
+        self.writer.write_point3d(10, data.extents_min)?;
+        self.writer.write_point3d(11, data.extents_max)?;
+        self.writer.write_point3d(12, data.ucs_origin)?;
+        self.writer.write_point3d(210, data.ucs_x_direction)?;
+        self.writer.write_point3d(211, data.ucs_y_direction)?;
+        self.writer.write_point3d(212, data.ucs_z_direction)?;
+        self.writer.write_bool(290, data.locked)?;
+        self.writer.write_handle(330, data.definition_handle)?;
+        self.writer.write_handle(360, data.reactor_handle)?;
+        self.writer.write_string(1, &data.name)?;
+        self.writer.write_bool(291, data.show_intensity)?;
+        self.writer.write_i16(71, data.stylization_type)?;
+        self.writer
+            .write_string(1, &data.intensity_color_scheme)?;
+        self.writer
+            .write_string(1, &data.current_color_scheme)?;
+        self.writer
+            .write_string(1, &data.classification_color_scheme)?;
+        self.writer.write_double(40, data.elevation_min)?;
+        self.writer.write_double(41, data.elevation_max)?;
+        self.writer.write_i32(90, data.intensity_min)?;
+        self.writer.write_i32(91, data.intensity_max)?;
+        self.writer
+            .write_i16(71, data.intensity_out_of_range_behavior)?;
+        self.writer
+            .write_i16(72, data.elevation_out_of_range_behavior)?;
+        self.writer
+            .write_bool(292, data.elevation_apply_to_fixed_range)?;
+        self.writer
+            .write_bool(293, data.intensity_as_gradient)?;
+        self.writer
+            .write_bool(294, data.elevation_as_gradient)?;
+        self.writer.write_bool(295, data.show_cropping)?;
+        self.writer
+            .write_i32(92, data.croppings.len() as i32)?;
+        for crop in &data.croppings {
+            self.writer.write_i16(280, crop.crop_type)?;
+            self.writer.write_bool(290, crop.inside)?;
+            self.writer.write_bool(290, crop.inverted)?;
+            self.writer.write_point3d(13, crop.plane)?;
+            self.writer.write_point3d(213, crop.x_direction)?;
+            self.writer.write_point3d(213, crop.y_direction)?;
+            self.writer.write_i32(93, crop.points.len() as i32)?;
+            for point in &crop.points {
+                self.writer.write_point3d(13, *point)?;
+            }
+        }
+        Ok(())
     }
 
     /// Return `owner` if it will be present in the output, else fall back to the
@@ -1285,6 +2895,22 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // Transparency (code 440) — only for AC1018+ and non-opaque
         if self.dxf_version >= DxfVersion::AC1018 && !common.transparency.is_opaque() {
             self.writer.write_i32(440, common.transparency.to_dxf_value())?;
+        }
+
+        if self.dxf_version >= DxfVersion::AC1024 {
+            for handle in [
+                common.full_visual_style_handle,
+                common.face_visual_style_handle,
+                common.edge_visual_style_handle,
+            ]
+            .into_iter()
+            .flatten()
+            .filter(|handle| {
+                !handle.is_null()
+                    && (self.valid_handles.is_empty() || self.valid_handles.contains(handle))
+            }) {
+                self.writer.write_handle(348, handle)?;
+            }
         }
 
         Ok(())
@@ -1450,7 +3076,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
         Ok(())
     }
-    
+
     /// Write POLYLINE entity (2D polyline)
     fn write_polyline2d(&mut self, polyline: &Polyline2D, owner: Handle) -> Result<()> {
         self.writer.write_entity_type("POLYLINE")?;
@@ -1552,6 +3178,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             self.writer.write_double(40, vertex.start_width)?;
             self.writer.write_double(41, vertex.end_width)?;
             self.writer.write_double(42, vertex.bulge)?;
+            if vertex.vertex_id != 0 {
+                self.writer.write_i32(91, vertex.vertex_id)?;
+            }
         }
 
         self.write_normal(lwpoly.normal)?;
@@ -1775,6 +3404,8 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             Dimension::Angular2Ln(dim) => self.write_dimension_angular_2line(dim, owner),
             Dimension::Angular3Pt(dim) => self.write_dimension_angular_3point(dim, owner),
             Dimension::Ordinate(dim) => self.write_dimension_ordinate(dim, owner),
+            Dimension::Arc(dim) => self.write_dimension_arc(dim, owner),
+            Dimension::LargeRadial(dim) => self.write_dimension_large_radial(dim, owner),
         }
     }
 
@@ -1937,8 +3568,42 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         Ok(())
     }
 
+    fn write_dimension_arc(&mut self, dim: &DimensionArc, owner: Handle) -> Result<()> {
+        self.writer.write_entity_type("ARC_DIMENSION")?;
+        self.write_dimension_base(&dim.base, 8, owner)?;
+        self.writer.write_subclass("AcDbArcDimension")?;
+        self.writer.write_point3d(13, dim.first_extension_point)?;
+        self.writer.write_point3d(14, dim.second_extension_point)?;
+        self.writer.write_point3d(15, dim.center_point)?;
+        self.writer.write_bool(70, dim.is_partial)?;
+        self.writer.write_double(40, dim.arc_start_parameter)?;
+        self.writer.write_double(41, dim.arc_end_parameter)?;
+        self.writer.write_bool(71, dim.has_leader)?;
+        self.writer.write_point3d(16, dim.first_leader_point)?;
+        self.writer.write_point3d(17, dim.second_leader_point)?;
+        Ok(())
+    }
+
+    fn write_dimension_large_radial(
+        &mut self,
+        dim: &DimensionLargeRadial,
+        owner: Handle,
+    ) -> Result<()> {
+        self.writer.write_entity_type("LARGE_RADIAL_DIMENSION")?;
+        self.write_dimension_base(&dim.base, 4, owner)?;
+        self.writer.write_subclass("AcDbRadialDimensionLarge")?;
+        self.writer.write_point3d(13, dim.jog_point)?;
+        self.writer.write_point3d(14, dim.override_center)?;
+        self.writer.write_point3d(15, dim.chord_point)?;
+        self.writer.write_double(40, dim.jog_angle)?;
+        Ok(())
+    }
+
     /// Write HATCH entity
     fn write_hatch(&mut self, hatch: &Hatch, owner: Handle) -> Result<()> {
+        if hatch.is_mpolygon {
+            return self.write_mpolygon_dxf(hatch, owner);
+        }
         self.writer.write_entity_type("HATCH")?;
         self.write_common_entity_data(&hatch.common, owner)?;
         self.writer.write_subclass("AcDbHatch")?;
@@ -2011,8 +3676,95 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             self.writer.write_double(20, seed.y)?;
         }
 
+        self.write_hatch_gradient(hatch)?;
+
         // XDATA (e.g. HATCHBACKGROUNDCOLOR) is emitted by write_entity_with_owner
         // after this returns — HATCH has no child records to precede.
+        Ok(())
+    }
+
+    fn write_mpolygon_dxf(&mut self, hatch: &Hatch, owner: Handle) -> Result<()> {
+        self.writer.write_entity_type("MPOLYGON")?;
+        self.write_common_entity_data(&hatch.common, owner)?;
+        self.writer.write_subclass("AcDbMPolygon")?;
+        self.writer.write_i16(75, hatch.style as i16)?;
+        self.writer.write_double(10, 0.0)?;
+        self.writer.write_double(20, 0.0)?;
+        self.writer.write_double(30, hatch.elevation)?;
+        self.writer.write_point3d(210, hatch.normal)?;
+        self.writer.write_string(2, &hatch.pattern.name)?;
+        self.writer
+            .write_i16(70, if hatch.is_solid { 1 } else { 0 })?;
+        let effective_associative = hatch.is_associative
+            && hatch.paths.iter().any(|path| {
+                path.boundary_handles
+                    .iter()
+                    .any(|handle| *handle != Handle::NULL)
+            });
+        self.writer
+            .write_i16(71, if effective_associative { 1 } else { 0 })?;
+        self.writer.write_i32(91, hatch.paths.len() as i32)?;
+        for path in &hatch.paths {
+            self.write_hatch_boundary_path(path)?;
+        }
+        self.writer.write_i16(75, hatch.style as i16)?;
+        self.writer.write_i16(76, hatch.pattern_type as i16)?;
+        if !hatch.is_solid {
+            self.writer
+                .write_double(52, hatch.pattern_angle.to_degrees())?;
+            self.writer.write_double(41, hatch.pattern_scale)?;
+            self.writer
+                .write_i16(77, if hatch.is_double { 1 } else { 0 })?;
+            self.writer
+                .write_i16(78, hatch.pattern.lines.len() as i16)?;
+            for line in &hatch.pattern.lines {
+                self.writer.write_double(53, line.angle.to_degrees())?;
+                self.writer.write_double(43, line.base_point.x)?;
+                self.writer.write_double(44, line.base_point.y)?;
+                self.writer.write_double(45, line.offset.x)?;
+                self.writer.write_double(46, line.offset.y)?;
+                self.writer
+                    .write_i16(79, line.dash_lengths.len() as i16)?;
+                for dash in &line.dash_lengths {
+                    self.writer.write_double(49, *dash)?;
+                }
+            }
+        }
+        self.writer
+            .write_color(62, hatch.mpolygon_hatch_color)?;
+        self.writer
+            .write_double(11, hatch.mpolygon_x_direction.x)?;
+        self.writer
+            .write_double(21, hatch.mpolygon_x_direction.y)?;
+        self.writer
+            .write_i32(99, hatch.mpolygon_boundary_handle_count)?;
+        self.write_hatch_gradient(hatch)?;
+        Ok(())
+    }
+
+    fn write_hatch_gradient(&mut self, hatch: &Hatch) -> Result<()> {
+        if !hatch.gradient_color.enabled {
+            return Ok(());
+        }
+        let gradient = &hatch.gradient_color;
+        self.writer.write_i32(450, 1)?;
+        self.writer.write_i32(451, gradient.reserved)?;
+        self.writer.write_double(460, gradient.angle)?;
+        self.writer.write_double(461, gradient.shift)?;
+        self.writer
+            .write_i32(452, if gradient.is_single_color { 1 } else { 0 })?;
+        self.writer.write_double(462, gradient.color_tint)?;
+        self.writer
+            .write_i32(453, gradient.colors.len() as i32)?;
+        for entry in &gradient.colors {
+            self.writer.write_double(463, entry.value)?;
+            self.writer.write_color(63, entry.color)?;
+            if let Color::Rgb { r, g, b } = entry.color {
+                let rgb = ((r as i32) << 16) | ((g as i32) << 8) | b as i32;
+                self.writer.write_i32(421, rgb)?;
+            }
+        }
+        self.writer.write_string(470, &gradient.name)?;
         Ok(())
     }
 
@@ -2131,7 +3883,8 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
     /// Write SOLID entity
     fn write_solid(&mut self, solid: &Solid, owner: Handle) -> Result<()> {
-        self.writer.write_entity_type("SOLID")?;
+        self.writer
+            .write_entity_type(if solid.is_trace { "TRACE" } else { "SOLID" })?;
         self.write_common_entity_data(&solid.common, owner)?;
         self.writer.write_subclass("AcDbTrace")?;
         self.writer.write_point3d(10, solid.first_corner)?;
@@ -2163,7 +3916,12 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
     /// Write INSERT entity
     fn write_insert(&mut self, insert: &Insert, owner: Handle) -> Result<()> {
-        self.writer.write_entity_type("INSERT")?;
+        let is_view_rep = insert.view_rep_handle.is_some();
+        self.writer.write_entity_type(if is_view_rep {
+            "ACDBVIEWREPBLOCKREFERENCE"
+        } else {
+            "INSERT"
+        })?;
         self.write_common_entity_data(&insert.common, owner)?;
         self.writer.write_subclass(insert.subclass_marker())?;
         // Has-attributes flag (group code 66)
@@ -2197,6 +3955,11 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             self.writer.write_double(45, insert.row_spacing)?;
         }
         self.write_normal(insert.normal)?;
+        if let Some(view_rep_handle) = insert.view_rep_handle {
+            self.writer
+                .write_subclass("AcDbViewRepBlockReference")?;
+            self.writer.write_handle(330, view_rep_handle)?;
+        }
 
         // XDATA precedes the child ATTRIB/SEQEND records.
         self.write_xdata(&insert.common.extended_data)?;
@@ -2272,12 +4035,12 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
         // Entities follow flag (VERTEX records follow)
         self.writer.write_i16(66, 1)?;
-        
+
         // Dummy point with elevation (ACadSharp pattern)
         self.writer.write_double(10, 0.0)?;
         self.writer.write_double(20, 0.0)?;
         self.writer.write_double(30, polyline.elevation)?;
-        
+
         // Polyline flags (bit 8 = 3D polyline)
         self.writer.write_i16(70, polyline.flags.to_bits() as i16)?;
 
@@ -2306,7 +4069,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             self.writer.write_point3d(10, vertex.position)?;
             self.writer.write_i16(70, vertex.flags as i16)?;
         }
-        
+
         // SEQEND
         self.writer.write_entity_type("SEQEND")?;
         let seqend_handle = self.allocate_handle();
@@ -2314,7 +4077,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_handle(330, polyline_handle)?;
         self.writer.write_subclass("AcDbEntity")?;
         self.writer.write_string(8, &polyline.common.layer)?;
-        
+
         Ok(())
     }
 
@@ -2323,17 +4086,17 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_entity_type("VIEWPORT")?;
         self.write_common_entity_data(&viewport.common, owner)?;
         self.writer.write_subclass("AcDbViewport")?;
-        
+
         // Center point
         self.writer.write_point3d(10, viewport.center)?;
-        
+
         // Width and height
         self.writer.write_double(40, viewport.width)?;
         self.writer.write_double(41, viewport.height)?;
-        
+
         // Viewport ID
         self.writer.write_i16(68, viewport.id)?;
-        
+
         // Status
         self.writer.write_i32(90, viewport.status.to_bits())?;
         
@@ -2566,33 +4329,169 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         
         // Hookline flag
         self.writer.write_i16(75, if leader.hookline_enabled { 1 } else { 0 })?;
-        
+
         // Text height
         self.writer.write_double(40, leader.text_height)?;
-        
+
         // Text width
         self.writer.write_double(41, leader.text_width)?;
-        
+
         // Number of vertices
         self.writer.write_i16(76, leader.vertices.len() as i16)?;
-        
+
         // Vertices
         for vertex in &leader.vertices {
             self.writer.write_point3d(10, *vertex)?;
         }
-        
+
         // Normal
         self.writer.write_point3d(210, leader.normal)?;
-        
+
         // Horizontal direction
         self.writer.write_point3d(211, leader.horizontal_direction)?;
-        
+
         // Block offset
         self.writer.write_point3d(212, leader.block_offset)?;
-        
+
         // Annotation offset
         self.writer.write_point3d(213, leader.annotation_offset)?;
-        
+
+        Ok(())
+    }
+
+    fn write_field_cell_value_dxf(&mut self, value: &CellValue) -> Result<()> {
+        if self.dxf_version >= DxfVersion::AC1021 {
+            self.writer.write_i32(93, value.flags)?;
+        }
+        let type_code = if self.dxf_version >= DxfVersion::AC1021 {
+            value.type_code()
+        } else {
+            value.type_code() & !0x200
+        };
+        self.writer.write_i32(90, type_code)?;
+        if self.dxf_version < DxfVersion::AC1021 || (value.flags & 3) == 0 {
+            match type_code {
+                0 | 1 => {
+                    self.writer.write_i32(91, value.numeric_value as i32)?;
+                }
+                2 => {
+                    self.writer.write_double(140, value.numeric_value)?;
+                }
+                4 | 0x200 => {
+                    self.writer.write_string(1, &value.text)?;
+                }
+                8 => {
+                    let size = if value.data_size > 0
+                        && value.data_size as usize == value.binary_value.len()
+                    {
+                        value.data_size
+                    } else {
+                        value.binary_value.len() as i32
+                    };
+                    self.writer.write_i32(92, size)?;
+                    for chunk in value.binary_value.chunks(127) {
+                        self.writer.write_binary(310, chunk)?;
+                    }
+                }
+                0x10 => {
+                    self.writer.write_i32(
+                        92,
+                        if value.data_size != 0 { value.data_size } else { 16 },
+                    )?;
+                    self.writer.write_point2d(
+                        11,
+                        crate::types::Vector2::new(
+                            value.point_value.x,
+                            value.point_value.y,
+                        ),
+                    )?;
+                }
+                0x20 => {
+                    self.writer.write_i32(
+                        92,
+                        if value.data_size != 0 { value.data_size } else { 24 },
+                    )?;
+                    self.writer.write_point3d(11, value.point_value)?;
+                }
+                0x40 => {
+                    self.writer.write_handle(
+                        330,
+                        value.handle_value.unwrap_or(Handle::NULL),
+                    )?;
+                }
+                0x80 | 0x100 => {}
+                _ => {}
+            }
+        }
+        if self.dxf_version >= DxfVersion::AC1021 {
+            let unit_code = value.unit_type_code();
+            self.writer.write_i32(94, unit_code)?;
+            self.writer.write_string(300, &value.format)?;
+            if unit_code != 12 {
+                self.writer
+                    .write_string(302, &value.formatted_value)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn write_field_object_dxf(
+        &mut self,
+        value: &crate::objects::Field,
+    ) -> Result<()> {
+        self.writer.write_string(0, "FIELD")?;
+        self.writer.write_handle(5, value.handle)?;
+        self.writer.write_handle(330, value.owner)?;
+        self.writer.write_subclass("AcDbField")?;
+        self.writer.write_string(1, &value.evaluator_id)?;
+        self.writer.write_string(2, &value.code)?;
+        if self.dxf_version < DxfVersion::AC1021 {
+            self.writer.write_string(4, &value.format)?;
+        }
+        self.writer
+            .write_i32(90, value.child_fields.len() as i32)?;
+        for handle in &value.child_fields {
+            self.writer.write_handle(360, *handle)?;
+        }
+        self.writer
+            .write_i32(97, value.referenced_objects.len() as i32)?;
+        for handle in &value.referenced_objects {
+            self.writer.write_handle(331, *handle)?;
+        }
+        self.writer.write_i32(91, value.evaluation_option)?;
+        self.writer.write_i32(92, value.filing_option)?;
+        self.writer.write_i32(94, value.state)?;
+        self.writer.write_i32(95, value.evaluation_status)?;
+        self.writer
+            .write_i32(96, value.evaluation_error_code)?;
+        self.writer
+            .write_string(300, &value.evaluation_error_message)?;
+        self.write_field_cell_value_dxf(&value.value)?;
+        self.writer
+            .write_i32(93, value.child_values.len() as i32)?;
+        for item in &value.child_values {
+            self.writer.write_string(6, &item.key)?;
+            self.write_field_cell_value_dxf(&item.value)?;
+        }
+        self.writer.write_string(301, &value.value_string)?;
+        self.writer.write_i32(98, value.value_string_length)?;
+        Ok(())
+    }
+
+    fn write_field_list_dxf(
+        &mut self,
+        value: &crate::objects::FieldList,
+    ) -> Result<()> {
+        self.writer.write_string(0, "FIELDLIST")?;
+        self.writer.write_handle(5, value.handle)?;
+        self.writer.write_handle(330, value.owner)?;
+        self.writer.write_subclass("AcDbIdSet")?;
+        self.writer.write_i32(90, value.fields.len() as i32)?;
+        self.writer.write_bool(290, value.unknown)?;
+        for handle in &value.fields {
+            self.writer.write_handle(330, *handle)?;
+        }
+        self.writer.write_subclass("AcDbFieldList")?;
         Ok(())
     }
 
@@ -2624,7 +4523,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             match object {
                 ObjectType::Dictionary(dict) => self.write_dictionary(dict, &document.objects)?,
                 ObjectType::Layout(layout) => self.write_layout(layout)?,
-                ObjectType::XRecord(xrecord) => self.write_xrecord(xrecord)?,
+                ObjectType::XRecord(xrecord) => {
+                    self.write_xrecord(xrecord, document)?
+                }
                 ObjectType::Group(group) => self.write_group(group)?,
                 ObjectType::MLineStyle(mlinestyle) => self.write_mlinestyle(mlinestyle)?,
                 ObjectType::ImageDefinition(imagedef) => self.write_image_definition(imagedef)?,
@@ -2632,6 +4533,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 ObjectType::PlotSettings(plotsettings) => self.write_plot_settings(plotsettings)?,
                 ObjectType::MultiLeaderStyle(style) => self.write_multileader_style(style)?,
                 ObjectType::TableStyle(style) => self.write_table_style(style)?,
+                ObjectType::TableContent(table) => {
+                    self.write_table_content_object_dxf(table)?
+                }
                 ObjectType::Scale(scale) => self.write_scale(scale)?,
                 ObjectType::ObjectContextData(ctx) => self.write_object_context_data(ctx)?,
                 ObjectType::SortEntitiesTable(table) => self.write_sort_entities_table(table)?,
@@ -2639,13 +4543,35 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 ObjectType::VisualStyle(obj) => self.write_visualstyle(obj)?,
                 ObjectType::Material(obj) => self.write_material(obj)?,
                 ObjectType::ImageDefinitionReactor(obj) => self.write_imagedef_reactor(obj)?,
-                ObjectType::GeoData(obj) => self.write_stub_handle_only("GEODATA", obj.handle, obj.owner)?,
+                ObjectType::GeoData(obj) => self.write_geodata(obj)?,
                 ObjectType::SpatialFilter(obj) => self.write_spatial_filter(obj)?,
                 ObjectType::RasterVariables(obj) => self.write_raster_variables(obj)?,
                 ObjectType::BookColor(obj) => self.write_bookcolor(obj)?,
                 ObjectType::PlaceHolder(obj) => self.write_stub_handle_only("ACDBPLACEHOLDER", obj.handle, obj.owner)?,
                 ObjectType::DictionaryWithDefault(obj) => self.write_dict_with_default(obj, &document.objects)?,
                 ObjectType::WipeoutVariables(obj) => self.write_wipeout_variables(obj)?,
+                ObjectType::BlockVisibilityParameter(obj) => {
+                    self.write_block_visibility_parameter(obj)?
+                }
+                ObjectType::DynamicBlock(obj) => {
+                    self.write_dynamic_block_object_dxf(obj)?
+                }
+                ObjectType::Associative(obj) => {
+                    self.write_associative_object_dxf(obj)?
+                }
+                ObjectType::ClassObject(obj) => self.write_class_object_dxf(obj)?,
+                ObjectType::DataObject(obj) => self.write_data_object_dxf(obj)?,
+                ObjectType::Field(obj) => self.write_field_object_dxf(obj)?,
+                ObjectType::FieldList(obj) => self.write_field_list_dxf(obj)?,
+                ObjectType::RegisteredClass(obj) => {
+                    self.write_registered_class_object_dxf(obj)?
+                }
+                ObjectType::DgnLineStyle(obj) => {
+                    self.write_dgn_line_style_object_dxf(obj)?
+                }
+                ObjectType::ProxyObject(obj) => {
+                    self.write_proxy_object_dxf(obj)?
+                }
                 ObjectType::Unknown { type_name, handle, owner, raw_dxf_codes, .. } => {
                     self.write_unknown_object(type_name, *handle, *owner, raw_dxf_codes.as_deref())?;
                 }
@@ -2654,6 +4580,1431 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
         self.writer.write_section_end()?;
         Ok(())
+    }
+
+    fn write_registered_class_object_dxf(
+        &mut self,
+        object: &crate::objects::RegisteredClassObject,
+    ) -> Result<()> {
+        if object.payload.bit_count != 0 {
+            self.writer.write_string(0, "ACAD_PROXY_OBJECT")?;
+            self.writer.write_handle(5, object.handle)?;
+            if !object.reactors.is_empty() {
+                self.writer.write_string(102, "{ACAD_REACTORS")?;
+                for reactor in &object.reactors {
+                    self.writer.write_handle(330, *reactor)?;
+                }
+                self.writer.write_string(102, "}")?;
+            }
+            if let Some(xdictionary) = object.xdictionary_handle {
+                self.writer.write_string(102, "{ACAD_XDICTIONARY")?;
+                self.writer.write_handle(360, xdictionary)?;
+                self.writer.write_string(102, "}")?;
+            }
+            self.writer.write_handle(330, object.owner)?;
+            self.writer.write_subclass("AcDbProxyObject")?;
+            self.writer.write_i32(90, 499)?;
+            if self.dxf_version < DxfVersion::AC1032 {
+                self.writer.write_i32(91, 499)?;
+            }
+            self.writer.write_i32(95, 0)?;
+            self.writer.write_bool(70, false)?;
+            let payload =
+                crate::objects::semantic_property::encode_registered_class_envelope(
+                    &object.dxf_name,
+                    &object.cpp_class_name,
+                    &object.properties,
+                    &object.payload,
+                );
+            self.writer.write_i32(93, payload.bit_count as i32)?;
+            let payload_data = payload.data();
+            for chunk in payload_data.chunks(127) {
+                self.writer.write_binary(310, chunk)?;
+            }
+            return self.write_proxy_references_dxf(&object.object_ids);
+        }
+        self.writer.write_string(0, &object.dxf_name)?;
+        self.writer.write_handle(5, object.handle)?;
+        if !object.reactors.is_empty() {
+            self.writer.write_string(102, "{ACAD_REACTORS")?;
+            for reactor in &object.reactors {
+                self.writer.write_handle(330, *reactor)?;
+            }
+            self.writer.write_string(102, "}")?;
+        }
+        if let Some(xdictionary) = object.xdictionary_handle {
+            self.writer.write_string(102, "{ACAD_XDICTIONARY")?;
+            self.writer.write_handle(360, xdictionary)?;
+            self.writer.write_string(102, "}")?;
+        }
+        self.writer.write_handle(330, object.owner)?;
+        self.write_semantic_properties(&object.properties)?;
+        self.write_proxy_references_dxf(&object.object_ids)
+    }
+
+    fn write_dgn_line_style_object_dxf(
+        &mut self,
+        object: &crate::objects::DgnLineStyleObject,
+    ) -> Result<()> {
+        use crate::objects::DgnLineStyleData;
+        self.writer.write_string(0, object.dxf_name())?;
+        self.writer.write_handle(5, object.handle)?;
+        if !object.reactors.is_empty() {
+            self.writer.write_string(102, "{ACAD_REACTORS")?;
+            for reactor in &object.reactors {
+                self.writer.write_handle(330, *reactor)?;
+            }
+            self.writer.write_string(102, "}")?;
+        }
+        if let Some(xdictionary) = object.xdictionary_handle {
+            self.writer.write_string(102, "{ACAD_XDICTIONARY")?;
+            self.writer.write_handle(360, xdictionary)?;
+            self.writer.write_string(102, "}")?;
+        }
+        self.writer.write_handle(330, object.owner)?;
+        match &object.data {
+            DgnLineStyleData::Definition {
+                description,
+                version,
+                style_number,
+                component_uid,
+                is_continuous,
+                unit_definition,
+                unit_scale,
+                units_type,
+                is_element,
+                is_physical,
+                is_scale_independent,
+                is_snappable,
+                root_component,
+                properties,
+            } => {
+                self.writer.write_subclass("AcDbLSDefinition")?;
+                self.writer.write_string(1, description)?;
+                self.writer.write_i32(90, *version)?;
+                self.writer.write_i32(91, *style_number)?;
+                self.writer.write_binary(310, component_uid)?;
+                self.writer.write_bool(290, *is_continuous)?;
+                self.writer.write_double(40, *unit_definition)?;
+                self.writer.write_double(41, *unit_scale)?;
+                self.writer.write_i32(92, *units_type)?;
+                self.writer.write_bool(291, *is_element)?;
+                self.writer.write_bool(292, *is_physical)?;
+                self.writer.write_bool(293, *is_scale_independent)?;
+                self.writer.write_bool(294, *is_snappable)?;
+                self.writer.write_handle(340, *root_component)?;
+                self.write_semantic_properties(properties)
+            }
+            DgnLineStyleData::Component {
+                kind,
+                description,
+                version,
+                component_uid,
+                scale,
+                property_flags,
+                component,
+                properties,
+            } => {
+                let subclass = match kind {
+                    crate::objects::DgnLsComponentType::Symbol => {
+                        "AcDbLSSymbolComponent"
+                    }
+                    crate::objects::DgnLsComponentType::Compound => {
+                        "AcDbLSCompoundComponent"
+                    }
+                    crate::objects::DgnLsComponentType::Stroke => {
+                        "AcDbLSStrokePatternComponent"
+                    }
+                    crate::objects::DgnLsComponentType::Point => {
+                        "AcDbLSPointComponent"
+                    }
+                    crate::objects::DgnLsComponentType::Internal => {
+                        "AcDbLSInternalComponent"
+                    }
+                };
+                self.writer.write_subclass(subclass)?;
+                self.writer.write_string(1, description)?;
+                self.writer.write_i32(90, *version)?;
+                self.writer.write_i32(91, kind.code())?;
+                self.writer.write_binary(310, component_uid)?;
+                self.writer.write_double(40, *scale)?;
+                self.writer.write_byte(280, *property_flags)?;
+                match component {
+                    crate::objects::DgnLsComponentData::Symbol(value) => {
+                        self.writer
+                            .write_double(41, value.stored_unit_scale)?;
+                        self.writer.write_double(42, value.unit_scale)?;
+                        self.writer.write_bool(290, value.has_unit_scale)?;
+                        self.writer.write_bool(291, value.is_3d)?;
+                        self.writer.write_handle(340, value.block)?;
+                    }
+                    crate::objects::DgnLsComponentData::Compound(value) => {
+                        for entry in &value.entries {
+                            self.writer.write_double(41, entry.offset)?;
+                            self.writer.write_handle(340, entry.component)?;
+                        }
+                    }
+                    crate::objects::DgnLsComponentData::Stroke(value) => {
+                        self.write_dgn_stroke_pattern_dxf(value)?;
+                    }
+                    crate::objects::DgnLsComponentData::Point(value) => {
+                        self.writer
+                            .write_i32(93, value.symbols.len() as i32)?;
+                        self.writer
+                            .write_handle(340, value.stroke_component)?;
+                        for symbol in &value.symbols {
+                            self.writer
+                                .write_handle(341, symbol.symbol_component)?;
+                            self.writer
+                                .write_bool(290, symbol.partial_strokes)?;
+                            self.writer
+                                .write_bool(291, symbol.clip_partial)?;
+                            self.writer
+                                .write_bool(292, symbol.allow_stretch)?;
+                            self.writer
+                                .write_bool(293, symbol.partial_projected)?;
+                            self.writer
+                                .write_bool(294, symbol.use_symbol_color)?;
+                            self.writer.write_bool(
+                                295,
+                                symbol.use_symbol_lineweight,
+                            )?;
+                            self.writer.write_i32(92, symbol.justify)?;
+                            self.writer
+                                .write_i32(94, symbol.rotation_type)?;
+                            self.writer.write_i32(95, symbol.vertex_mask)?;
+                            self.writer.write_double(41, symbol.x_offset)?;
+                            self.writer.write_double(42, symbol.y_offset)?;
+                            self.writer.write_double(43, symbol.angle)?;
+                            self.writer
+                                .write_i32(96, symbol.stroke_number)?;
+                        }
+                    }
+                    crate::objects::DgnLsComponentData::Internal(value) => {
+                        self.write_dgn_stroke_pattern_dxf(&value.pattern)?;
+                        self.writer
+                            .write_i32(96, value.internal_version)?;
+                        self.writer.write_i32(97, value.hardware_style)?;
+                        self.writer
+                            .write_bool(297, value.is_hardware_style)?;
+                        self.writer.write_i32(98, value.line_code)?;
+                    }
+                }
+                self.write_semantic_properties(properties)
+            }
+            DgnLineStyleData::Registered {
+                properties,
+                object_ids,
+                ..
+            } => {
+                self.write_semantic_properties(properties)?;
+                self.write_proxy_references_dxf(object_ids)
+            }
+        }
+    }
+
+    fn write_dgn_stroke_pattern_dxf(
+        &mut self,
+        pattern: &crate::objects::DgnLsStrokePattern,
+    ) -> Result<()> {
+        self.writer
+            .write_bool(290, pattern.has_iteration_limit)?;
+        self.writer
+            .write_bool(291, pattern.is_single_segment)?;
+        self.writer.write_i32(92, pattern.iteration_limit)?;
+        self.writer.write_double(41, pattern.auto_phase)?;
+        self.writer.write_double(42, pattern.phase)?;
+        self.writer.write_byte(281, pattern.phase_mode.code())?;
+        self.writer
+            .write_i32(93, pattern.strokes.len() as i32)?;
+        for stroke in &pattern.strokes {
+            self.writer.write_bool(292, stroke.is_dash)?;
+            self.writer.write_bool(293, stroke.bypass_corner)?;
+            self.writer.write_bool(294, stroke.can_be_scaled)?;
+            self.writer.write_bool(295, stroke.invert_at_origin)?;
+            self.writer.write_bool(296, stroke.invert_at_end)?;
+            self.writer.write_double(43, stroke.length)?;
+            self.writer.write_double(44, stroke.start_width)?;
+            self.writer.write_double(45, stroke.end_width)?;
+            self.writer.write_i32(94, stroke.width_mode)?;
+            self.writer.write_i32(95, stroke.cap_mode)?;
+        }
+        Ok(())
+    }
+
+    fn write_proxy_references_dxf(
+        &mut self,
+        references: &[crate::objects::ProxyObjectReference],
+    ) -> Result<()> {
+        for reference in references {
+            let code = match reference.kind {
+                crate::objects::ProxyReferenceKind::Undefined
+                | crate::objects::ProxyReferenceKind::SoftPointer => 350,
+                crate::objects::ProxyReferenceKind::SoftOwnership => 330,
+                crate::objects::ProxyReferenceKind::HardOwnership => 340,
+                crate::objects::ProxyReferenceKind::HardPointer => 360,
+            };
+            self.writer.write_handle(code, reference.handle)?;
+        }
+        if !references.is_empty() {
+            self.writer.write_i32(94, 0)?;
+        }
+        Ok(())
+    }
+
+    fn write_proxy_object_dxf(
+        &mut self,
+        object: &crate::objects::ProxyObject,
+    ) -> Result<()> {
+        self.writer.write_string(0, "ACAD_PROXY_OBJECT")?;
+        self.writer.write_handle(5, object.handle)?;
+        self.writer.write_handle(330, object.owner)?;
+        self.writer.write_subclass("AcDbProxyObject")?;
+        self.writer.write_i32(90, object.proxy_id)?;
+        if self.dxf_version >= DxfVersion::AC1032 {
+            self.writer.write_i32(71, object.dwg_version)?;
+            self.writer
+                .write_i32(97, object.maintenance_version)?;
+        } else {
+            self.writer.write_i32(91, object.class_id)?;
+            self.writer.write_i32(
+                95,
+                (object.maintenance_version << 16)
+                    | (object.dwg_version & 0xffff),
+            )?;
+        }
+        self.writer.write_bool(70, object.from_dxf)?;
+        self.writer
+            .write_i32(93, object.payload.bit_count as i32)?;
+        let payload = object.payload.data();
+        for chunk in payload.chunks(127) {
+            self.writer.write_binary(310, chunk)?;
+        }
+        for object_id in &object.object_ids {
+            let code = match object_id.kind {
+                crate::objects::ProxyReferenceKind::Undefined
+                | crate::objects::ProxyReferenceKind::SoftPointer => 350,
+                crate::objects::ProxyReferenceKind::SoftOwnership => 330,
+                crate::objects::ProxyReferenceKind::HardOwnership => 340,
+                crate::objects::ProxyReferenceKind::HardPointer => 360,
+            };
+            self.writer.write_handle(code, object_id.handle)?;
+        }
+        if !object.object_ids.is_empty() {
+            self.writer.write_i32(94, 0)?;
+        }
+        Ok(())
+    }
+
+    fn write_class_object_header(
+        &mut self,
+        object: &crate::objects::ClassObject,
+        subclass: &str,
+    ) -> Result<()> {
+        self.writer.write_string(0, object.dxf_name())?;
+        self.writer.write_handle(5, object.handle)?;
+        if !object.reactors.is_empty() {
+            self.writer.write_string(102, "{ACAD_REACTORS")?;
+            for reactor in &object.reactors {
+                self.writer.write_handle(330, *reactor)?;
+            }
+            self.writer.write_string(102, "}")?;
+        }
+        if let Some(xdictionary) = object.xdictionary_handle {
+            self.writer.write_string(102, "{ACAD_XDICTIONARY")?;
+            self.writer.write_handle(360, xdictionary)?;
+            self.writer.write_string(102, "}")?;
+        }
+        self.writer.write_handle(330, object.owner)?;
+        if !subclass.is_empty() {
+            self.writer.write_subclass(subclass)?;
+        }
+        Ok(())
+    }
+
+    fn write_render_settings_dxf(
+        &mut self,
+        value: &crate::objects::RenderSettings,
+        write_has_predefined: bool,
+    ) -> Result<()> {
+        self.writer.write_i32(90, value.class_version)?;
+        self.writer.write_string(1, &value.name)?;
+        self.writer.write_bool(290, value.fog_enabled)?;
+        self.writer
+            .write_bool(290, value.fog_background_enabled)?;
+        self.writer.write_bool(290, value.backfaces_enabled)?;
+        self.writer
+            .write_bool(290, value.environment_image_enabled)?;
+        self.writer
+            .write_string(1, &value.environment_image_filename)?;
+        self.writer.write_string(1, &value.description)?;
+        self.writer.write_i32(90, value.display_index)?;
+        if write_has_predefined
+            && self.dxf_version >= DxfVersion::AC1027
+        {
+            self.writer.write_bool(290, value.has_predefined)?;
+        }
+        Ok(())
+    }
+
+    fn write_point_cloud_definition_dxf(
+        &mut self,
+        value: &crate::objects::PointCloudDefinition,
+    ) -> Result<()> {
+        self.writer.write_i32(90, value.class_version)?;
+        self.writer.write_string(1, &value.source_filename)?;
+        self.writer.write_bool(280, value.is_loaded)?;
+        self.writer.write_i64(160, value.point_count)?;
+        self.writer.write_point3d(10, value.extents_min)?;
+        self.writer.write_point3d(11, value.extents_max)?;
+        Ok(())
+    }
+
+    fn write_point_cloud_ramps_dxf(
+        &mut self,
+        ramps: &[crate::objects::PointCloudColorRamp],
+    ) -> Result<()> {
+        self.writer.write_i32(90, ramps.len() as i32)?;
+        for ramp in ramps {
+            self.writer.write_i16(70, ramp.class_version)?;
+            self.writer
+                .write_i32(90, ramp.color_schemes.len() as i32)?;
+            for scheme in &ramp.color_schemes {
+                self.writer.write_string(1, scheme)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn write_view_rep_dxf(
+        &mut self,
+        value: &crate::objects::ViewRep,
+    ) -> Result<()> {
+        for item in value.header_values {
+            self.writer.write_i32(90, item)?;
+        }
+        self.writer.write_string(1, &value.name)?;
+        self.writer.write_i32(90, value.scale)?;
+        self.writer.write_i32(90, value.header_status)?;
+        self.writer.write_string(1, &value.description)?;
+        self.writer.write_i64(160, value.source_id)?;
+        self.writer.write_bool(290, value.source_enabled)?;
+        self.writer.write_i32(90, value.source_version)?;
+        self.writer.write_i64(160, value.model_id)?;
+        self.writer.write_i32(90, value.guid.data1)?;
+        self.writer.write_i16(70, value.guid.data2)?;
+        self.writer.write_i16(70, value.guid.data3)?;
+        for item in value.guid.data4 {
+            self.writer.write_byte(280, item)?;
+        }
+        self.writer.write_byte(280, value.marker)?;
+        for item in value.transform {
+            self.writer.write_double(40, item)?;
+        }
+        self.writer.write_i32(90, value.transform_version)?;
+        self.writer.write_i64(160, value.database_id)?;
+        self.writer.write_i32(90, value.geometry_version)?;
+        self.writer.write_i32(90, value.geometry_marker)?;
+        self.writer.write_i32(90, value.sketches.len() as i32)?;
+        for sketch in &value.sketches {
+            self.writer.write_i32(90, sketch.id)?;
+            self.writer.write_i32(90, sketch.version)?;
+            self.writer
+                .write_i32(90, sketch.references.len() as i32)?;
+            for reference in &sketch.references {
+                self.writer.write_handle(330, reference.object)?;
+                self.writer.write_bool(290, reference.flag)?;
+            }
+            self.writer.write_i32(90, sketch.reserved)?;
+            self.writer.write_bool(290, sketch.enabled)?;
+            match &sketch.geometry {
+                crate::objects::ViewRepSketchGeometry::None => {
+                    self.writer.write_i32(90, 0)?;
+                }
+                crate::objects::ViewRepSketchGeometry::Line {
+                    type_code,
+                    first,
+                    second,
+                } => {
+                    self.writer.write_i32(90, *type_code)?;
+                    self.writer.write_point3d(10, *first)?;
+                    self.writer.write_point3d(10, *second)?;
+                }
+                crate::objects::ViewRepSketchGeometry::Circle {
+                    type_code,
+                    center,
+                    normal,
+                    direction,
+                    radius,
+                    start_parameter,
+                    end_parameter,
+                    reserved,
+                } => {
+                    self.writer.write_i32(90, *type_code)?;
+                    self.writer.write_point3d(10, *center)?;
+                    self.writer.write_point3d(10, *normal)?;
+                    self.writer.write_point3d(10, *direction)?;
+                    self.writer.write_double(40, *radius)?;
+                    self.writer.write_double(40, *start_parameter)?;
+                    self.writer.write_double(40, *end_parameter)?;
+                    self.writer.write_double(40, *reserved)?;
+                }
+                crate::objects::ViewRepSketchGeometry::Nurb {
+                    type_code,
+                    flags,
+                    degree,
+                    tolerance,
+                    knot_header,
+                    knots,
+                    weight_header,
+                    weights,
+                    point_header,
+                    control_points,
+                } => {
+                    self.writer.write_i32(90, *type_code)?;
+                    self.writer.write_i16(70, i16::from(flags[0]))?;
+                    self.writer.write_i16(70, i16::from(flags[1]))?;
+                    self.writer.write_i32(90, *degree)?;
+                    self.writer.write_double(40, *tolerance)?;
+                    for item in knot_header {
+                        self.writer.write_i32(90, *item)?;
+                    }
+                    for item in knots {
+                        self.writer.write_double(40, *item)?;
+                    }
+                    for item in weight_header {
+                        self.writer.write_i32(90, *item)?;
+                    }
+                    for item in weights {
+                        self.writer.write_double(40, *item)?;
+                    }
+                    for item in point_header {
+                        self.writer.write_i32(90, *item)?;
+                    }
+                    for item in control_points {
+                        self.writer.write_point3d(10, *item)?;
+                    }
+                }
+            }
+            self.writer.write_bool(290, sketch.final_flag)?;
+        }
+        for handle in value.related_objects {
+            self.writer.write_handle(330, handle)?;
+        }
+        self.writer.write_handle(340, value.source_manager)?;
+        for handle in value.owned_objects {
+            self.writer.write_handle(360, handle)?;
+        }
+        for handle in value.optional_objects {
+            self.writer.write_handle(330, handle)?;
+        }
+        self.writer.write_point2d(10, value.position)?;
+        self.writer.write_double(40, value.rotation)?;
+        self.writer.write_handle(340, value.orientation)?;
+        self.writer.write_bool(290, value.is_active)?;
+        self.writer.write_i16(70, value.projection)?;
+        for handle in value.linked_views {
+            self.writer.write_handle(330, handle)?;
+        }
+        self.writer
+            .write_i32(90, value.section_sketches.len() as i32)?;
+        for path in &value.section_sketches {
+            self.writer.write_string(1, &path.class_name)?;
+            self.writer.write_i16(
+                70,
+                path.objects.len().saturating_sub(1) as i16,
+            )?;
+            for handle in &path.objects {
+                self.writer.write_handle(330, *handle)?;
+            }
+        }
+        self.writer.write_i32(90, value.action_mode)?;
+        if let Some(action) = value.action {
+            self.writer.write_handle(360, action)?;
+        }
+        self.writer.write_bool(290, value.has_parent)?;
+        self.writer.write_handle(330, value.parent)?;
+        self.writer.write_i32(90, value.tail_version)?;
+        self.writer.write_i32(90, value.tail_state)?;
+        self.writer.write_i64(160, value.tail_id)?;
+        self.writer.write_i32(90, value.path_count)?;
+        self.writer.write_i32(90, value.path_version)?;
+        self.writer.write_i64(160, value.path_id)?;
+        self.writer.write_bool(290, value.has_block_path)?;
+        if let Some(path) = &value.block_path {
+            self.writer.write_string(1, &path.class_name)?;
+            self.writer.write_i32(90, path.version)?;
+            self.writer.write_i32(91, path.entries.len() as i32)?;
+            for entry in &path.entries {
+                self.writer.write_byte(281, entry.flag)?;
+                self.writer.write_byte(280, entry.kind)?;
+                self.writer.write_handle(332, entry.object)?;
+            }
+        }
+        self.writer.write_handle(340, value.style)?;
+        Ok(())
+    }
+
+    fn write_class_object_dxf(
+        &mut self,
+        object: &crate::objects::ClassObject,
+    ) -> Result<()> {
+        use crate::objects::ClassObjectData as Data;
+        match &object.data {
+            Data::Empty => self.write_class_object_header(object, ""),
+            Data::ViewRepModelSpaceSource(value) => {
+                self.write_class_object_header(
+                    object,
+                    "AcDbViewRepSource",
+                )?;
+                self.writer
+                    .write_subclass("AcDbViewRepModelSpaceSource")?;
+                self.writer.write_bool(290, value.enabled)?;
+                for item in value.header_values {
+                    self.writer.write_i32(90, item)?;
+                }
+                for item in value.transform {
+                    self.writer.write_double(40, item)?;
+                }
+                self.writer.write_i32(90, value.source_version)?;
+                self.writer.write_i32(90, value.source_status)?;
+                self.writer.write_handle(5, value.model)?;
+                self.writer.write_i32(90, value.guid.data1)?;
+                self.writer.write_i16(70, value.guid.data2)?;
+                self.writer.write_i16(70, value.guid.data3)?;
+                for item in value.guid.data4 {
+                    self.writer.write_byte(280, item)?;
+                }
+                for handle in value.references {
+                    self.writer.write_handle(330, handle)?;
+                }
+                for item in value.tail_values {
+                    self.writer.write_i32(90, item)?;
+                }
+                self.writer.write_handle(350, value.orientation)?;
+                Ok(())
+            }
+            Data::ViewRep(value) => {
+                self.write_class_object_header(object, "AcDbViewRep")?;
+                self.write_view_rep_dxf(value)
+            }
+            Data::SpatialIndex(value) => {
+                self.write_class_object_header(object, "AcDbIndex")?;
+                self.writer.write_double(
+                    40,
+                    value.last_updated_julian_day as f64
+                        + value.last_updated_milliseconds as f64 / 86_400_000.0,
+                )?;
+                // Autodesk's DXF contract deliberately carries no spatial
+                // index parameters. Hosts rebuild them from drawing entities.
+                self.writer.write_subclass("AcDbSpatialIndex")
+            }
+            Data::LayerFilter(value) => {
+                self.write_class_object_header(object, "AcDbLayerFilter")?;
+                self.writer.write_i32(90, value.names.len() as i32)?;
+                for name in &value.names {
+                    self.writer.write_string(8, name)?;
+                }
+                Ok(())
+            }
+            Data::PartialViewingIndex(value) => {
+                self.write_class_object_header(object, "OdDbPartialViewingIndex")?;
+                self.writer.write_i32(90, value.entries.len() as i32)?;
+                self.writer.write_bool(290, value.has_entries)?;
+                for entry in &value.entries {
+                    self.writer.write_point3d(10, entry.extents_min)?;
+                    self.writer.write_point3d(11, entry.extents_max)?;
+                    self.writer.write_handle(330, entry.object)?;
+                }
+                Ok(())
+            }
+            Data::VbaProject(value) => {
+                self.write_class_object_header(object, "AcDbVbaProject")?;
+                let data = value.storage.encode();
+                self.writer.write_i32(90, data.len() as i32)?;
+                for chunk in data.chunks(127) {
+                    self.writer.write_binary(310, chunk)?;
+                }
+                Ok(())
+            }
+            Data::SectionManager(value) => {
+                self.write_class_object_header(object, "AcDbSectionManager")?;
+                self.writer.write_bool(70, value.is_live)?;
+                self.writer.write_i32(90, value.sections.len() as i32)?;
+                for section in &value.sections {
+                    self.writer.write_handle(330, *section)?;
+                }
+                Ok(())
+            }
+            Data::SectionSettings(value) => {
+                self.write_class_object_header(object, "AcDbSectionSettings")?;
+                self.writer.write_i32(90, value.current_type)?;
+                self.writer.write_i32(91, value.types.len() as i32)?;
+                for section_type in &value.types {
+                    self.writer.write_string(1, "SectionTypeSettings")?;
+                    self.writer.write_i32(90, section_type.section_type)?;
+                    self.writer.write_i32(91, section_type.generation)?;
+                    self.writer
+                        .write_i32(92, section_type.sources.len() as i32)?;
+                    for source in &section_type.sources {
+                        self.writer.write_handle(330, *source)?;
+                    }
+                    self.writer
+                        .write_handle(331, section_type.destination_block)?;
+                    self.writer
+                        .write_string(1, &section_type.destination_file)?;
+                    self.writer
+                        .write_i32(93, section_type.geometry.len() as i32)?;
+                    for geometry in &section_type.geometry {
+                        self.writer
+                            .write_string(2, "SectionGeometrySettings")?;
+                        self.writer.write_i32(90, geometry.geometry_count)?;
+                        self.writer.write_i32(91, geometry.index)?;
+                        self.writer.write_i32(92, geometry.flags)?;
+                        self.writer.write_color(62, geometry.color)?;
+                        self.writer.write_string(8, &geometry.layer)?;
+                        self.writer.write_string(6, &geometry.linetype)?;
+                        self.writer
+                            .write_double(40, geometry.linetype_scale)?;
+                        self.writer.write_string(1, &geometry.plot_style)?;
+                        self.writer.write_i32(370, geometry.lineweight)?;
+                        self.writer
+                            .write_i16(70, geometry.face_transparency)?;
+                        self.writer
+                            .write_i16(71, geometry.edge_transparency)?;
+                        self.writer.write_i16(72, geometry.hatch_type)?;
+                        self.writer
+                            .write_string(2, &geometry.hatch_pattern)?;
+                        self.writer.write_double(41, geometry.hatch_angle)?;
+                        self.writer
+                            .write_double(42, geometry.hatch_spacing)?;
+                        self.writer.write_double(43, geometry.hatch_scale)?;
+                        self.writer
+                            .write_string(3, "SectionGeometrySettingsEnd")?;
+                    }
+                    self.writer
+                        .write_string(3, "SectionTypeSettingsEnd")?;
+                }
+                Ok(())
+            }
+            Data::LightList(value) => {
+                self.write_class_object_header(object, "AcDbLightList")?;
+                self.writer.write_i32(90, value.class_version)?;
+                self.writer.write_i32(90, value.lights.len() as i32)?;
+                for light in &value.lights {
+                    self.writer.write_handle(5, light.handle)?;
+                    self.writer.write_string(1, &light.name)?;
+                }
+                Ok(())
+            }
+            Data::Sun(value) => {
+                self.write_class_object_header(object, "AcDbSun")?;
+                self.writer.write_i32(90, value.class_version)?;
+                self.writer.write_bool(290, value.is_on)?;
+                self.writer.write_color(63, value.color)?;
+                self.writer.write_double(40, value.intensity)?;
+                self.writer.write_bool(291, value.has_shadow)?;
+                self.writer.write_i32(91, value.julian_day)?;
+                self.writer.write_i32(92, value.milliseconds)?;
+                self.writer
+                    .write_bool(292, value.is_daylight_savings_on)?;
+                self.writer.write_i32(70, value.shadow_type)?;
+                self.writer.write_i16(71, value.shadow_map_size)?;
+                self.writer
+                    .write_byte(280, value.shadow_softness)?;
+                Ok(())
+            }
+            Data::RenderSettings(value) => {
+                self.write_class_object_header(object, "AcDbRenderSettings")?;
+                self.write_render_settings_dxf(value, true)
+            }
+            Data::MentalRayRenderSettings(value) => {
+                self.write_class_object_header(object, "AcDbRenderSettings")?;
+                self.write_render_settings_dxf(&value.base, true)?;
+                self.writer
+                    .write_subclass("AcDbMentalRayRenderSettings")?;
+                self.writer.write_i32(90, value.version)?;
+                self.writer.write_i32(90, value.sampling_min)?;
+                self.writer.write_i32(90, value.sampling_max)?;
+                self.writer.write_i16(70, value.sampling_filter)?;
+                self.writer
+                    .write_double(40, value.sampling_filter_width)?;
+                self.writer
+                    .write_double(40, value.sampling_filter_height)?;
+                for component in value.sampling_contrast {
+                    self.writer.write_double(40, component)?;
+                }
+                self.writer.write_i16(70, value.shadow_mode)?;
+                self.writer.write_bool(290, value.shadow_maps_enabled)?;
+                self.writer.write_bool(290, value.ray_tracing_enabled)?;
+                for depth in value.ray_trace_depth {
+                    self.writer.write_i32(90, depth)?;
+                }
+                self.writer
+                    .write_bool(290, value.global_illumination_enabled)?;
+                self.writer
+                    .write_i32(90, value.global_illumination_sample_count)?;
+                self.writer.write_bool(
+                    290,
+                    value.global_illumination_sample_radius_enabled,
+                )?;
+                self.writer.write_double(
+                    40,
+                    value.global_illumination_sample_radius,
+                )?;
+                self.writer.write_i32(90, value.photons_per_light)?;
+                for depth in value.photon_trace_depth {
+                    self.writer.write_i32(90, depth)?;
+                }
+                self.writer
+                    .write_bool(290, value.final_gathering_enabled)?;
+                self.writer
+                    .write_i32(90, value.final_gathering_ray_count)?;
+                for state in value.final_gathering_sample_radius_state {
+                    self.writer.write_bool(290, state)?;
+                }
+                for radius in value.final_gathering_sample_radius {
+                    self.writer.write_double(40, radius)?;
+                }
+                self.writer
+                    .write_double(40, value.light_luminance_scale)?;
+                self.writer.write_i16(70, value.diagnostics_mode)?;
+                self.writer
+                    .write_i16(70, value.diagnostics_grid_mode)?;
+                self.writer
+                    .write_double(40, value.diagnostics_grid_size)?;
+                self.writer
+                    .write_i16(70, value.diagnostics_photon_mode)?;
+                self.writer
+                    .write_i16(70, value.diagnostics_bsp_mode)?;
+                self.writer.write_bool(290, value.export_mi_enabled)?;
+                self.writer.write_string(1, &value.description)?;
+                self.writer.write_i32(90, value.tile_size)?;
+                self.writer.write_i16(70, value.tile_order)?;
+                self.writer.write_i32(90, value.memory_limit)?;
+                self.writer
+                    .write_bool(290, value.diagnostics_samples_mode)?;
+                self.writer.write_double(40, value.energy_multiplier)?;
+                Ok(())
+            }
+            Data::RapidRtRenderSettings(value) => {
+                self.write_class_object_header(object, "AcDbRenderSettings")?;
+                self.write_render_settings_dxf(&value.base, false)?;
+                self.writer
+                    .write_subclass("AcDbRapidRTRenderSettings")?;
+                self.writer.write_i32(90, value.version)?;
+                self.writer.write_i32(70, value.render_target)?;
+                self.writer.write_i32(90, value.render_level)?;
+                self.writer.write_i32(90, value.render_time)?;
+                self.writer.write_i32(70, value.lighting_model)?;
+                self.writer.write_i32(70, value.filter_type)?;
+                self.writer.write_double(40, value.filter_width)?;
+                self.writer.write_double(40, value.filter_height)?;
+                self.writer
+                    .write_bool(290, value.base.has_predefined)?;
+                Ok(())
+            }
+            Data::GradientBackground(value) => {
+                self.write_class_object_header(object, "AcDbGradientBackground")?;
+                self.writer.write_i32(90, value.class_version)?;
+                self.writer.write_i32(90, value.color_top as i32)?;
+                self.writer.write_i32(91, value.color_middle as i32)?;
+                self.writer.write_i32(92, value.color_bottom as i32)?;
+                self.writer.write_double(140, value.horizon)?;
+                self.writer.write_double(141, value.height)?;
+                self.writer.write_double(142, value.rotation)?;
+                Ok(())
+            }
+            Data::GroundPlaneBackground(value) => {
+                self.write_class_object_header(
+                    object,
+                    "AcDbGroundPlaneBackground",
+                )?;
+                self.writer.write_i32(90, value.class_version)?;
+                self.writer
+                    .write_i32(90, value.color_sky_zenith as i32)?;
+                self.writer
+                    .write_i32(91, value.color_sky_horizon as i32)?;
+                self.writer.write_i32(
+                    92,
+                    value.color_underground_horizon as i32,
+                )?;
+                self.writer.write_i32(
+                    93,
+                    value.color_underground_azimuth as i32,
+                )?;
+                self.writer.write_i32(94, value.color_near as i32)?;
+                self.writer.write_i32(95, value.color_far as i32)?;
+                Ok(())
+            }
+            Data::IblBackground(value) => {
+                self.write_class_object_header(object, "AcDbIBLBackground")?;
+                self.writer.write_i32(90, value.class_version)?;
+                self.writer.write_bool(290, value.enabled)?;
+                self.writer.write_string(1, &value.name)?;
+                self.writer.write_double(40, value.rotation)?;
+                self.writer.write_bool(290, value.display_image)?;
+                self.writer
+                    .write_handle(340, value.secondary_background)?;
+                Ok(())
+            }
+            Data::ImageBackground(value) => {
+                self.write_class_object_header(object, "AcDbImageBackground")?;
+                self.writer.write_i32(90, value.class_version)?;
+                self.writer.write_string(300, &value.filename)?;
+                self.writer.write_bool(290, value.fit_to_screen)?;
+                self.writer
+                    .write_bool(291, value.maintain_aspect_ratio)?;
+                self.writer.write_bool(292, value.use_tiling)?;
+                self.writer.write_double(140, value.offset.x)?;
+                self.writer.write_double(141, value.offset.y)?;
+                self.writer.write_double(142, value.scale.x)?;
+                self.writer.write_double(143, value.scale.y)?;
+                Ok(())
+            }
+            Data::SkyLightBackground(value) => {
+                self.write_class_object_header(object, "AcDbSkyBackground")?;
+                self.writer.write_i32(90, value.class_version)?;
+                self.writer.write_handle(340, value.sun)?;
+                Ok(())
+            }
+            Data::SolidBackground(value) => {
+                self.write_class_object_header(object, "AcDbSolidBackground")?;
+                self.writer.write_i32(90, value.class_version)?;
+                self.writer.write_i32(90, value.color as i32)?;
+                Ok(())
+            }
+            Data::RenderEntry(value) => {
+                self.write_class_object_header(object, "AcDbRenderEntry")?;
+                self.writer.write_i32(90, value.class_version)?;
+                self.writer.write_string(1, &value.image_filename)?;
+                self.writer.write_string(1, &value.preset_name)?;
+                self.writer.write_string(1, &value.view_name)?;
+                self.writer.write_i32(90, value.width)?;
+                self.writer.write_i32(90, value.height)?;
+                self.writer.write_i16(70, value.start_year)?;
+                self.writer.write_i16(70, value.start_month)?;
+                self.writer.write_i16(70, value.start_day)?;
+                self.writer.write_i16(70, value.start_hour)?;
+                self.writer.write_i16(70, value.start_minute)?;
+                self.writer.write_i16(70, value.start_second)?;
+                self.writer
+                    .write_i16(70, value.start_millisecond)?;
+                self.writer.write_i16(70, value.end_year)?;
+                self.writer.write_i16(70, value.end_month)?;
+                self.writer.write_i16(70, value.end_day)?;
+                self.writer.write_i16(70, value.end_hour)?;
+                self.writer.write_i16(70, value.end_minute)?;
+                self.writer.write_i16(70, value.end_second)?;
+                self.writer
+                    .write_i16(70, value.end_millisecond)?;
+                self.writer.write_double(40, value.render_time)?;
+                self.writer.write_i32(90, value.memory_amount)?;
+                self.writer.write_i32(90, value.material_count)?;
+                self.writer.write_i32(90, value.light_count)?;
+                self.writer.write_i32(90, value.triangle_count)?;
+                self.writer.write_i32(90, value.display_index)?;
+                Ok(())
+            }
+            Data::RenderEnvironment(value) => {
+                self.write_class_object_header(
+                    object,
+                    "AcDbRenderEnvironment",
+                )?;
+                self.writer.write_i32(90, value.class_version)?;
+                self.writer.write_bool(290, value.fog_enabled)?;
+                self.writer
+                    .write_bool(290, value.fog_background_enabled)?;
+                self.writer.write_byte(280, value.fog_color[0])?;
+                self.writer.write_byte(280, value.fog_color[1])?;
+                self.writer.write_byte(280, value.fog_color[2])?;
+                self.writer.write_double(40, value.fog_density_near)?;
+                self.writer.write_double(40, value.fog_density_far)?;
+                self.writer.write_double(40, value.fog_distance_near)?;
+                self.writer.write_double(40, value.fog_distance_far)?;
+                self.writer
+                    .write_bool(290, value.environment_image_enabled)?;
+                self.writer
+                    .write_string(1, &value.environment_image_filename)?;
+                Ok(())
+            }
+            Data::RenderGlobal(value) => {
+                self.write_class_object_header(object, "AcDbRenderGlobal")?;
+                self.writer.write_i32(90, value.class_version)?;
+                self.writer.write_i32(90, value.procedure)?;
+                self.writer.write_i32(90, value.destination)?;
+                self.writer.write_bool(290, value.save_enabled)?;
+                self.writer.write_string(1, &value.save_filename)?;
+                self.writer.write_i32(90, value.image_width)?;
+                self.writer.write_i32(90, value.image_height)?;
+                self.writer
+                    .write_bool(290, value.predefined_presets_first)?;
+                self.writer.write_bool(290, value.high_level_info)?;
+                Ok(())
+            }
+            Data::MotionPath(value) => {
+                self.write_class_object_header(object, "AcDbMotionPath")?;
+                self.writer.write_i32(90, value.class_version)?;
+                self.writer.write_handle(340, value.camera_path)?;
+                self.writer.write_handle(340, value.target_path)?;
+                self.writer.write_handle(340, value.view)?;
+                self.writer.write_i32(90, value.frames as i32)?;
+                self.writer.write_i32(90, value.frame_rate as i32)?;
+                self.writer
+                    .write_bool(290, value.corner_deceleration)?;
+                Ok(())
+            }
+            Data::CurvePath(value) => {
+                self.write_class_object_header(object, "AcDbCurvePath")?;
+                self.writer.write_i32(90, value.class_version)?;
+                self.writer.write_handle(340, value.entity)?;
+                Ok(())
+            }
+            Data::PointPath(value) => {
+                self.write_class_object_header(object, "AcDbPointPath")?;
+                self.writer.write_i16(90, value.class_version)?;
+                self.writer.write_point3d(10, value.point)?;
+                Ok(())
+            }
+            Data::TvDeviceProperties(value) => {
+                self.write_class_object_header(object, "AcDbTvDeviceProperties")?;
+                self.writer.write_i32(90, value.flags as i32)?;
+                self.writer.write_i16(70, value.max_regen_threads)?;
+                self.writer.write_i32(91, value.use_lut_palette)?;
+                self.writer.write_i64(160, value.alternate_highlight)?;
+                self.writer
+                    .write_i64(161, value.alternate_highlight_color)?;
+                self.writer
+                    .write_i64(162, value.geometry_shader_usage)?;
+                self.writer.write_i32(92, value.blending_mode)?;
+                self.writer
+                    .write_double(40, value.antialiasing_level)?;
+                self.writer.write_double(41, value.reserved_double)?;
+                Ok(())
+            }
+            Data::PointCloudDefinition(value) => {
+                self.write_class_object_header(object, "AcDbPointCloudDef")?;
+                self.write_point_cloud_definition_dxf(value)
+            }
+            Data::PointCloudDefinitionEx(value) => {
+                self.write_class_object_header(object, "AcDbPointCloudDefEx")?;
+                self.write_point_cloud_definition_dxf(value)
+            }
+            Data::PointCloudDefinitionReactor(value) => {
+                self.write_class_object_header(
+                    object,
+                    "AcDbPointCloudDefReactor",
+                )?;
+                self.writer.write_i32(90, value.class_version)
+            }
+            Data::PointCloudDefinitionReactorEx(value) => {
+                self.write_class_object_header(
+                    object,
+                    "AcDbPointCloudDefReactorEx",
+                )?;
+                self.writer.write_i32(90, value.class_version)
+            }
+            Data::PointCloudColorMap(value) => {
+                self.write_class_object_header(object, "AcDbPointCloudColorMap")?;
+                self.writer.write_i16(70, value.class_version)?;
+                self.writer
+                    .write_string(1, &value.default_intensity_scheme)?;
+                self.writer
+                    .write_string(1, &value.default_elevation_scheme)?;
+                self.writer.write_string(
+                    1,
+                    &value.default_classification_scheme,
+                )?;
+                self.write_point_cloud_ramps_dxf(&value.color_ramps)?;
+                self.write_point_cloud_ramps_dxf(
+                    &value.classification_color_ramps,
+                )
+            }
+            Data::NavisworksModelDefinition(value) => {
+                self.write_class_object_header(
+                    object,
+                    "AcDbNavisworksModelDef",
+                )?;
+                self.writer.write_i16(70, value.flags)?;
+                self.writer.write_string(1, &value.path)?;
+                self.writer.write_bool(290, value.status)?;
+                self.writer.write_point3d(10, value.extents_min)?;
+                self.writer.write_point3d(11, value.extents_max)?;
+                self.writer
+                    .write_bool(290, value.host_drawing_visibility)?;
+                Ok(())
+            }
+            Data::ContextDataManager(value) => {
+                self.write_class_object_header(
+                    object,
+                    "AcDbContextDataManager",
+                )?;
+                self.writer
+                    .write_handle(340, value.object_context)?;
+                self.writer
+                    .write_i32(90, value.sub_managers.len() as i32)?;
+                for manager in &value.sub_managers {
+                    self.writer.write_handle(340, manager.handle)?;
+                    self.writer
+                        .write_i32(91, manager.entries.len() as i32)?;
+                    for entry in &manager.entries {
+                        self.writer.write_handle(350, entry.item)?;
+                        self.writer.write_string(3, &entry.name)?;
+                    }
+                }
+                Ok(())
+            }
+            Data::SunStudy(value) => {
+                self.write_class_object_header(object, "AcDbSunStudy")?;
+                self.writer.write_i32(90, value.class_version)?;
+                self.writer.write_string(1, &value.setup_name)?;
+                self.writer.write_string(2, &value.description)?;
+                self.writer.write_i32(70, value.output_type)?;
+                if value.output_type == 0 {
+                    self.writer.write_bool(290, value.use_subset)?;
+                    self.writer.write_string(3, &value.sheet_set_name)?;
+                    self.writer
+                        .write_string(4, &value.sheet_subset_name)?;
+                }
+                self.writer
+                    .write_bool(291, value.select_dates_from_calendar)?;
+                self.writer.write_i32(91, value.dates.len() as i32)?;
+                for date in &value.dates {
+                    self.writer.write_i32(90, date.julian_day)?;
+                    self.writer.write_i32(90, date.milliseconds)?;
+                }
+                self.writer
+                    .write_bool(292, value.select_range_of_dates)?;
+                if value.select_range_of_dates {
+                    self.writer.write_i32(93, value.start_time)?;
+                    self.writer.write_i32(94, value.end_time)?;
+                    self.writer.write_i32(95, value.interval)?;
+                }
+                self.writer.write_i32(91, value.hours.len() as i32)?;
+                for hour in &value.hours {
+                    self.writer.write_bool(290, *hour)?;
+                }
+                self.writer.write_i32(74, value.shade_plot_type)?;
+                self.writer.write_i32(75, value.viewport_count)?;
+                self.writer.write_i32(76, value.rows)?;
+                self.writer.write_i32(77, value.columns)?;
+                self.writer.write_double(40, value.spacing)?;
+                self.writer.write_bool(293, value.lock_viewports)?;
+                self.writer.write_bool(294, value.label_viewports)?;
+                self.writer
+                    .write_handle(340, value.page_setup_wizard)?;
+                self.writer.write_handle(341, value.view)?;
+                self.writer.write_handle(342, value.visual_style)?;
+                self.writer.write_handle(343, value.text_style)?;
+                Ok(())
+            }
+            Data::DataTable(value) => {
+                self.write_class_object_header(object, "AcDbDataTable")?;
+                self.writer.write_i16(70, value.flags)?;
+                self.writer.write_i32(90, value.columns.len() as i32)?;
+                self.writer.write_i32(91, value.row_count)?;
+                self.writer.write_string(1, &value.name)?;
+                for column in &value.columns {
+                    self.writer.write_i32(92, column.value_type)?;
+                    self.writer.write_string(2, &column.name)?;
+                    for row in &column.rows {
+                        self.writer.write_i32(93, row.integer)?;
+                        self.writer.write_double(40, row.real)?;
+                        self.writer.write_string(3, &row.text)?;
+                    }
+                }
+                Ok(())
+            }
+            Data::DataLink(value) => {
+                self.write_class_object_header(object, "AcDbDataLink")?;
+                self.writer.write_string(1, &value.data_adapter)?;
+                self.writer.write_string(300, &value.description)?;
+                self.writer.write_string(301, &value.tooltip)?;
+                self.writer
+                    .write_string(302, &value.connection_string)?;
+                self.writer.write_i32(90, value.option)?;
+                self.writer.write_i32(91, value.update_option)?;
+                self.writer.write_i32(92, value.flags)?;
+                self.writer.write_i16(170, value.year)?;
+                self.writer.write_i16(171, value.month)?;
+                self.writer.write_i16(172, value.day)?;
+                self.writer.write_i16(173, value.hour)?;
+                self.writer.write_i16(174, value.minute)?;
+                self.writer.write_i16(175, value.second)?;
+                self.writer.write_i16(176, value.millisecond)?;
+                self.writer.write_i16(177, value.path_option)?;
+                self.writer.write_i32(93, value.status_flags)?;
+                self.writer.write_string(304, &value.update_status)?;
+                self.writer
+                    .write_i32(94, value.custom_data.len() as i32)?;
+                self.writer.write_string(305, "CUSTOMDATA")?;
+                self.writer.write_string(1, "DATAMAP_BEGIN")?;
+                for item in &value.custom_data {
+                    self.writer.write_handle(330, item.target)?;
+                    self.writer.write_string(304, &item.value)?;
+                }
+                self.writer.write_string(309, "DATAMAP_END")?;
+                self.writer.write_handle(360, value.hard_owner)?;
+                Ok(())
+            }
+            Data::PersistentSubentityManager(value) => {
+                self.write_class_object_header(
+                    object,
+                    "AcDbPersSubentManager",
+                )?;
+                self.writer.write_i32(90, value.class_version)?;
+                self.writer.write_i32(90, value.reserved_zero)?;
+                self.writer.write_i32(90, value.reserved_two)?;
+                self.writer
+                    .write_i32(90, value.associated_step_count)?;
+                self.writer
+                    .write_i32(90, value.associated_subentity_count)?;
+                self.writer.write_i32(90, value.steps.len() as i32)?;
+                for step in &value.steps {
+                    self.writer.write_i32(90, *step)?;
+                }
+                self.writer
+                    .write_i32(90, value.subentities.len() as i32)?;
+                for subentity in &value.subentities {
+                    self.writer.write_i32(90, *subentity)?;
+                }
+                Ok(())
+            }
+            Data::GeoMapImage(value) => {
+                self.write_class_object_header(object, "AcDbGeomapImage")?;
+                self.writer.write_i32(90, value.class_version)?;
+                self.writer.write_point3d(10, value.origin)?;
+                self.writer.write_point2d(13, value.image_size)?;
+                self.writer.write_i16(70, value.display_properties)?;
+                self.writer.write_bool(280, value.clipping_enabled)?;
+                self.writer.write_byte(281, value.brightness)?;
+                self.writer.write_byte(282, value.contrast)?;
+                self.writer.write_byte(283, value.fade)?;
+                Ok(())
+            }
+            Data::DetailViewStyle(value) => {
+                self.write_class_object_header(
+                    object,
+                    "AcDbModelDocViewStyle",
+                )?;
+                self.writer.write_i16(70, value.base.class_version)?;
+                self.writer
+                    .write_string(3, &value.base.description)?;
+                self.writer
+                    .write_bool(290, value.base.modified_for_recompute)?;
+                if self.dxf_version >= DxfVersion::AC1032 {
+                    self.writer
+                        .write_string(300, &value.base.display_name)?;
+                    self.writer.write_i32(90, value.base.flags)?;
+                }
+                self.writer.write_subclass("AcDbDetailViewStyle")?;
+                self.writer.write_i16(70, value.class_version)?;
+                self.writer.write_i16(71, 0)?;
+                self.writer.write_i32(90, value.flags)?;
+                self.writer.write_i16(71, 1)?;
+                self.writer.write_handle(340, value.identifier_style)?;
+                self.writer
+                    .write_color(62, value.identifier_color)?;
+                self.writer.write_double(40, value.identifier_height)?;
+                self.writer.write_handle(340, value.arrow_symbol)?;
+                self.writer
+                    .write_color(62, value.arrow_symbol_color)?;
+                self.writer.write_double(40, value.arrow_symbol_size)?;
+                self.writer.write_string(
+                    300,
+                    &value.identifier_excluded_characters,
+                )?;
+                self.writer.write_double(40, value.identifier_offset)?;
+                self.writer
+                    .write_byte(280, value.identifier_placement)?;
+                self.writer.write_i16(71, 2)?;
+                self.writer.write_handle(340, value.boundary_linetype)?;
+                self.writer
+                    .write_i32(90, value.boundary_lineweight)?;
+                self.writer.write_color(62, value.boundary_color)?;
+                self.writer.write_i16(71, 3)?;
+                self.writer
+                    .write_handle(340, value.view_label_text_style)?;
+                self.writer
+                    .write_color(62, value.view_label_text_color)?;
+                self.writer
+                    .write_double(40, value.view_label_text_height)?;
+                self.writer
+                    .write_i32(90, value.view_label_attachment)?;
+                self.writer.write_double(40, value.view_label_offset)?;
+                self.writer
+                    .write_i32(90, value.view_label_alignment)?;
+                self.writer
+                    .write_string(300, &value.view_label_pattern)?;
+                self.writer.write_i16(71, 4)?;
+                self.writer
+                    .write_handle(340, value.connection_linetype)?;
+                self.writer
+                    .write_i32(90, value.connection_lineweight)?;
+                self.writer.write_color(62, value.connection_color)?;
+                self.writer.write_handle(340, value.border_linetype)?;
+                self.writer.write_i32(90, value.border_lineweight)?;
+                self.writer.write_color(62, value.border_color)?;
+                self.writer.write_byte(280, value.model_edge)?;
+                Ok(())
+            }
+            Data::SectionViewStyle(value) => {
+                self.write_class_object_header(
+                    object,
+                    "AcDbModelDocViewStyle",
+                )?;
+                self.writer.write_i16(70, value.base.class_version)?;
+                self.writer
+                    .write_string(3, &value.base.description)?;
+                self.writer
+                    .write_bool(290, value.base.modified_for_recompute)?;
+                if self.dxf_version >= DxfVersion::AC1032 {
+                    self.writer
+                        .write_string(300, &value.base.display_name)?;
+                    self.writer.write_i32(90, value.base.flags)?;
+                }
+                self.writer.write_subclass("AcDbSectionViewStyle")?;
+                self.writer.write_i16(70, value.class_version)?;
+                self.writer.write_i16(71, 0)?;
+                self.writer.write_i32(90, value.flags)?;
+                self.writer.write_i16(71, 1)?;
+                self.writer.write_handle(340, value.identifier_style)?;
+                self.writer
+                    .write_color(62, value.identifier_color)?;
+                self.writer.write_double(40, value.identifier_height)?;
+                self.writer
+                    .write_handle(340, value.arrow_start_symbol)?;
+                self.writer
+                    .write_handle(340, value.arrow_end_symbol)?;
+                self.writer
+                    .write_color(62, value.arrow_symbol_color)?;
+                self.writer.write_double(40, value.arrow_symbol_size)?;
+                self.writer.write_string(
+                    300,
+                    &value.identifier_excluded_characters,
+                )?;
+                self.writer.write_double(
+                    40,
+                    value.arrow_symbol_extension_length,
+                )?;
+                self.writer
+                    .write_i32(90, value.identifier_position)?;
+                self.writer.write_double(40, value.identifier_offset)?;
+                self.writer.write_i32(90, value.arrow_position)?;
+                self.writer.write_i16(71, 2)?;
+                self.writer.write_handle(340, value.plane_linetype)?;
+                self.writer.write_i32(90, value.plane_lineweight)?;
+                self.writer.write_color(62, value.plane_color)?;
+                self.writer.write_handle(340, value.bend_linetype)?;
+                self.writer.write_i32(90, value.bend_lineweight)?;
+                self.writer.write_color(62, value.bend_color)?;
+                self.writer.write_double(40, value.bend_line_length)?;
+                self.writer.write_double(40, value.end_line_overshoot)?;
+                self.writer.write_double(40, value.end_line_length)?;
+                self.writer.write_i16(71, 3)?;
+                self.writer
+                    .write_handle(340, value.view_label_text_style)?;
+                self.writer
+                    .write_color(62, value.view_label_text_color)?;
+                self.writer
+                    .write_double(40, value.view_label_text_height)?;
+                self.writer
+                    .write_i32(90, value.view_label_attachment)?;
+                self.writer.write_double(40, value.view_label_offset)?;
+                self.writer
+                    .write_i32(90, value.view_label_alignment)?;
+                self.writer
+                    .write_string(300, &value.view_label_pattern)?;
+                self.writer.write_i16(71, 4)?;
+                self.writer.write_color(62, value.hatch_color)?;
+                self.writer
+                    .write_color(62, value.hatch_background_color)?;
+                self.writer.write_string(300, &value.hatch_pattern)?;
+                self.writer.write_double(40, value.hatch_scale)?;
+                self.writer.write_i32(90, value.hatch_transparency)?;
+                self.writer.write_bool(290, value.reserved_flags[0])?;
+                self.writer.write_bool(290, value.reserved_flags[1])?;
+                self.writer
+                    .write_i32(90, value.hatch_angles.len() as i32)?;
+                for angle in &value.hatch_angles {
+                    self.writer.write_double(40, *angle)?;
+                }
+                Ok(())
+            }
+            Data::AcMeCommandHistory(_) => {
+                self.write_class_object_header(object, "AcMeCommandHistory")
+            }
+            Data::AcMeScope(_) => {
+                self.write_class_object_header(object, "AcMeScope")
+            }
+            Data::AcMeStateManager(_) => {
+                self.write_class_object_header(object, "AcMeStateMgr")
+            }
+            Data::CsacDocumentOptions(_) => {
+                self.write_class_object_header(object, "")
+            }
+            Data::ViewRepSourceManager(value) => {
+                self.write_class_object_header(
+                    object,
+                    "AcDbViewRepSourceMgr",
+                )?;
+                self.writer.write_bool(290, value.has_source)?;
+                self.writer.write_handle(350, value.source)?;
+                self.writer.write_i32(90, value.status)?;
+                Ok(())
+            }
+            Data::ViewRepStandard(value) => {
+                self.write_class_object_header(
+                    object,
+                    "AcDbViewRepStandard",
+                )?;
+                for item in value.values {
+                    self.writer.write_i32(90, item)?;
+                }
+                Ok(())
+            }
+            Data::ViewRepOrientationDefinition => {
+                self.write_class_object_header(
+                    object,
+                    "AcDbViewRepOrientationDef",
+                )
+            }
+            Data::ViewRepOrientation(value) => {
+                self.write_class_object_header(
+                    object,
+                    "AcDbViewRepOrientation",
+                )?;
+                self.writer.write_point3d(10, value.camera)?;
+                self.writer.write_point3d(10, value.target)?;
+                self.writer.write_point3d(210, value.normal)?;
+                Ok(())
+            }
+            Data::ViewRepSectionDefinition(value) => {
+                self.write_class_object_header(
+                    object,
+                    "AcDbViewRepCutDefinition",
+                )?;
+                self.writer
+                    .write_subclass("AcDbViewRepSectionDefinition")?;
+                self.writer.write_i32(90, value.version)?;
+                self.writer.write_double(40, value.section_depth)?;
+                self.writer.write_i32(90, value.flags[0])?;
+                self.writer.write_i32(90, value.flags[1])?;
+                Ok(())
+            }
+            Data::ViewRepModelSpaceViewSelectionSet(value) => {
+                self.write_class_object_header(
+                    object,
+                    "AcDbViewRepModelSpaceViewSelSet",
+                )?;
+                self.writer.write_i32(90, value.version)?;
+                self.writer.write_i32(90, value.entities.len() as i32)?;
+                for handle in &value.entities {
+                    self.writer.write_handle(330, *handle)?;
+                }
+                Ok(())
+            }
+        }
     }
 
     /// Find the root named-objects dictionary by scanning for a Dictionary
@@ -2754,30 +6105,66 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 self.writer.write_string(*code, value)?;
             }
         } else {
-            self.writer.write_string(1, "")?; // Page setup name
-            self.writer.write_string(2, "")?; // Printer/plotter name
-            self.writer.write_string(4, "")?; // Paper size
-            self.writer.write_string(6, "")?; // Plot view name
-            self.writer.write_double(40, 0.0)?; // Left margin
-            self.writer.write_double(41, 0.0)?; // Bottom margin
-            self.writer.write_double(42, 0.0)?; // Right margin
-            self.writer.write_double(43, 0.0)?; // Top margin
-            self.writer.write_double(44, 0.0)?; // Paper width
-            self.writer.write_double(45, 0.0)?; // Paper height
-            self.writer.write_double(46, 0.0)?; // Plot origin X
-            self.writer.write_double(47, 0.0)?; // Plot origin Y
-            self.writer.write_double(48, 0.0)?; // Plot window X1
-            self.writer.write_double(49, 0.0)?; // Plot window Y1
-            self.writer.write_double(140, 0.0)?; // Plot window X2
-            self.writer.write_double(141, 0.0)?; // Plot window Y2
-            self.writer.write_double(142, 1.0)?; // Numerator of custom print scale
-            self.writer.write_double(143, 1.0)?; // Denominator of custom print scale
-            // Bit 1024 (0x400) = Model type flag — required for Model layouts
-            let plot_flags: i16 = if layout.name == "Model" { 1024 } else { 0 };
-            self.writer.write_i16(70, plot_flags)?;
-            self.writer.write_i16(72, 0)?; // Plot paper units
-            self.writer.write_i16(73, 0)?; // Plot rotation
-            self.writer.write_i16(74, 0)?; // Plot type
+            self.writer
+                .write_string(1, &layout.plot_page_name)?;
+            self.writer
+                .write_string(2, &layout.plot_printer_name)?;
+            self.writer.write_string(4, &layout.paper_size)?;
+            self.writer
+                .write_string(6, &layout.plot_view_name)?;
+            self.writer
+                .write_string(7, &layout.plot_style_sheet)?;
+            self.writer
+                .write_double(40, layout.plot_margin_left)?;
+            self.writer
+                .write_double(41, layout.plot_margin_bottom)?;
+            self.writer
+                .write_double(42, layout.plot_margin_right)?;
+            self.writer
+                .write_double(43, layout.plot_margin_top)?;
+            self.writer.write_double(44, layout.paper_width)?;
+            self.writer.write_double(45, layout.paper_height)?;
+            self.writer
+                .write_double(46, layout.plot_origin_x)?;
+            self.writer
+                .write_double(47, layout.plot_origin_y)?;
+            self.writer
+                .write_double(48, layout.plot_window_min_x)?;
+            self.writer
+                .write_double(49, layout.plot_window_min_y)?;
+            self.writer
+                .write_double(140, layout.plot_window_max_x)?;
+            self.writer
+                .write_double(141, layout.plot_window_max_y)?;
+            self.writer
+                .write_double(142, layout.plot_scale_numerator)?;
+            self.writer
+                .write_double(143, layout.plot_scale_denominator)?;
+            self.writer
+                .write_double(147, layout.plot_scale_factor)?;
+            self.writer
+                .write_double(148, layout.paper_image_origin_x)?;
+            self.writer
+                .write_double(149, layout.paper_image_origin_y)?;
+            let mut plot_flags = layout.plot_flags.to_bits();
+            if layout.name == "Model" {
+                plot_flags |= 1024;
+            }
+            self.writer.write_i16(70, plot_flags as i16)?;
+            self.writer
+                .write_i16(72, layout.plot_paper_units)?;
+            self.writer.write_i16(73, layout.plot_rotation)?;
+            self.writer.write_i16(74, layout.plot_type)?;
+            self.writer.write_i16(75, layout.plot_scale_type)?;
+            self.writer
+                .write_i16(76, layout.shade_plot_mode)?;
+            self.writer
+                .write_i16(77, layout.shade_plot_resolution)?;
+            self.writer.write_i16(78, layout.shade_plot_dpi)?;
+            if !layout.visual_style_handle.is_null() {
+                self.writer
+                    .write_handle(333, layout.visual_style_handle)?;
+            }
         }
 
         self.writer.write_subclass("AcDbLayout")?;
@@ -2812,29 +6199,101 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         if layout.viewport != Handle::NULL {
             self.writer.write_handle(331, layout.viewport)?;
         }
+        if !layout.named_ucs.is_null() {
+            self.writer.write_handle(345, layout.named_ucs)?;
+        }
+        if !layout.base_ucs.is_null() {
+            self.writer.write_handle(346, layout.base_ucs)?;
+        }
 
         Ok(())
     }
 
-    fn write_xrecord(&mut self, xrecord: &XRecord) -> Result<()> {
+    fn write_xrecord(
+        &mut self,
+        xrecord: &XRecord,
+        document: &CadDocument,
+    ) -> Result<()> {
         use crate::objects::XRecordValue;
 
         self.writer.write_string(0, "XRECORD")?;
-        if xrecord.raw_dxf_version == Some(self.dxf_version) {
-            if let Some(raw_dxf_codes) = &xrecord.raw_dxf_codes {
-                for (code, value) in raw_dxf_codes {
-                    self.writer.write_string(*code, value)?;
-                }
-                return Ok(());
-            }
-        }
         self.writer.write_handle(5, xrecord.handle)?;
+        if !xrecord.reactors.is_empty() {
+            self.writer.write_string(102, "{ACAD_REACTORS")?;
+            for reactor in &xrecord.reactors {
+                self.writer.write_handle(330, *reactor)?;
+            }
+            self.writer.write_string(102, "}")?;
+        }
+        if let Some(xdictionary) = xrecord.xdictionary_handle {
+            self.writer.write_string(102, "{ACAD_XDICTIONARY")?;
+            self.writer.write_handle(360, xdictionary)?;
+            self.writer.write_string(102, "}")?;
+        }
         self.writer.write_handle(330, xrecord.owner)?;
         self.writer.write_subclass("AcDbXrecord")?;
         self.writer.write_byte(280, xrecord.cloning_flags.to_code() as u8)?;
 
+        let advanced_material_entries = match document.objects.get(&xrecord.owner) {
+            Some(ObjectType::Dictionary(dictionary))
+                if dictionary.entries.iter().any(|(name, handle)| {
+                    name.eq_ignore_ascii_case("ADVMATERIAL")
+                        && *handle == xrecord.handle
+                }) =>
+            {
+                document.objects.values().find_map(|object| match object {
+                    ObjectType::Material(material)
+                        if material.xdictionary_handle == Some(xrecord.owner)
+                            && material.has_advanced_data() =>
+                    {
+                        Some(vec![
+                            XRecordEntry::double(
+                                460,
+                                material.color_bleed_scale * 100.0,
+                            ),
+                            XRecordEntry::double(
+                                461,
+                                material.indirect_bump_scale * 100.0,
+                            ),
+                            XRecordEntry::double(
+                                462,
+                                material.reflectance_scale * 100.0,
+                            ),
+                            XRecordEntry::double(
+                                463,
+                                material.transmittance_scale * 100.0,
+                            ),
+                            XRecordEntry::bool(
+                                290,
+                                material.two_sided_material,
+                            ),
+                            XRecordEntry::int16(
+                                270,
+                                material.luminance_mode,
+                            ),
+                            XRecordEntry::double(464, material.luminance),
+                            XRecordEntry::bool(293, material.is_anonymous),
+                            XRecordEntry::int16(
+                                272,
+                                material.global_illumination,
+                            ),
+                            XRecordEntry::int16(
+                                273,
+                                material.final_gather,
+                            ),
+                        ])
+                    }
+                    _ => None,
+                })
+            }
+            _ => None,
+        };
+        let entries = advanced_material_entries
+            .as_deref()
+            .unwrap_or(&xrecord.entries);
+
         // Write each entry's group code and value
-        for entry in xrecord.iter() {
+        for entry in entries {
             match &entry.value {
                 XRecordValue::String(s) => {
                     self.writer.write_string(entry.code, s)?;
@@ -2849,14 +6308,13 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                     self.writer.write_i32(entry.code, *i)?;
                 }
                 XRecordValue::Int64(i) => {
-                    // Write as i32, truncating if needed (DXF doesn't have native i64 codes for all ranges)
-                    self.writer.write_i32(entry.code, *i as i32)?;
+                    self.writer.write_i64(entry.code, *i)?;
                 }
                 XRecordValue::Byte(b) => {
-                    self.writer.write_i16(entry.code, *b as i16)?;
+                    self.writer.write_byte(entry.code, *b)?;
                 }
                 XRecordValue::Bool(b) => {
-                    self.writer.write_i16(entry.code, if *b { 1 } else { 0 })?;
+                    self.writer.write_bool(entry.code, *b)?;
                 }
                 XRecordValue::Handle(h) => {
                     self.writer.write_handle(entry.code, *h)?;
@@ -2918,6 +6376,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // Fill color (code 62)
         let fill_color_index = match style.fill_color {
             Color::ByLayer => 256,
+            Color::None => 257,
             Color::ByBlock => 0,
             Color::Index(i) => i as i16,
             Color::Rgb { .. } => 256, // Fall back to ByLayer for RGB color
@@ -2941,6 +6400,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             // Element color (code 62)
             let elem_color_index = match element.color {
                 Color::ByLayer => 256,
+                Color::None => 257,
                 Color::ByBlock => 0,
                 Color::Index(i) => i as i16,
                 Color::Rgb { .. } => 256,
@@ -3004,6 +6464,19 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     fn write_plot_settings(&mut self, settings: &PlotSettings) -> Result<()> {
         self.writer.write_string(0, "PLOTSETTINGS")?;
         self.writer.write_handle(5, settings.handle)?;
+        if !settings.reactors.is_empty() {
+            self.writer.write_string(102, "{ACAD_REACTORS")?;
+            for reactor in &settings.reactors {
+                self.writer.write_handle(330, *reactor)?;
+            }
+            self.writer.write_string(102, "}")?;
+        }
+        if let Some(xdictionary) = settings.xdictionary_handle {
+            self.writer
+                .write_string(102, "{ACAD_XDICTIONARY")?;
+            self.writer.write_handle(360, xdictionary)?;
+            self.writer.write_string(102, "}")?;
+        }
         self.writer.write_handle(330, settings.owner)?;
         self.writer.write_subclass("AcDbPlotSettings")?;
 
@@ -3050,6 +6523,13 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_double(142, settings.scale_numerator)?;
         self.writer.write_double(143, settings.scale_denominator)?;
 
+        self.writer
+            .write_double(147, settings.standard_scale_factor)?;
+        self.writer
+            .write_double(148, settings.paper_image_origin_x)?;
+        self.writer
+            .write_double(149, settings.paper_image_origin_y)?;
+
         // Flags (code 70)
         self.writer.write_i16(70, settings.flags.to_bits() as i16)?;
 
@@ -3075,6 +6555,11 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
         // Shade plot custom DPI (code 78)
         self.writer.write_i16(78, settings.shade_plot_dpi)?;
+
+        if !settings.visual_style_handle.is_null() {
+            self.writer
+                .write_handle(333, settings.visual_style_handle)?;
+        }
 
         Ok(())
     }
@@ -3234,13 +6719,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_handle(330, style.owner_handle)?;
         self.writer.write_subclass("AcDbTableStyle")?;
 
-        // Version
-        self.writer.write_byte(280, style.version as u8)?;
-
-        // Description
-        if !style.description.is_empty() {
-            self.writer.write_string(3, &style.description)?;
-        }
+        self.writer.write_string(3, &style.name)?;
 
         // Flow direction
         self.writer.write_i16(70, style.flow_direction as i16)?;
@@ -3261,36 +6740,49 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_byte(281, style.header_suppressed as u8)?;
 
         // Write cell style info for data row
-        self.write_table_cell_style("DATA", &style.data_row_style)?;
-
-        // Write cell style info for header row
-        self.write_table_cell_style("HEADER", &style.header_row_style)?;
-
-        // Write cell style info for title row
-        self.write_table_cell_style("TITLE", &style.title_row_style)?;
+        self.write_table_cell_style(&style.data_row_style)?;
+        self.write_table_cell_style(&style.title_row_style)?;
+        self.write_table_cell_style(&style.header_row_style)?;
         self.write_annotative_xdata(style.annotative)?;
 
         Ok(())
     }
 
     /// Helper to write table cell style
-    fn write_table_cell_style(&mut self, name: &str, style: &crate::objects::RowCellStyle) -> Result<()> {
-        // Cell type indicator - simplified for basic support
+    fn write_table_cell_style(&mut self, style: &crate::objects::RowCellStyle) -> Result<()> {
         self.writer.write_string(7, &style.text_style_name)?;
         self.writer.write_double(140, style.text_height)?;
         self.writer.write_i16(170, style.alignment as i16)?;
-        
-        // Text color
         self.write_color_i16(62, style.text_color)?;
-
-        // Fill color
         self.write_color_i16(63, style.fill_color)?;
-
-        // Fill enabled
         self.writer.write_byte(283, style.fill_enabled as u8)?;
-
-        let _ = name; // Name is for future use in extended format
-        
+        self.writer.write_i32(90, style.data_type)?;
+        self.writer.write_i32(91, style.unit_type)?;
+        self.writer.write_string(1, &style.format_string)?;
+        for (index, border) in [
+            &style.top_border,
+            &style.horizontal_inside_border,
+            &style.bottom_border,
+            &style.left_border,
+            &style.vertical_inside_border,
+            &style.right_border,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            self.writer.write_i16(274 + index as i32, border.line_weight.as_i16())?;
+            self.writer.write_byte(284 + index as i32, (!border.is_invisible) as u8)?;
+            self.write_color_i16(64 + index as i32, border.color)?;
+            if let Some(rgb) = border.color.to_true_color_value() {
+                self.writer.write_i32(422 + index as i32, rgb)?;
+            }
+        }
+        if let Some(rgb) = style.text_color.to_true_color_value() {
+            self.writer.write_i32(420, rgb)?;
+        }
+        if let Some(rgb) = style.fill_color.to_true_color_value() {
+            self.writer.write_i32(421, rgb)?;
+        }
         Ok(())
     }
 
@@ -3339,6 +6831,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_handle(340, ctx.scale)?;
 
         match &ctx.kind {
+            ObjectContextKind::AnnotScale => {}
             ObjectContextKind::BlkRef { rotation, insertion, scale_factor } => {
                 self.writer.write_subclass("AcDbBlkRefObjectContextData")?;
                 self.writer.write_double(50, *rotation)?;
@@ -3431,9 +6924,142 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                     }
                 }
             }
+            ObjectContextKind::MLeader(context) => {
+                self.writer
+                    .write_subclass("AcDbMLeaderObjectContextData")?;
+                self.write_mleader_context_data(context)?;
+            }
+            ObjectContextKind::MTextAttribute(value) => {
+                self.writer.write_i16(70, value.horizontal_mode)?;
+                self.writer
+                    .write_double(50, value.rotation.to_degrees())?;
+                self.writer.write_point2d(10, value.insertion)?;
+                self.writer.write_point2d(11, value.alignment)?;
+                let has_context =
+                    value.enable_context && value.context.is_some();
+                self.writer.write_bool(290, has_context)?;
+                if let Some(context) = value.context.as_ref().filter(
+                    |_| has_context,
+                ) {
+                    self.writer.write_string(101, "Embedded Object")?;
+                    self.writer
+                        .write_subclass("AcDbObjectContextData")?;
+                    self.writer
+                        .write_i16(70, context.class_version)?;
+                    self.writer.write_bool(290, context.is_default)?;
+                    self.writer
+                        .write_subclass("AcDbAnnotScaleObjectContextData")?;
+                    self.writer.write_handle(340, context.scale)?;
+                    self.writer
+                        .write_i32(70, context.mtext.attachment)?;
+                    self.writer
+                        .write_point3d(10, context.mtext.x_axis_dir)?;
+                    self.writer
+                        .write_point3d(11, context.mtext.insertion)?;
+                    self.writer
+                        .write_double(40, context.mtext.rect_width)?;
+                    self.writer
+                        .write_double(41, context.mtext.rect_height)?;
+                    self.writer
+                        .write_double(42, context.mtext.extents_width)?;
+                    self.writer
+                        .write_double(43, context.mtext.extents_height)?;
+                    self.writer
+                        .write_i32(71, context.mtext.column_type)?;
+                    if context.mtext.column_type != 0 {
+                        if let Some(columns) = &context.mtext.columns {
+                            self.writer
+                                .write_i32(72, columns.num_heights)?;
+                            self.writer
+                                .write_double(44, columns.width)?;
+                            self.writer
+                                .write_double(45, columns.gutter)?;
+                            self.writer
+                                .write_bool(73, columns.auto_height)?;
+                            self.writer
+                                .write_bool(74, columns.flow_reversed)?;
+                            if !columns.auto_height
+                                && context.mtext.column_type == 2
+                            {
+                                for height in &columns.heights {
+                                    self.writer.write_double(46, *height)?;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            ObjectContextKind::Leader(value) => {
+                self.writer
+                    .write_subclass("AcDbLeaderObjectContextData")?;
+                self.writer.write_i32(70, value.points.len() as i32)?;
+                for point in &value.points {
+                    self.writer.write_point3d(10, *point)?;
+                }
+                self.writer.write_point3d(11, value.x_direction)?;
+                self.writer
+                    .write_bool(290, value.annotation_enabled)?;
+                self.writer
+                    .write_point3d(12, value.insertion_offset)?;
+                self.writer
+                    .write_point3d(13, value.endpoint_projection)?;
+            }
+            ObjectContextKind::Fcf {
+                location,
+                horizontal_direction,
+            } => {
+                self.writer
+                    .write_subclass("AcDbFcfObjectContextData")?;
+                self.writer.write_point3d(10, *location)?;
+                self.writer.write_point3d(11, *horizontal_direction)?;
+            }
+            ObjectContextKind::HatchScale(value) => {
+                self.write_hatch_scale_context_data(value)?;
+            }
+            ObjectContextKind::HatchView(value) => {
+                self.write_hatch_scale_context_data(&value.hatch)?;
+                self.writer
+                    .write_subclass("AcDbHatchViewContextData")?;
+                self.writer.write_handle(330, value.view)?;
+                self.writer.write_point3d(10, value.view_normal)?;
+                self.writer
+                    .write_double(51, value.view_rotation.to_degrees())?;
+                self.writer.write_bool(290, value.evaluate_hatch)?;
+            }
             ObjectContextKind::Opaque => {}
         }
 
+        Ok(())
+    }
+
+    fn write_hatch_scale_context_data(
+        &mut self,
+        value: &crate::objects::HatchScaleContext,
+    ) -> Result<()> {
+        self.writer
+            .write_subclass("AcDbHatchObjectContextData")?;
+        self.writer
+            .write_i16(78, value.pattern_lines.len() as i16)?;
+        for line in &value.pattern_lines {
+            self.writer.write_double(53, line.angle.to_degrees())?;
+            self.writer.write_double(43, line.base_point.x)?;
+            self.writer.write_double(44, line.base_point.y)?;
+            self.writer.write_double(45, line.offset.x)?;
+            self.writer.write_double(46, line.offset.y)?;
+            self.writer
+                .write_i16(79, line.dash_lengths.len() as i16)?;
+            for dash in &line.dash_lengths {
+                self.writer.write_double(49, *dash)?;
+            }
+        }
+        self.writer.write_double(40, value.pattern_scale)?;
+        self.writer.write_point3d(10, value.pattern_base)?;
+        self.writer
+            .write_i32(90, value.loop_types.len() as i32)?;
+        for loop_type in &value.loop_types {
+            self.writer.write_i32(90, *loop_type)?;
+        }
+        self.writer.write_bool(290, value.supports_context)?;
         Ok(())
     }
 
@@ -3500,45 +7126,464 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         Ok(())
     }
 
+    fn visual_style_core_properties(
+        obj: &VisualStyle,
+    ) -> Vec<VisualStyleProperty> {
+        let long = |value| VisualStyleProperty {
+            value: VisualStylePropertyValue::Long(value),
+            enabled: 1,
+        };
+        let double = |value| VisualStyleProperty {
+            value: VisualStylePropertyValue::Double(value),
+            enabled: 1,
+        };
+        let bool_value = |value| VisualStyleProperty {
+            value: VisualStylePropertyValue::Bool(value),
+            enabled: 1,
+        };
+        let color = |value| VisualStyleProperty {
+            value: VisualStylePropertyValue::Color(value),
+            enabled: 1,
+        };
+        let mut values = vec![
+            long(obj.face_lighting_model as i32),
+            long(obj.face_lighting_quality as i32),
+            long(obj.face_color_mode as i32),
+            long(obj.face_modifier),
+            double(0.6),
+            double(30.0),
+            color(Color::Index(7)),
+            long(obj.edge_model),
+            long(obj.edge_style),
+            color(Color::ByLayer),
+            color(Color::ByBlock),
+            long(1),
+            long(1),
+            double(1.0),
+            long(0),
+            color(Color::ByLayer),
+            double(1.0),
+            long(1),
+            long(6),
+            long(2),
+            color(Color::ByLayer),
+            long(5),
+            long(0),
+            long(0),
+            bool_value(false),
+            long(1),
+            double(0.0),
+            long(0),
+        ];
+        if obj.properties.len() >= 28 {
+            values.clone_from_slice(&obj.properties[..28]);
+        } else if obj.properties.len() == 24 {
+            for (legacy, modern) in [
+                (0, 4), (1, 5), (2, 6), (3, 9), (4, 10), (5, 11),
+                (6, 13), (7, 14), (8, 15), (9, 16), (10, 17),
+                (11, 18), (12, 19), (13, 20), (14, 21), (15, 22),
+                (16, 23), (17, 24), (19, 12), (20, 25), (21, 26),
+                (22, 27),
+            ] {
+                values[modern] = obj.properties[legacy].clone();
+            }
+        } else {
+            for (index, property) in obj.properties.iter().take(28).enumerate() {
+                values[index] = property.clone();
+            }
+        }
+        values[0].value =
+            VisualStylePropertyValue::Long(obj.face_lighting_model as i32);
+        values[1].value =
+            VisualStylePropertyValue::Long(obj.face_lighting_quality as i32);
+        values[2].value =
+            VisualStylePropertyValue::Long(obj.face_color_mode as i32);
+        values[3].value = VisualStylePropertyValue::Long(obj.face_modifier);
+        values[7].value = VisualStylePropertyValue::Long(obj.edge_model);
+        values[8].value = VisualStylePropertyValue::Long(obj.edge_style);
+        values
+    }
+
+    fn visual_style_extended_properties(
+        obj: &VisualStyle,
+    ) -> Vec<VisualStyleProperty> {
+        if obj.properties.len() >= 58 {
+            return obj.properties[28..58].to_vec();
+        }
+        let long = |value| VisualStyleProperty {
+            value: VisualStylePropertyValue::Long(value),
+            enabled: 1,
+        };
+        let double = |value| VisualStyleProperty {
+            value: VisualStylePropertyValue::Double(value),
+            enabled: 1,
+        };
+        let bool_value = |value| VisualStyleProperty {
+            value: VisualStylePropertyValue::Bool(value),
+            enabled: 1,
+        };
+        let color = |value, enabled| VisualStyleProperty {
+            value: VisualStylePropertyValue::Color(value),
+            enabled,
+        };
+        let text = |value: &str| VisualStyleProperty {
+            value: VisualStylePropertyValue::Text(value.to_string()),
+            enabled: 1,
+        };
+        vec![
+            bool_value(false),
+            bool_value(true),
+            bool_value(true),
+            bool_value(false),
+            bool_value(false),
+            bool_value(false),
+            bool_value(false),
+            bool_value(false),
+            bool_value(false),
+            long(50),
+            double(0.0),
+            double(1.0),
+            long(0),
+            color(Color::Rgb { r: 0, g: 0, b: 0 }, 1),
+            long(50),
+            long(3),
+            color(Color::Index(5), 1),
+            bool_value(false),
+            long(50),
+            long(50),
+            long(50),
+            bool_value(false),
+            long(50),
+            color(Color::ByLayer, 0),
+            VisualStyleProperty {
+                value: VisualStylePropertyValue::Double(1.0),
+                enabled: 0,
+            },
+            long(2),
+            text("strokes_ogs.tif"),
+            bool_value(false),
+            double(1.0),
+            double(1.0),
+        ]
+    }
+
+    fn visual_style_legacy_properties(
+        obj: &VisualStyle,
+    ) -> Vec<VisualStyleProperty> {
+        if obj.properties.len() == 24 {
+            return obj.properties.clone();
+        }
+        let core = Self::visual_style_core_properties(obj);
+        let short = |value| VisualStyleProperty {
+            value: VisualStylePropertyValue::Short(value),
+            enabled: 1,
+        };
+        let double = |value| VisualStyleProperty {
+            value: VisualStylePropertyValue::Double(value),
+            enabled: 1,
+        };
+        vec![
+            core[4].clone(),
+            core[5].clone(),
+            core[6].clone(),
+            core[9].clone(),
+            core[10].clone(),
+            core[11].clone(),
+            core[13].clone(),
+            core[14].clone(),
+            core[15].clone(),
+            core[16].clone(),
+            core[17].clone(),
+            core[18].clone(),
+            core[19].clone(),
+            core[20].clone(),
+            core[21].clone(),
+            core[22].clone(),
+            core[23].clone(),
+            core[24].clone(),
+            short(0),
+            core[12].clone(),
+            core[25].clone(),
+            core[26].clone(),
+            core[27].clone(),
+            double(0.0),
+        ]
+    }
+
     /// Write a VISUALSTYLE object
     fn write_visualstyle(&mut self, obj: &VisualStyle) -> Result<()> {
         self.writer.write_string(0, "VISUALSTYLE")?;
-        if let Some(raw_dxf_codes) = &obj.raw_dxf_codes {
-            for (code, value) in raw_dxf_codes {
-                self.writer.write_string(*code, value)?;
-            }
-            return Ok(());
-        }
         self.writer.write_handle(5, obj.handle)?;
+        if !obj.reactors.is_empty() {
+            self.writer.write_string(102, "{ACAD_REACTORS")?;
+            for reactor in &obj.reactors {
+                self.writer.write_handle(330, *reactor)?;
+            }
+            self.writer.write_string(102, "}")?;
+        }
+        if let Some(xdictionary) = obj.xdictionary_handle {
+            self.writer.write_string(102, "{ACAD_XDICTIONARY")?;
+            self.writer.write_handle(360, xdictionary)?;
+            self.writer.write_string(102, "}")?;
+        }
         self.writer.write_handle(330, obj.owner)?;
         self.writer.write_subclass("AcDbVisualStyle")?;
         self.writer.write_string(2, &obj.description)?;
         self.writer.write_i16(70, obj.style_type)?;
-        self.writer.write_i16(71, obj.face_lighting_model)?;
-        self.writer.write_i16(72, obj.face_lighting_quality)?;
-        self.writer.write_i16(73, obj.face_color_mode)?;
-        self.writer.write_i32(90, obj.face_modifier)?;
-        self.writer.write_i32(91, obj.edge_model)?;
-        self.writer.write_i32(92, obj.edge_style)?;
-        self.writer.write_bool(291, obj.internal_use_only)?;
+        if self.dxf_version >= DxfVersion::AC1027 {
+            let mut properties = Self::visual_style_core_properties(obj);
+            properties.extend(Self::visual_style_extended_properties(obj));
+            self.writer
+                .write_i16(177, obj.extended_lighting_model)?;
+            self.writer.write_bool(291, obj.internal_use_only)?;
+            self.writer.write_i16(
+                70,
+                properties.len().min(i16::MAX as usize) as i16,
+            )?;
+            for property in properties.iter().take(i16::MAX as usize) {
+                self.write_visual_style_dxf_property(property, None, true)?;
+            }
+        } else if self.dxf_version >= DxfVersion::AC1024 {
+            let properties = Self::visual_style_core_properties(obj);
+            self.writer
+                .write_i16(177, obj.extended_lighting_model)?;
+            self.writer.write_bool(291, obj.internal_use_only)?;
+            let codes = [
+                71, 72, 73, 90, 40, 41, 63, 74, 91, 64, 65, 75, 175,
+                42, 92, 66, 43, 76, 77, 78, 67, 79, 170, 171, 290, 93,
+                44, 173,
+            ];
+            for (property, code) in properties.iter().zip(codes) {
+                self.write_visual_style_dxf_property(
+                    property,
+                    Some(code),
+                    true,
+                )?;
+            }
+        } else {
+            self.writer.write_i16(71, obj.face_lighting_model)?;
+            self.writer.write_i16(72, obj.face_lighting_quality)?;
+            self.writer.write_i16(73, obj.face_color_mode)?;
+            self.writer.write_i32(90, obj.face_modifier)?;
+            self.writer.write_i32(74, obj.edge_model)?;
+            self.writer.write_i32(91, obj.edge_style)?;
+            let properties = Self::visual_style_legacy_properties(obj);
+            let codes = [
+                40, 41, 63, 64, 65, 75, 42, 92, 66, 43, 76, 77, 78,
+                67, 79, 170, 171, 290, 174, 175, 93, 44, 173, 45,
+            ];
+            for (property, code) in properties.iter().zip(codes) {
+                self.write_visual_style_dxf_property(
+                    property,
+                    Some(code),
+                    false,
+                )?;
+            }
+            self.writer.write_bool(291, obj.internal_use_only)?;
+        }
+        Ok(())
+    }
+
+    fn write_visual_style_dxf_property(
+        &mut self,
+        property: &VisualStyleProperty,
+        code: Option<i32>,
+        write_enabled: bool,
+    ) -> Result<()> {
+        match &property.value {
+            VisualStylePropertyValue::Short(value) => {
+                let code = code.unwrap_or(90);
+                if (60..=79).contains(&code)
+                    || (170..=179).contains(&code)
+                    || (270..=289).contains(&code)
+                {
+                    self.writer.write_i16(code, *value)?;
+                } else {
+                    self.writer.write_i32(code, *value as i32)?;
+                }
+            }
+            VisualStylePropertyValue::Long(value) => {
+                let code = code.unwrap_or(90);
+                if (60..=79).contains(&code)
+                    || (170..=179).contains(&code)
+                    || (270..=289).contains(&code)
+                {
+                    self.writer.write_i16(code, *value as i16)?;
+                } else {
+                    self.writer.write_i32(code, *value)?;
+                }
+            }
+            VisualStylePropertyValue::Double(value) => {
+                self.writer.write_double(code.unwrap_or(40), *value)?;
+            }
+            VisualStylePropertyValue::Bool(value) => {
+                self.writer.write_bool(code.unwrap_or(290), *value)?;
+            }
+            VisualStylePropertyValue::Color(value) => {
+                self.writer
+                    .write_color(code.unwrap_or(62), value.clone())?;
+                if let Some(true_color) = value.to_true_color_value() {
+                    self.writer.write_i32(420, true_color)?;
+                }
+            }
+            VisualStylePropertyValue::Text(value) => {
+                self.writer.write_string(code.unwrap_or(1), value)?;
+            }
+        }
+        if write_enabled {
+            self.writer.write_i16(176, property.enabled)?;
+        }
         Ok(())
     }
 
     /// Write a MATERIAL object
     fn write_material(&mut self, obj: &Material) -> Result<()> {
         self.writer.write_string(0, "MATERIAL")?;
-        if let Some(raw_dxf_codes) = &obj.raw_dxf_codes {
-            for (code, value) in raw_dxf_codes {
-                self.writer.write_string(*code, value)?;
-            }
-            return Ok(());
-        }
         self.writer.write_handle(5, obj.handle)?;
+        if !obj.reactors.is_empty() {
+            self.writer.write_string(102, "{ACAD_REACTORS")?;
+            for reactor in &obj.reactors {
+                self.writer.write_handle(330, *reactor)?;
+            }
+            self.writer.write_string(102, "}")?;
+        }
+        if let Some(xdictionary) = obj.xdictionary_handle {
+            self.writer.write_string(102, "{ACAD_XDICTIONARY")?;
+            self.writer.write_handle(360, xdictionary)?;
+            self.writer.write_string(102, "}")?;
+        }
         self.writer.write_handle(330, obj.owner)?;
         self.writer.write_subclass("AcDbMaterial")?;
         self.writer.write_string(1, &obj.name)?;
         if !obj.description.is_empty() {
             self.writer.write_string(2, &obj.description)?;
+        }
+        self.write_material_dxf_color(&obj.ambient_color, 70, 40, 90)?;
+        self.write_material_dxf_color(&obj.diffuse_color, 71, 41, 91)?;
+        self.write_material_dxf_map(&obj.diffuse_map, 42, 72, 3, 73, 74, 75, 43)?;
+        self.write_material_dxf_color(&obj.specular_color, 76, 45, 92)?;
+        self.writer.write_double(44, obj.specular_gloss_factor)?;
+        self.write_material_dxf_map(&obj.specular_map, 46, 77, 4, 78, 79, 170, 47)?;
+        self.write_material_dxf_map(&obj.reflection_map, 48, 171, 6, 172, 173, 174, 49)?;
+        self.writer.write_double(140, obj.opacity_percent)?;
+        self.write_material_dxf_map(&obj.opacity_map, 141, 175, 7, 176, 177, 178, 142)?;
+        self.write_material_dxf_map(&obj.bump_map, 143, 179, 8, 270, 271, 272, 144)?;
+        self.writer.write_double(145, obj.refraction_index)?;
+        self.write_material_dxf_map(&obj.refraction_map, 146, 273, 9, 274, 275, 276, 147)?;
+        self.writer.write_double(148, obj.translucence)?;
+        self.writer.write_i32(90, obj.self_illumination.round() as i32)?;
+        self.writer.write_double(149, obj.self_illumination)?;
+        self.writer.write_double(468, obj.reflectivity)?;
+        self.writer.write_i32(93, obj.illumination_model)?;
+        self.writer.write_i32(94, obj.channel_flags)?;
+        self.writer.write_i16(282, obj.mode as i16)?;
+        if obj.has_advanced_data() {
+            self.writer.write_double(460, obj.color_bleed_scale)?;
+            self.writer.write_double(461, obj.indirect_bump_scale)?;
+            self.writer.write_double(462, obj.reflectance_scale)?;
+            self.writer.write_double(463, obj.transmittance_scale)?;
+            self.writer.write_bool(290, obj.two_sided_material)?;
+            self.writer.write_double(464, obj.luminance)?;
+            self.writer.write_i16(270, obj.luminance_mode)?;
+            self.writer.write_i16(271, obj.normal_map_method)?;
+            self.writer.write_double(465, obj.normal_map_strength)?;
+            self.write_material_dxf_map(&obj.normal_map, 42, 72, 3, 73, 74, 75, 43)?;
+            self.writer.write_bool(293, obj.is_anonymous)?;
+            self.writer.write_i16(272, obj.global_illumination)?;
+            self.writer.write_i16(273, obj.final_gather)?;
+        }
+        Ok(())
+    }
+
+    fn write_material_dxf_color(
+        &mut self,
+        value: &MaterialColor,
+        flag_code: i32,
+        factor_code: i32,
+        rgb_code: i32,
+    ) -> Result<()> {
+        self.writer.write_i16(flag_code, value.flag as i16)?;
+        self.writer.write_double(factor_code, value.factor)?;
+        if value.flag == 1 {
+            self.writer.write_i32(rgb_code, value.rgb.unwrap_or_default())?;
+        }
+        Ok(())
+    }
+
+    fn write_material_dxf_texture(&mut self, value: &MaterialTexture) -> Result<()> {
+        self.writer.write_i16(277, value.mode)?;
+        match value.mode {
+            0 => {
+                self.write_material_dxf_color(&value.color1, 278, 460, 95)?;
+                self.write_material_dxf_color(&value.color2, 279, 461, 96)?;
+            }
+            1 => {
+                self.write_material_dxf_color(&value.color1, 280, 465, 97)?;
+                self.write_material_dxf_color(&value.color2, 281, 466, 98)?;
+            }
+            2 => {
+                match &value.procedural {
+                    Some(MaterialProceduralValue::Bool(item)) => {
+                        self.writer.write_bool(291, *item)?;
+                    }
+                    Some(MaterialProceduralValue::Integer(item)) => {
+                        self.writer.write_i16(271, *item)?;
+                    }
+                    Some(MaterialProceduralValue::Real(item)) => {
+                        self.writer.write_double(469, *item)?;
+                    }
+                    Some(MaterialProceduralValue::Color(item)) => {
+                        self.writer.write_color(62, item.clone())?;
+                        if let Some(true_color) = item.to_true_color_value() {
+                            self.writer.write_i32(420, true_color)?;
+                        }
+                    }
+                    Some(MaterialProceduralValue::Text(item)) => {
+                        self.writer.write_string(301, item)?;
+                    }
+                    Some(MaterialProceduralValue::Table(items)) => {
+                        for (name, texture) in items.iter().take(i16::MAX as usize) {
+                            self.writer.write_string(300, name)?;
+                            self.write_material_dxf_texture(texture)?;
+                        }
+                        self.writer.write_bool(292, value.table_end)?;
+                    }
+                    None => {}
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn write_material_dxf_map(
+        &mut self,
+        value: &MaterialMap,
+        blend_code: i32,
+        source_code: i32,
+        file_code: i32,
+        projection_code: i32,
+        tiling_code: i32,
+        auto_transform_code: i32,
+        matrix_code: i32,
+    ) -> Result<()> {
+        self.writer.write_double(blend_code, value.blend_factor)?;
+        self.writer.write_i16(projection_code, value.projection as i16)?;
+        self.writer.write_i16(tiling_code, value.tiling as i16)?;
+        self.writer
+            .write_i16(auto_transform_code, value.auto_transform as i16)?;
+        for item in value.transform {
+            self.writer.write_double(matrix_code, item)?;
+        }
+        self.writer.write_i16(source_code, value.source as i16)?;
+        if value.source == 1 {
+            self.writer.write_string(file_code, &value.file_name)?;
+        } else if value.source == 2 {
+            if let Some(texture) = &value.texture {
+                self.write_material_dxf_texture(texture)?;
+            } else {
+                self.write_material_dxf_texture(&MaterialTexture::default())?;
+            }
         }
         Ok(())
     }
@@ -3551,6 +7596,333 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_subclass("AcDbRasterImageDefReactor")?;
         self.writer.write_i32(90, 2)?; // class version
         self.writer.write_handle(330, obj.image_handle)?;
+        Ok(())
+    }
+
+    fn write_geodata(&mut self, obj: &GeoData) -> Result<()> {
+        self.writer.write_string(0, "GEODATA")?;
+        self.writer.write_handle(5, obj.handle)?;
+        if !obj.reactors.is_empty() {
+            self.writer.write_string(102, "{ACAD_REACTORS")?;
+            for reactor in &obj.reactors {
+                self.writer.write_handle(330, *reactor)?;
+            }
+            self.writer.write_string(102, "}")?;
+        }
+        if let Some(xdictionary) = obj.xdictionary_handle {
+            self.writer.write_string(102, "{ACAD_XDICTIONARY")?;
+            self.writer.write_handle(360, xdictionary)?;
+            self.writer.write_string(102, "}")?;
+        }
+        self.writer.write_handle(330, obj.owner)?;
+        self.writer.write_subclass("AcDbGeoData")?;
+        self.writer.write_i32(90, obj.version)?;
+        self.writer.write_handle(330, obj.host_block)?;
+        self.writer.write_i16(70, obj.coordinate_type)?;
+        self.writer.write_point3d(10, obj.design_point)?;
+        self.writer.write_point3d(11, obj.reference_point)?;
+        self.writer.write_point2d(12, obj.north_direction)?;
+        self.writer.write_double(40, obj.horizontal_unit_scale)?;
+        self.writer.write_double(41, obj.vertical_unit_scale)?;
+        self.writer.write_i32(91, obj.horizontal_units)?;
+        self.writer.write_i32(92, obj.vertical_units)?;
+        self.writer.write_point3d(210, obj.up_direction)?;
+        self.writer
+            .write_i32(95, obj.scale_estimation_method)?;
+        self.writer
+            .write_double(141, obj.user_scale_factor)?;
+        self.writer
+            .write_bool(294, obj.sea_level_correction)?;
+        self.writer
+            .write_double(142, obj.sea_level_elevation)?;
+        self.writer
+            .write_double(143, obj.coordinate_projection_radius)?;
+        self.writer
+            .write_string(301, &obj.coordinate_system_definition)?;
+        if obj.version == 1 {
+            self.writer
+                .write_string(303, &obj.coordinate_system_datum)?;
+            self.writer.write_string(304, &obj.coordinate_system_wkt)?;
+        }
+        self.writer.write_string(302, &obj.geo_rss_tag)?;
+        self.writer
+            .write_string(305, &obj.observation_from_tag)?;
+        self.writer.write_string(306, &obj.observation_to_tag)?;
+        self.writer
+            .write_string(307, &obj.observation_coverage_tag)?;
+        self.writer
+            .write_i32(93, obj.mesh_points.len() as i32)?;
+        for point in &obj.mesh_points {
+            self.writer.write_point2d(13, point.source)?;
+            self.writer.write_point2d(14, point.destination)?;
+        }
+        self.writer
+            .write_i32(96, obj.mesh_faces.len() as i32)?;
+        for face in &obj.mesh_faces {
+            self.writer.write_i32(97, face.first)?;
+            self.writer.write_i32(98, face.second)?;
+            self.writer.write_i32(99, face.third)?;
+        }
+        if obj.version == 1 {
+            self.writer.write_string(3, "CIVIL3D_DATA_BEGIN")?;
+            self.writer.write_bool(292, obj.civil_obsolete_flag)?;
+            self.writer
+                .write_point2d(14, obj.civil_reference_point1)?;
+            self.writer
+                .write_point2d(15, obj.civil_reference_point2)?;
+            self.writer.write_i32(93, obj.civil_unknown1)?;
+            self.writer.write_i32(94, obj.civil_unknown2)?;
+            self.writer.write_bool(293, obj.civil_unknown_flag1)?;
+            self.writer.write_point2d(16, obj.civil_zero_point1)?;
+            self.writer.write_point2d(17, obj.civil_zero_point2)?;
+            self.writer
+                .write_double(54, obj.civil_north_angle_degrees)?;
+            self.writer
+                .write_double(140, obj.civil_north_angle_radians)?;
+            self.writer
+                .write_i32(95, obj.scale_estimation_method)?;
+            self.writer
+                .write_double(141, obj.user_scale_factor)?;
+            self.writer
+                .write_bool(294, obj.sea_level_correction)?;
+            self.writer
+                .write_double(142, obj.sea_level_elevation)?;
+            self.writer
+                .write_double(143, obj.coordinate_projection_radius)?;
+            self.writer.write_string(4, "CIVIL3D_DATA_END")?;
+        }
+        Ok(())
+    }
+
+    fn write_data_object_header(
+        &mut self,
+        obj: &DataObject,
+        subclass: &str,
+    ) -> Result<()> {
+        self.writer.write_string(0, obj.dxf_name())?;
+        self.writer.write_handle(5, obj.handle)?;
+        if !obj.reactors.is_empty() {
+            self.writer.write_string(102, "{ACAD_REACTORS")?;
+            for reactor in &obj.reactors {
+                self.writer.write_handle(330, *reactor)?;
+            }
+            self.writer.write_string(102, "}")?;
+        }
+        if let Some(xdictionary) = obj.xdictionary_handle {
+            self.writer.write_string(102, "{ACAD_XDICTIONARY")?;
+            self.writer.write_handle(360, xdictionary)?;
+            self.writer.write_string(102, "}")?;
+        }
+        self.writer.write_handle(330, obj.owner)?;
+        if !subclass.is_empty() {
+            self.writer.write_subclass(subclass)?;
+        }
+        Ok(())
+    }
+
+    fn write_data_object_dxf(&mut self, obj: &DataObject) -> Result<()> {
+        match &obj.data {
+            DataObjectData::BreakData(value) => {
+                self.write_data_object_header(obj, "AcDbBreakData")?;
+                self.writer.write_i16(70, value.version)?;
+                self.writer
+                    .write_handle(330, value.dimension_reference)?;
+                self.writer
+                    .write_i32(90, value.point_references.len() as i32)?;
+                for reference in &value.point_references {
+                    self.writer.write_subclass("AcDbBreakPointRef")?;
+                    self.writer
+                        .write_i32(71, reference.reference_type)?;
+                    self.writer.write_i16(72, reference.flags)?;
+                    self.writer.write_i32(91, reference.identifier)?;
+                    self.writer.write_point3d(10, reference.first_point)?;
+                    self.writer.write_point3d(11, reference.second_point)?;
+                }
+            }
+            DataObjectData::BreakPointRef => {
+                self.write_data_object_header(obj, "AcDbBreakPointRef")?;
+            }
+            DataObjectData::CellStyleMap(value) => {
+                self.write_data_object_header(obj, "AcDbCellStyleMap")?;
+                self.writer.write_i32(90, value.cells.len() as i32)?;
+                for cell in &value.cells {
+                    self.write_named_table_cell_style_dxf(cell)?;
+                }
+            }
+            DataObjectData::AcDsRecord => {
+                self.write_data_object_header(obj, "AcDsRecord")?;
+            }
+            DataObjectData::AcDsSchema => {
+                self.write_data_object_header(obj, "AcDsSchema")?;
+            }
+            DataObjectData::Dummy => {
+                self.write_data_object_header(obj, "")?;
+            }
+            DataObjectData::IdBuffer(value) => {
+                self.write_data_object_header(obj, "AcDbIdBuffer")?;
+                for handle in &value.object_ids {
+                    self.writer.write_handle(330, *handle)?;
+                }
+            }
+            DataObjectData::Index(value) => {
+                self.write_data_object_header(obj, "AcDbIndex")?;
+                let timestamp = value.last_updated_julian_day as f64
+                    + value.last_updated_milliseconds as f64 / 86_400_000.0;
+                self.writer.write_double(40, timestamp)?;
+            }
+            DataObjectData::LayerIndex(value) => {
+                self.write_data_object_header(obj, "AcDbIndex")?;
+                let timestamp = value.last_updated_julian_day as f64
+                    + value.last_updated_milliseconds as f64 / 86_400_000.0;
+                self.writer.write_double(40, timestamp)?;
+                self.writer.write_subclass("AcDbLayerIndex")?;
+                self.writer.write_i32(90, 0)?;
+                for entry in &value.entries {
+                    self.writer.write_string(8, &entry.name)?;
+                    self.writer.write_handle(360, entry.id_buffer)?;
+                    self.writer.write_i32(90, entry.layer_count)?;
+                }
+            }
+            DataObjectData::PartialViewingFilter(_) => {
+                self.write_data_object_header(obj, "AcDbFilter")?;
+            }
+            DataObjectData::LongTransaction => {
+                self.write_data_object_header(obj, "AcDbLongTransaction")?;
+            }
+            DataObjectData::ObjectPointer => {
+                self.write_data_object_header(obj, "CAseDLPNTableRecord")?;
+            }
+            DataObjectData::TableGeometry(value) => {
+                self.write_data_object_header(obj, "AcDbTableGeometry")?;
+                self.writer.write_i32(90, value.rows)?;
+                self.writer.write_i32(91, value.columns)?;
+                self.writer.write_i32(92, value.cells.len() as i32)?;
+                for cell in &value.cells {
+                    self.writer.write_i32(93, cell.geometry_data_flag)?;
+                    self.writer.write_double(40, cell.width_with_gap)?;
+                    self.writer.write_double(41, cell.height_with_gap)?;
+                    self.writer.write_handle(330, cell.table_geometry)?;
+                    self.writer
+                        .write_i32(94, cell.geometry.len() as i32)?;
+                    for geometry in &cell.geometry {
+                        self.writer.write_point3d(
+                            10,
+                            geometry.distance_to_top_left,
+                        )?;
+                        self.writer.write_point3d(
+                            11,
+                            geometry.content_extent,
+                        )?;
+                        self.writer.write_double(43, geometry.width)?;
+                        self.writer.write_double(44, geometry.height)?;
+                        self.writer
+                            .write_double(45, geometry.unknown_double1)?;
+                        self.writer
+                            .write_double(46, geometry.unknown_double2)?;
+                        self.writer.write_i32(95, geometry.flags)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn write_named_table_cell_style_dxf(
+        &mut self,
+        value: &crate::objects::NamedTableCellStyle,
+    ) -> Result<()> {
+        self.writer.write_string(300, "CELLSTYLE")?;
+        self.write_table_cell_style_data_dxf(&value.cell_style)?;
+        self.writer.write_string(1, "CELLSTYLE_BEGIN")?;
+        self.writer.write_i32(90, value.id)?;
+        self.writer.write_i32(91, value.style_type)?;
+        self.writer.write_string(300, &value.name)?;
+        self.writer.write_string(309, "CELLSTYLE_END")?;
+        Ok(())
+    }
+
+    fn write_table_cell_style_data_dxf(
+        &mut self,
+        value: &crate::objects::TableCellStyleData,
+    ) -> Result<()> {
+        self.writer.write_string(1, "TABLEFORMAT_BEGIN")?;
+        self.writer.write_i32(90, value.style_type)?;
+        self.writer.write_i16(170, value.data_flags)?;
+        if value.data_flags != 0 {
+            self.writer
+                .write_i32(91, value.property_override_flags)?;
+            self.writer.write_i32(92, value.merge_flags)?;
+            self.writer.write_color(62, value.background_color)?;
+            if let Some(rgb) = value.background_color.to_true_color_value() {
+                self.writer.write_i32(420, rgb)?;
+            }
+            self.writer.write_i32(93, value.content_layout)?;
+            let format = &value.content_format;
+            self.writer.write_string(300, "CONTENTFORMAT")?;
+            self.writer.write_string(1, "CONTENTFORMAT_BEGIN")?;
+            self.writer
+                .write_i32(90, format.property_override_flags)?;
+            self.writer.write_i32(91, format.property_flags)?;
+            self.writer.write_i32(92, format.value_data_type)?;
+            self.writer.write_i32(93, format.value_unit_type)?;
+            self.writer
+                .write_string(300, &format.value_format_string)?;
+            self.writer.write_double(40, format.rotation)?;
+            self.writer.write_double(140, format.block_scale)?;
+            self.writer.write_i32(94, format.cell_alignment)?;
+            self.writer.write_color(62, format.content_color)?;
+            if let Some(rgb) = format.content_color.to_true_color_value() {
+                self.writer.write_i32(420, rgb)?;
+            }
+            self.writer.write_handle(340, format.text_style)?;
+            self.writer.write_double(144, format.text_height)?;
+            self.writer.write_string(309, "CONTENTFORMAT_END")?;
+            self.writer
+                .write_i16(171, value.margin_override_flags)?;
+            if value.margin_override_flags != 0 {
+                self.writer.write_string(301, "MARGIN")?;
+                self.writer.write_string(1, "CELLMARGIN_BEGIN")?;
+                self.writer.write_double(40, value.vertical_margin)?;
+                self.writer.write_double(40, value.horizontal_margin)?;
+                self.writer.write_double(40, value.bottom_margin)?;
+                self.writer.write_double(40, value.right_margin)?;
+                self.writer.write_double(40, value.horizontal_spacing)?;
+                self.writer.write_double(40, value.vertical_spacing)?;
+                self.writer.write_string(309, "CELLMARGIN_END")?;
+            }
+            self.writer
+                .write_i32(94, value.borders.len().min(6) as i32)?;
+            for grid in value.borders.iter().take(6) {
+                if grid.index_mask != 0 {
+                    self.writer.write_i32(95, grid.index_mask)?;
+                    self.writer.write_string(302, "GRIDFORMAT")?;
+                    self.writer.write_string(1, "GRIDFORMAT_BEGIN")?;
+                    self.writer
+                        .write_i32(90, grid.border.property_flags.bits())?;
+                    self.writer
+                        .write_i32(91, grid.border.border_type as i32)?;
+                    self.writer.write_color(62, grid.border.color)?;
+                    if let Some(rgb) = grid.border.color.to_true_color_value() {
+                        self.writer.write_i32(420, rgb)?;
+                    }
+                    self.writer.write_i32(
+                        92,
+                        grid.border.line_weight.as_i16() as i32,
+                    )?;
+                    self.writer.write_handle(340, grid.line_type)?;
+                    self.writer.write_i32(
+                        93,
+                        (!grid.border.is_invisible) as i32,
+                    )?;
+                    self.writer.write_double(
+                        40,
+                        grid.border.double_line_spacing,
+                    )?;
+                }
+                self.writer.write_string(309, "GRIDFORMAT_END")?;
+            }
+        }
+        self.writer.write_string(309, "TABLEFORMAT_END")?;
         Ok(())
     }
 
@@ -3655,6 +8027,83 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         Ok(())
     }
 
+    fn write_block_visibility_parameter(
+        &mut self,
+        obj: &BlockVisibilityParameter,
+    ) -> Result<()> {
+        self.writer
+            .write_string(0, "BLOCKVISIBILITYPARAMETER")?;
+        self.writer.write_handle(5, obj.handle)?;
+        self.writer.write_handle(330, obj.owner)?;
+        self.writer.write_subclass("AcDbEvalExpr")?;
+        self.writer.write_i32(90, obj.eval_node_id)?;
+        self.writer.write_i32(98, obj.eval_major)?;
+        self.writer.write_i32(99, obj.eval_minor)?;
+        self.writer.write_i16(70, obj.eval_value_code)?;
+        match &obj.eval_value {
+            BlockEvalValue::Real(v) => self.writer.write_double(40, *v)?,
+            BlockEvalValue::Point(v) => {
+                self.writer.write_double(10, v[0])?;
+                self.writer.write_double(20, v[1])?;
+            }
+            BlockEvalValue::Text(v) => self.writer.write_string(1, v)?,
+            BlockEvalValue::Long(v) => self.writer.write_i32(90, *v)?,
+            BlockEvalValue::Handle(v) => self.writer.write_handle(91, *v)?,
+            BlockEvalValue::Short(v) => self.writer.write_i16(70, *v)?,
+            BlockEvalValue::None => {}
+        }
+        self.writer.write_subclass("AcDbBlockElement")?;
+        self.writer.write_string(300, &obj.element_name)?;
+        self.writer.write_i32(98, obj.element_major)?;
+        self.writer.write_i32(99, obj.element_minor)?;
+        self.writer.write_i32(1071, obj.element_eed_1071)?;
+        self.writer.write_subclass("AcDbBlockParameter")?;
+        self.writer.write_bool(280, obj.show_properties)?;
+        self.writer.write_bool(281, obj.chain_actions)?;
+        self.writer.write_subclass("AcDbBlock1PtParameter")?;
+        self.writer.write_double(1010, obj.def_point.x)?;
+        self.writer.write_double(1020, obj.def_point.y)?;
+        self.writer.write_double(1030, obj.def_point.z)?;
+        self.writer.write_i32(93, obj.property_info_count)?;
+        for (index, property) in obj.property_info.iter().enumerate() {
+            let count_code = 170 + index as i32;
+            let value_code = 91 + index as i32;
+            let name_code = 301 + index as i32;
+            self.writer
+                .write_i32(count_code, property.connections.len() as i32)?;
+            for connection in &property.connections {
+                self.writer.write_i32(value_code, connection.code)?;
+                self.writer.write_string(name_code, &connection.name)?;
+            }
+        }
+        self.writer
+            .write_subclass("AcDbBlockVisibilityParameter")?;
+        self.writer.write_bool(281, obj.is_initialized)?;
+        self.writer.write_string(301, &obj.name)?;
+        self.writer.write_string(302, &obj.description)?;
+        self.writer.write_bool(91, obj.unknown_bool)?;
+        self.writer
+            .write_i32(93, obj.all_blocks.len() as i32)?;
+        for handle in &obj.all_blocks {
+            self.writer.write_handle(331, *handle)?;
+        }
+        self.writer.write_i32(92, obj.states.len() as i32)?;
+        for state in &obj.states {
+            self.writer.write_string(303, &state.name)?;
+            self.writer
+                .write_i32(94, state.visible_blocks.len() as i32)?;
+            for handle in &state.visible_blocks {
+                self.writer.write_handle(332, *handle)?;
+            }
+            self.writer
+                .write_i32(95, state.visible_params.len() as i32)?;
+            for handle in &state.visible_params {
+                self.writer.write_handle(333, *handle)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Write a minimal stub object (handle + owner only)
     fn write_stub_handle_only(&mut self, type_name: &str, handle: Handle, owner: Handle) -> Result<()> {
         self.writer.write_string(0, type_name)?;
@@ -3687,6 +8136,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     fn write_color_i32(&mut self, code: i32, color: Color) -> Result<()> {
         match color {
             Color::ByLayer => self.writer.write_i32(code, 256)?,
+            Color::None => self.writer.write_i32(code, 257)?,
             Color::ByBlock => self.writer.write_i32(code, 0)?,
             Color::Index(i) => self.writer.write_i32(code, i as i32)?,
             Color::Rgb { r, g, b } => {
@@ -3701,6 +8151,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     fn write_color_i16(&mut self, code: i32, color: Color) -> Result<()> {
         match color {
             Color::ByLayer => self.writer.write_i16(code, 256)?,
+            Color::None => self.writer.write_i16(code, 257)?,
             Color::ByBlock => self.writer.write_i16(code, 0)?,
             Color::Index(i) => self.writer.write_i16(code, i as i16)?,
             Color::Rgb { .. } => self.writer.write_i16(code, 7)?, // Default to white/black
@@ -3777,6 +8228,133 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         Ok(())
     }
 
+    fn write_mleader_context_data(
+        &mut self,
+        ctx: &crate::entities::multileader::MultiLeaderAnnotContext,
+    ) -> Result<()> {
+        self.writer.write_string(300, "CONTEXT_DATA{")?;
+        self.writer.write_double(40, ctx.scale_factor)?;
+        self.writer.write_point3d(10, ctx.content_base_point)?;
+        self.writer.write_double(41, ctx.text_height)?;
+        self.writer.write_double(140, ctx.arrowhead_size)?;
+        self.writer.write_double(145, ctx.landing_gap)?;
+        self.writer.write_i16(174, ctx.text_left_attachment as i16)?;
+        self.writer.write_i16(175, ctx.text_right_attachment as i16)?;
+        self.writer.write_i16(176, ctx.text_alignment as i16)?;
+        self.writer.write_i16(177, ctx.block_connection_type as i16)?;
+        self.writer.write_bool(290, ctx.has_text_contents)?;
+
+        if ctx.has_text_contents {
+            self.writer.write_string(304, &ctx.text_string)?;
+            self.writer.write_point3d(11, ctx.text_normal)?;
+            if let Some(handle) = ctx.text_style_handle {
+                self.writer.write_handle(340, handle)?;
+            }
+            self.writer.write_point3d(12, ctx.text_location)?;
+            self.writer.write_point3d(13, ctx.text_direction)?;
+            self.writer.write_double(42, ctx.text_rotation)?;
+            self.writer.write_double(43, ctx.text_width)?;
+            self.writer.write_double(44, ctx.text_boundary_height)?;
+            self.writer.write_double(45, ctx.line_spacing_factor)?;
+            self.writer.write_i16(170, ctx.line_spacing_style as i16)?;
+            self.write_color_i32(90, ctx.text_color)?;
+            self.writer
+                .write_i16(171, ctx.text_attachment_point as i16)?;
+            self.writer.write_i16(172, ctx.text_flow_direction as i16)?;
+            self.write_color_i32(91, ctx.background_fill_color)?;
+            self.writer
+                .write_double(141, ctx.background_scale_factor)?;
+            self.writer
+                .write_i32(92, ctx.background_transparency)?;
+            self.writer
+                .write_bool(291, ctx.background_fill_enabled)?;
+            self.writer
+                .write_bool(292, ctx.background_mask_fill_on)?;
+            self.writer.write_i16(173, ctx.column_type)?;
+            self.writer
+                .write_bool(293, ctx.text_height_automatic)?;
+            self.writer.write_double(142, ctx.column_width)?;
+            self.writer.write_double(143, ctx.column_gutter)?;
+            self.writer
+                .write_bool(294, ctx.column_flow_reversed)?;
+            for size in &ctx.column_sizes {
+                self.writer.write_double(144, *size)?;
+            }
+            self.writer.write_bool(295, ctx.word_break)?;
+        }
+
+        self.writer.write_bool(296, ctx.has_block_contents)?;
+        if ctx.has_block_contents {
+            if let Some(handle) = ctx.block_content_handle {
+                self.writer.write_handle(341, handle)?;
+            }
+            self.writer
+                .write_point3d(14, ctx.block_content_normal)?;
+            self.writer
+                .write_point3d(15, ctx.block_content_location)?;
+            self.writer
+                .write_point3d(16, ctx.block_content_scale)?;
+            self.writer.write_double(46, ctx.block_rotation)?;
+            self.write_color_i32(93, ctx.block_content_color)?;
+            for value in ctx.transform_matrix {
+                self.writer.write_double(47, value)?;
+            }
+        }
+
+        self.writer.write_point3d(110, ctx.base_point)?;
+        self.writer.write_point3d(111, ctx.base_direction)?;
+        self.writer.write_point3d(112, ctx.base_vertical)?;
+        self.writer.write_bool(297, ctx.normal_reversed)?;
+
+        for root in &ctx.leader_roots {
+            self.writer.write_string(302, "LEADER{")?;
+            self.writer.write_bool(290, root.content_valid)?;
+            self.writer.write_bool(291, root.unknown)?;
+            self.writer.write_point3d(10, root.connection_point)?;
+            self.writer.write_point3d(11, root.direction)?;
+            self.writer.write_i32(90, root.leader_index)?;
+            for points in &root.break_points {
+                self.writer.write_point3d(12, points.start_point)?;
+                self.writer.write_point3d(13, points.end_point)?;
+            }
+            self.writer.write_double(40, root.landing_distance)?;
+            for line in &root.lines {
+                self.writer.write_string(304, "LEADER_LINE{")?;
+                for point in &line.points {
+                    self.writer.write_point3d(10, *point)?;
+                }
+                self.writer.write_i32(91, line.index)?;
+                self.writer.write_i16(170, line.path_type as i16)?;
+                self.write_color_i32(92, line.line_color)?;
+                if let Some(handle) = line.line_type_handle {
+                    self.writer.write_handle(340, handle)?;
+                }
+                self.writer.write_i16(171, line.line_weight.value())?;
+                self.writer.write_double(40, line.arrowhead_size)?;
+                if let Some(handle) = line.arrowhead_handle {
+                    self.writer.write_handle(341, handle)?;
+                }
+                self.writer
+                    .write_i32(93, line.override_flags.bits() as i32)?;
+                self.writer
+                    .write_i32(271, line.break_info_count)?;
+                self.writer.write_string(305, "}")?;
+            }
+            self.writer.write_i16(
+                271,
+                root.text_attachment_direction as i16,
+            )?;
+            self.writer.write_string(303, "}")?;
+        }
+
+        self.writer
+            .write_i16(272, ctx.text_bottom_attachment as i16)?;
+        self.writer
+            .write_i16(273, ctx.text_top_attachment as i16)?;
+        self.writer.write_string(301, "}")?;
+        Ok(())
+    }
+
     /// Write MULTILEADER entity
     fn write_multileader(&mut self, mleader: &crate::entities::MultiLeader, owner: Handle) -> Result<()> {
         self.writer.write_entity_type("MULTILEADER")?;
@@ -3808,8 +8386,8 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // Text/block attachment types
         self.writer.write_i16(174, ctx.text_left_attachment as i16)?;
         self.writer.write_i16(175, ctx.text_right_attachment as i16)?;
-        self.writer.write_i16(176, ctx.block_connection_type as i16)?;
-        self.writer.write_i16(177, 0)?;
+        self.writer.write_i16(176, ctx.text_alignment as i16)?;
+        self.writer.write_i16(177, ctx.block_connection_type as i16)?;
 
         // Has text contents
         self.writer.write_bool(290, ctx.has_text_contents)?;
@@ -3829,22 +8407,29 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             self.writer.write_double(45, ctx.line_spacing_factor)?;
             self.writer.write_i16(170, ctx.line_spacing_style as i16)?;
             self.write_color_i32(90, ctx.text_color)?;
-            self.writer.write_i16(171, ctx.text_alignment as i16)?;
+            self.writer
+                .write_i16(171, ctx.text_attachment_point as i16)?;
             self.writer.write_i16(172, ctx.text_flow_direction as i16)?;
             self.write_color_i32(91, ctx.background_fill_color)?;
-            self.writer.write_double(141, ctx.column_width)?;
-            self.write_color_i32(92, ctx.background_fill_color)?;
+            self.writer
+                .write_double(141, ctx.background_scale_factor)?;
+            self.writer
+                .write_i32(92, ctx.background_transparency)?;
             self.writer.write_bool(291, ctx.background_fill_enabled)?;
-            self.writer.write_bool(292, ctx.word_break)?;
+            self.writer
+                .write_bool(292, ctx.background_mask_fill_on)?;
             self.writer.write_i16(173, ctx.column_type)?;
-            self.writer.write_bool(293, ctx.column_flow_reversed)?;
+            self.writer
+                .write_bool(293, ctx.text_height_automatic)?;
             self.writer.write_double(142, ctx.column_width)?;
             self.writer.write_double(143, ctx.column_gutter)?;
-            self.writer.write_bool(294, ctx.text_height_automatic)?;
+            self.writer
+                .write_bool(294, ctx.column_flow_reversed)?;
+            for size in &ctx.column_sizes {
+                self.writer.write_double(144, *size)?;
+            }
+            self.writer.write_bool(295, ctx.word_break)?;
         }
-
-        // Background mask
-        self.writer.write_bool(295, ctx.background_mask_fill_on)?;
 
         // Has block contents
         self.writer.write_bool(296, ctx.has_block_contents)?;
@@ -3858,6 +8443,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             self.writer.write_point3d(16, ctx.block_content_scale)?;
             self.writer.write_double(46, ctx.block_rotation)?;
             self.write_color_i32(93, ctx.block_content_color)?;
+            for value in ctx.transform_matrix {
+                self.writer.write_double(47, value)?;
+            }
         }
 
         // Transformation base
@@ -3873,7 +8461,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             self.writer.write_bool(291, root.unknown)?;
             self.writer.write_point3d(10, root.connection_point)?;
             self.writer.write_point3d(11, root.direction)?;
-            self.writer.write_i32(90, root.break_points.len() as i32)?;
+            self.writer.write_i32(90, root.leader_index)?;
             for bp in &root.break_points {
                 self.writer.write_point3d(12, bp.start_point)?;
                 self.writer.write_point3d(13, bp.end_point)?;
@@ -3903,12 +8491,16 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 self.writer.write_string(305, "}")?;
             }
 
+            self.writer.write_i16(
+                271,
+                root.text_attachment_direction as i16,
+            )?;
             self.writer.write_string(303, "}")?;
         }
 
         // Post-leader attachments
-        self.writer.write_i16(273, ctx.text_top_attachment as i16)?;
         self.writer.write_i16(272, ctx.text_bottom_attachment as i16)?;
+        self.writer.write_i16(273, ctx.text_top_attachment as i16)?;
 
         self.writer.write_string(301, "}")?; // End CONTEXT_DATA
 
@@ -4278,6 +8870,383 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         Ok(())
     }
 
+    fn write_light(&mut self, light: &Light, owner: Handle) -> Result<()> {
+        self.writer.write_entity_type("LIGHT")?;
+        self.write_common_entity_data(&light.common, owner)?;
+        self.writer.write_subclass("AcDbLight")?;
+        self.writer.write_i32(90, light.class_version)?;
+        self.writer.write_string(1, &light.name)?;
+        self.writer.write_i32(70, light.light_type)?;
+        self.writer.write_bool(290, light.status)?;
+        self.writer.write_color(63, light.light_color)?;
+        if let Color::Rgb { r, g, b } = light.light_color {
+            let rgb = ((r as i32) << 16) | ((g as i32) << 8) | b as i32;
+            self.writer.write_i32(421, rgb)?;
+        }
+        self.writer.write_bool(291, light.plot_glyph)?;
+        self.writer.write_double(40, light.intensity)?;
+        self.writer.write_point3d(10, light.position)?;
+        self.writer.write_point3d(11, light.target)?;
+        self.writer.write_i32(72, light.attenuation_type)?;
+        self.writer.write_bool(292, light.use_attenuation_limits)?;
+        self.writer
+            .write_double(41, light.attenuation_start_limit)?;
+        self.writer
+            .write_double(42, light.attenuation_end_limit)?;
+        self.writer.write_double(50, light.hotspot_angle)?;
+        self.writer.write_double(51, light.falloff_angle)?;
+        self.writer.write_bool(293, light.cast_shadows)?;
+        self.writer.write_i32(73, light.shadow_type)?;
+        self.writer.write_i16(91, light.shadow_map_size)?;
+        self.writer
+            .write_i16(280, light.shadow_map_softness as i16)?;
+        if light.photometric_mode {
+            self.writer
+                .write_bool(295, light.photometric_data.is_some())?;
+            if let Some(data) = &light.photometric_data {
+                self.writer.write_bool(290, data.has_web_file)?;
+                self.writer.write_string(300, &data.web_file)?;
+                self.writer
+                    .write_i16(70, data.physical_intensity_method)?;
+                self.writer
+                    .write_double(40, data.physical_intensity)?;
+                self.writer
+                    .write_double(41, data.illuminance_distance)?;
+                self.writer.write_i16(71, data.lamp_color_type)?;
+                self.writer
+                    .write_double(42, data.lamp_color_temperature)?;
+                self.writer.write_i16(72, data.lamp_color_preset)?;
+                self.writer.write_point3d(43, data.web_rotation)?;
+                self.writer.write_i16(73, data.extended_light_shape)?;
+                self.writer
+                    .write_double(46, data.extended_light_length)?;
+                self.writer
+                    .write_double(47, data.extended_light_width)?;
+                self.writer
+                    .write_double(48, data.extended_light_radius)?;
+                self.writer.write_i16(74, data.web_file_type)?;
+                self.writer.write_i16(75, data.web_symmetry)?;
+                self.writer.write_i16(76, data.has_target_grip)?;
+                self.writer.write_double(49, data.web_flux)?;
+                for (index, angle) in data.web_angles.iter().enumerate() {
+                    self.writer.write_double(50 + index as i32, *angle)?;
+                }
+                self.writer.write_i16(77, data.glyph_display_type)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn write_surface(&mut self, surface: &Surface, owner: Handle) -> Result<()> {
+        self.writer.write_entity_type(surface.kind.dxf_name())?;
+        self.write_common_entity_data(&surface.common, owner)?;
+        self.writer.write_subclass("AcDbModelerGeometry")?;
+        if self.needs_sab() {
+            self.writer.write_bool(290, false)?;
+            self.writer
+                .write_string(2, "{00000000-0000-0000-0000-000000000000}")?;
+            self.queue_sab_data(&surface.acis_data, surface.common.handle);
+        } else {
+            self.writer.write_i16(70, 1)?;
+            self.write_acis_data(&surface.acis_data)?;
+        }
+        self.writer.write_subclass("AcDbSurface")?;
+        self.writer.write_i16(71, surface.u_isolines)?;
+        self.writer.write_i16(72, surface.v_isolines)?;
+
+        match &surface.surface_data {
+            SurfaceData::Generic => {}
+            SurfaceData::Plane { class_version } => {
+                self.writer.write_subclass("AcDbPlaneSurface")?;
+                self.writer.write_i32(90, *class_version)?;
+            }
+            SurfaceData::Extruded {
+                sweep_entity,
+                options,
+                sweep_vector,
+                sweep_transform,
+            } => {
+                self.writer.write_subclass("AcDbExtrudedSurface")?;
+                let dwg_version =
+                    crate::io::dwg::DwgVersion::from_dxf_version(self.dxf_version)
+                        .unwrap_or(crate::io::dwg::DwgVersion::AC24);
+                if let Some(entity) = sweep_entity {
+                    let encoded =
+                        crate::io::dwg::embedded_entity::encode_embedded_entity(
+                            entity,
+                            dwg_version,
+                            self.dxf_version,
+                        );
+                    self.writer.write_i32(90, encoded.type_code)?;
+                    self.writer
+                        .write_i32(90, (encoded.bytes.len() * 8) as i32)?;
+                    for chunk in encoded.bytes.chunks(127) {
+                        self.writer.write_binary(310, chunk)?;
+                    }
+                } else {
+                    self.writer.write_i32(90, 0)?;
+                    self.writer.write_i32(90, 0)?;
+                }
+                self.writer.write_point3d(10, *sweep_vector)?;
+                for value in sweep_transform {
+                    self.writer.write_double(40, *value)?;
+                }
+                self.write_surface_sweep_options_dxf(options)?;
+            }
+            SurfaceData::Lofted {
+                loft_transform,
+                cross_section_entities,
+                guide_entities,
+                path_entity,
+                plane_normal_lofting_type,
+                start_draft_angle,
+                end_draft_angle,
+                start_draft_magnitude,
+                end_draft_magnitude,
+                arc_length_parameterization,
+                no_twist,
+                align_direction,
+                simple_surfaces,
+                closed_surfaces,
+                solid,
+                ruled_surface,
+                virtual_guide,
+                cross_sections,
+                guide_curves,
+                path_curve,
+            } => {
+                self.writer.write_subclass("AcDbLoftedSurface")?;
+                for value in loft_transform {
+                    self.writer.write_double(40, *value)?;
+                }
+                let dwg_version =
+                    crate::io::dwg::DwgVersion::from_dxf_version(self.dxf_version)
+                        .unwrap_or(crate::io::dwg::DwgVersion::AC24);
+                for entity in cross_section_entities {
+                    let encoded =
+                        crate::io::dwg::embedded_entity::encode_embedded_entity(
+                            entity,
+                            dwg_version,
+                            self.dxf_version,
+                        );
+                    self.writer.write_i32(90, encoded.type_code)?;
+                    self.writer
+                        .write_i32(90, (encoded.bytes.len() * 8) as i32)?;
+                    for chunk in encoded.bytes.chunks(127) {
+                        self.writer.write_binary(310, chunk)?;
+                    }
+                }
+                for entity in guide_entities {
+                    let encoded =
+                        crate::io::dwg::embedded_entity::encode_embedded_entity(
+                            entity,
+                            dwg_version,
+                            self.dxf_version,
+                        );
+                    self.writer.write_i32(90, encoded.type_code)?;
+                    self.writer
+                        .write_i32(90, (encoded.bytes.len() * 8) as i32)?;
+                    for chunk in encoded.bytes.chunks(127) {
+                        self.writer.write_binary(310, chunk)?;
+                    }
+                }
+                if let Some(entity) = path_entity {
+                    let encoded =
+                        crate::io::dwg::embedded_entity::encode_embedded_entity(
+                            entity,
+                            dwg_version,
+                            self.dxf_version,
+                        );
+                    self.writer.write_i32(90, encoded.type_code)?;
+                    self.writer
+                        .write_i32(90, (encoded.bytes.len() * 8) as i32)?;
+                    for chunk in encoded.bytes.chunks(127) {
+                        self.writer.write_binary(310, chunk)?;
+                    }
+                }
+                self.writer.write_i32(70, *plane_normal_lofting_type)?;
+                self.writer.write_double(41, *start_draft_angle)?;
+                self.writer.write_double(42, *end_draft_angle)?;
+                self.writer.write_double(43, *start_draft_magnitude)?;
+                self.writer.write_double(44, *end_draft_magnitude)?;
+                self.writer.write_bool(290, *arc_length_parameterization)?;
+                self.writer.write_bool(291, *no_twist)?;
+                self.writer.write_bool(292, *align_direction)?;
+                self.writer.write_bool(293, *simple_surfaces)?;
+                self.writer.write_bool(294, *closed_surfaces)?;
+                self.writer.write_bool(295, *solid)?;
+                self.writer.write_bool(296, *ruled_surface)?;
+                self.writer.write_bool(297, *virtual_guide)?;
+                for handle in cross_sections {
+                    self.writer.write_handle(310, *handle)?;
+                }
+                for handle in guide_curves {
+                    self.writer.write_handle(310, *handle)?;
+                }
+                if let Some(handle) = path_curve {
+                    self.writer.write_handle(350, *handle)?;
+                }
+            }
+            SurfaceData::Revolved {
+                revolve_entity,
+                class_version,
+                entity_id,
+                axis_point,
+                axis_vector,
+                revolve_angle,
+                start_angle,
+                entity_transform,
+                draft_angle,
+                draft_start_distance,
+                draft_end_distance,
+                twist_angle,
+                solid,
+                close_to_axis,
+            } => {
+                self.writer.write_subclass("AcDbRevolvedSurface")?;
+                let dwg_version =
+                    crate::io::dwg::DwgVersion::from_dxf_version(self.dxf_version)
+                        .unwrap_or(crate::io::dwg::DwgVersion::AC24);
+                if let Some(entity) = revolve_entity {
+                    let encoded =
+                        crate::io::dwg::embedded_entity::encode_embedded_entity(
+                            entity,
+                            dwg_version,
+                            self.dxf_version,
+                        );
+                    self.writer.write_i32(90, encoded.type_code)?;
+                    self.writer
+                        .write_i32(90, (encoded.bytes.len() * 8) as i32)?;
+                    for chunk in encoded.bytes.chunks(127) {
+                        self.writer.write_binary(310, chunk)?;
+                    }
+                } else {
+                    self.writer.write_i32(90, *class_version)?;
+                    self.writer.write_i32(90, *entity_id)?;
+                }
+                self.writer.write_point3d(10, *axis_point)?;
+                self.writer.write_point3d(11, *axis_vector)?;
+                self.writer.write_double(40, *revolve_angle)?;
+                self.writer.write_double(41, *start_angle)?;
+                for value in entity_transform {
+                    self.writer.write_double(42, *value)?;
+                }
+                self.writer.write_double(43, *draft_angle)?;
+                self.writer.write_double(44, *draft_start_distance)?;
+                self.writer.write_double(45, *draft_end_distance)?;
+                self.writer.write_double(46, *twist_angle)?;
+                self.writer.write_bool(290, *solid)?;
+                self.writer.write_bool(291, *close_to_axis)?;
+            }
+            SurfaceData::Swept {
+                class_version,
+                sweep_entity,
+                path_entity,
+                sweep_transform,
+                path_transform,
+                options,
+            } => {
+                self.writer.write_subclass("AcDbSweptSurface")?;
+                let dwg_version =
+                    crate::io::dwg::DwgVersion::from_dxf_version(self.dxf_version)
+                        .unwrap_or(crate::io::dwg::DwgVersion::AC24);
+                if dwg_version.r2007_plus() {
+                    self.writer.write_i32(90, *class_version)?;
+                }
+                if let Some(entity) = sweep_entity {
+                    let encoded =
+                        crate::io::dwg::embedded_entity::encode_embedded_entity(
+                            entity,
+                            dwg_version,
+                            self.dxf_version,
+                        );
+                    self.writer.write_i32(90, encoded.type_code)?;
+                    self.writer
+                        .write_i32(90, (encoded.bytes.len() * 8) as i32)?;
+                    for chunk in encoded.bytes.chunks(127) {
+                        self.writer.write_binary(310, chunk)?;
+                    }
+                } else {
+                    self.writer.write_i32(90, 0)?;
+                    self.writer.write_i32(90, 0)?;
+                }
+                if let Some(entity) = path_entity {
+                    let encoded =
+                        crate::io::dwg::embedded_entity::encode_embedded_entity(
+                            entity,
+                            dwg_version,
+                            self.dxf_version,
+                        );
+                    self.writer.write_i32(91, encoded.type_code)?;
+                    self.writer
+                        .write_i32(90, (encoded.bytes.len() * 8) as i32)?;
+                    for chunk in encoded.bytes.chunks(127) {
+                        self.writer.write_binary(310, chunk)?;
+                    }
+                } else {
+                    self.writer.write_i32(91, 0)?;
+                    self.writer.write_i32(90, 0)?;
+                }
+                for value in sweep_transform {
+                    self.writer.write_double(40, *value)?;
+                }
+                for value in path_transform {
+                    self.writer.write_double(41, *value)?;
+                }
+                self.write_surface_sweep_options_dxf(options)?;
+            }
+            SurfaceData::Nurb {
+                short_170,
+                cv_hull_display,
+                u_vector1,
+                v_vector1,
+                u_vector2,
+                v_vector2,
+            } => {
+                self.writer.write_subclass("AcDbNurbSurface")?;
+                self.writer.write_i16(170, *short_170)?;
+                self.writer.write_bool(290, *cv_hull_display)?;
+                self.writer.write_point3d(10, *u_vector1)?;
+                self.writer.write_point3d(11, *v_vector1)?;
+                self.writer.write_point3d(12, *u_vector2)?;
+                self.writer.write_point3d(13, *v_vector2)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn write_surface_sweep_options_dxf(
+        &mut self,
+        options: &SurfaceSweepOptions,
+    ) -> Result<()> {
+        self.writer.write_double(42, options.draft_angle)?;
+        self.writer
+            .write_double(43, options.draft_start_distance)?;
+        self.writer.write_double(44, options.draft_end_distance)?;
+        self.writer.write_double(45, options.twist_angle)?;
+        self.writer.write_double(48, options.scale_factor)?;
+        self.writer.write_double(49, options.align_angle)?;
+        for value in &options.sweep_entity_transform {
+            self.writer.write_double(46, *value)?;
+        }
+        for value in &options.path_entity_transform {
+            self.writer.write_double(47, *value)?;
+        }
+        self.writer.write_bool(290, options.is_solid)?;
+        self.writer
+            .write_i16(70, options.sweep_alignment_flags)?;
+        self.writer.write_i16(71, options.path_flags)?;
+        self.writer.write_bool(292, options.align_start)?;
+        self.writer.write_bool(293, options.bank)?;
+        self.writer.write_bool(294, options.base_point_set)?;
+        self.writer
+            .write_bool(295, options.sweep_entity_transform_computed)?;
+        self.writer
+            .write_bool(296, options.path_entity_transform_computed)?;
+        self.writer.write_point3d(11, options.reference_vector)?;
+        Ok(())
+    }
+
     /// Write ACIS data (shared by Solid3D, Region, Body)
     ///
     /// SAT text is split by newlines; each line becomes a separate DXF
@@ -4374,6 +9343,83 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             self.writer.write_string(1, "")?;
         }
 
+        Ok(())
+    }
+
+    fn write_table_content_object_dxf(
+        &mut self,
+        table: &table::Table,
+    ) -> Result<()> {
+        self.writer.write_string(0, "TABLECONTENT")?;
+        if table.raw_dxf_version == Some(self.dxf_version) {
+            if let Some(raw_dxf_codes) = &table.raw_dxf_codes {
+                for (code, value) in raw_dxf_codes {
+                    self.writer.write_string(*code, value)?;
+                }
+                return Ok(());
+            }
+        }
+        self.writer.write_handle(5, table.common.handle)?;
+        if !table.common.reactors.is_empty() {
+            self.writer.write_string(102, "{ACAD_REACTORS")?;
+            for reactor in &table.common.reactors {
+                self.writer.write_handle(330, *reactor)?;
+            }
+            self.writer.write_string(102, "}")?;
+        }
+        if let Some(xdictionary) = table.common.xdictionary_handle {
+            self.writer.write_string(102, "{ACAD_XDICTIONARY")?;
+            self.writer.write_handle(360, xdictionary)?;
+            self.writer.write_string(102, "}")?;
+        }
+        self.writer
+            .write_handle(330, table.common.owner_handle)?;
+        self.writer.write_subclass("AcDbLinkedData")?;
+        self.writer.write_string(1, &table.name)?;
+        self.writer.write_string(300, &table.description)?;
+        self.writer.write_subclass("AcDbLinkedTableData")?;
+        self.writer.write_i32(90, table.columns.len() as i32)?;
+        for column in &table.columns {
+            self.writer.write_string(300, "COLUMN")?;
+            self.writer
+                .write_string(1, "LINKEDTABLEDATACOLUMN_BEGIN")?;
+            self.writer.write_string(300, &column.name)?;
+            self.writer.write_i32(91, column.custom_data)?;
+            self.writer.write_string(309, "LINKEDTABLEDATACOLUMN_END")?;
+            self.writer.write_string(1, "TABLECOLUMN_BEGIN")?;
+            self.writer.write_i32(90, column.style_id)?;
+            self.writer.write_double(40, column.width)?;
+            self.writer.write_string(309, "TABLECOLUMN_END")?;
+        }
+        self.writer.write_i32(91, table.rows.len() as i32)?;
+        for row in &table.rows {
+            self.writer.write_string(301, "ROW")?;
+            self.writer.write_string(1, "LINKEDTABLEDATAROW_BEGIN")?;
+            self.writer.write_i32(90, row.cells.len() as i32)?;
+            for cell in &row.cells {
+                self.write_table_cell(cell)?;
+            }
+            self.writer.write_string(309, "LINKEDTABLEDATAROW_END")?;
+            self.writer.write_string(1, "TABLEROW_BEGIN")?;
+            self.writer.write_i32(90, row.style_id)?;
+            self.writer.write_double(40, row.height)?;
+            self.writer.write_string(309, "TABLEROW_END")?;
+        }
+        self.writer
+            .write_i32(90, table.field_handles.len() as i32)?;
+        for field in &table.field_handles {
+            self.writer.write_handle(330, *field)?;
+        }
+        self.writer.write_i32(90, table.merged_ranges.len() as i32)?;
+        for range in &table.merged_ranges {
+            self.writer.write_i32(91, range.top_row as i32)?;
+            self.writer.write_i32(92, range.left_col as i32)?;
+            self.writer.write_i32(93, range.bottom_row as i32)?;
+            self.writer.write_i32(94, range.right_col as i32)?;
+        }
+        if let Some(style) = table.table_style_handle {
+            self.writer.write_handle(340, style)?;
+        }
         Ok(())
     }
 
@@ -4480,23 +9526,10 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         for content in &cell.contents {
             self.writer.write_i16(170, content.content_type as i16)?;
 
-            // Write value based on type
-            match content.value.value_type {
-                CellValueType::String => {
-                    self.writer.write_string(1, &content.value.text)?;
-                }
-                CellValueType::Double => {
-                    self.writer.write_double(140, content.value.numeric_value)?;
-                }
-                CellValueType::Long => {
-                    self.writer.write_i32(90, content.value.numeric_value as i32)?;
-                }
-                _ => {}
-            }
-
-            // Format string
-            if !content.value.format.is_empty() {
-                self.writer.write_string(300, &content.value.format)?;
+            if content.content_type == TableCellContentType::Value {
+                self.writer.write_string(301, "CELL_VALUE")?;
+                self.write_field_cell_value_dxf(&content.value)?;
+                self.writer.write_string(304, "ACVALUE_END")?;
             }
 
             // Block handle
@@ -4814,11 +9847,12 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_double(31, ole.lower_right_corner.z)?;
         self.writer.write_i16(71, ole.ole_object_type as i16)?;
         self.writer.write_i16(72, if ole.is_paper_space { 1 } else { 0 })?;
-        self.writer.write_i16(73, 3)?; // undocumented hardcoded value per ACadSharp
-        if !ole.binary_data.is_empty() {
-            self.writer.write_i32(90, ole.binary_data.len() as i32)?;
+        self.writer.write_i16(73, ole.lock_aspect as i16)?;
+        let data = ole.encoded_payload();
+        if !data.is_empty() {
+            self.writer.write_i32(90, data.len() as i32)?;
             // Write binary data in 127-byte hex chunks (code 310)
-            for chunk in ole.binary_data.chunks(127) {
+            for chunk in data.chunks(127) {
                 let hex: String = chunk.iter().map(|b| format!("{:02X}", b)).collect();
                 self.writer.write_string(310, &hex)?;
             }

@@ -65,6 +65,7 @@ pub trait DxfStreamWriterExt: DxfStreamWriter {
     fn write_color(&mut self, code: i32, color: Color) -> Result<()> {
         match color {
             Color::ByLayer => self.write_i16(code, 256),
+            Color::None => self.write_i16(code, 257),
             Color::ByBlock => self.write_i16(code, 0),
             Color::Index(index) => self.write_i16(code, index as i16),
             Color::Rgb { .. } => self.write_i16(code, color.approximate_index()),
@@ -113,4 +114,3 @@ pub fn value_type_for_code(code: i32) -> GroupCodeValueType {
     let dxf_code = DxfCode::from_i32(code);
     GroupCodeValueType::from_code(dxf_code)
 }
-

@@ -51,6 +51,8 @@ pub struct DwgFileHeaderWriterAC18 {
     version: DxfVersion,
     /// AutoCAD maintenance release version (preserved from source file).
     maintenance_version: u8,
+    /// Compact DWG code-page index.
+    code_page: u16,
     /// Section descriptors, keyed by section name.
     descriptors: IndexMap<String, DwgSectionDescriptor>,
     /// All local section map entries (pages) across all sections.
@@ -95,6 +97,7 @@ impl DwgFileHeaderWriterAC18 {
         Ok(Self {
             version,
             maintenance_version,
+            code_page: 30,
             descriptors: IndexMap::new(),
             local_section_maps: Vec::new(),
             compressor: DwgLZ77AC18Compressor::new(),
@@ -109,6 +112,10 @@ impl DwgFileHeaderWriterAC18 {
             page_map_address: 0,
             gap_amount: 0,
         })
+    }
+
+    pub fn set_code_page(&mut self, code_page: u16) {
+        self.code_page = code_page;
     }
 
     /// Get the file offset where the AcDbObjects section starts.
@@ -480,7 +487,7 @@ impl DwgFileHeaderWriterAC18 {
         output.write_all(&[self.maintenance_version])?;
 
         // 0x13: Codepage (2 bytes)
-        output.write_u16::<LittleEndian>(30)?; // ANSI_1252
+        output.write_u16::<LittleEndian>(self.code_page)?;
 
         // 0x15: 3 zero bytes
         output.write_all(&[0u8; 3])?;

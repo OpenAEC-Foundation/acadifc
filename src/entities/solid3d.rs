@@ -71,8 +71,8 @@ pub struct Wire {
     pub has_shear: bool,
     /// Transform has reflection.
     pub has_reflection: bool,
-    /// Transform scale factor.
-    pub scale: f64,
+    /// Transform scale factors.
+    pub scale: Vector3,
     /// Transform translation.
     pub translation: Vector3,
     /// X axis of transform.
@@ -96,7 +96,7 @@ impl Wire {
             has_rotation: false,
             has_shear: false,
             has_reflection: false,
-            scale: 1.0,
+            scale: Vector3::new(1.0, 1.0, 1.0),
             translation: Vector3::ZERO,
             x_axis: Vector3::UNIT_X,
             y_axis: Vector3::UNIT_Y,
@@ -170,6 +170,12 @@ pub struct Silhouette {
     pub target: Vector3,
     /// Whether viewport uses perspective.
     pub is_perspective: bool,
+    /// Whether the source record carried the silhouette-wire list gate.
+    ///
+    /// This can be true while `wires` is empty; preserving that distinction is
+    /// required for an exact COMMON_3DSOLID round-trip.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub has_wires: bool,
     /// Silhouette wires for this viewport.
     pub wires: Vec<Wire>,
 }
@@ -183,6 +189,7 @@ impl Silhouette {
             up_vector: Vector3::new(0.0, 1.0, 0.0),
             target: Vector3::ZERO,
             is_perspective: false,
+            has_wires: false,
             wires: Vec::new(),
         }
     }
@@ -195,12 +202,14 @@ impl Silhouette {
             up_vector: up_vector.normalize(),
             target: Vector3::ZERO,
             is_perspective: false,
+            has_wires: false,
             wires: Vec::new(),
         }
     }
 
     /// Adds a wire to the silhouette.
     pub fn add_wire(&mut self, wire: Wire) {
+        self.has_wires = true;
         self.wires.push(wire);
     }
 
@@ -269,6 +278,15 @@ pub struct AcisRevision {
     pub end_marker: u32,
 }
 
+/// Material binding stored in the shared modeler-geometry body.
+#[derive(Debug, Clone, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct AcisMaterial {
+    pub array_index: i32,
+    pub absolute_reference: i32,
+    pub material_handle: Option<Handle>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AcisData {
@@ -282,6 +300,27 @@ pub struct AcisData {
     pub is_binary: bool,
     /// R2013+ modeler-geometry revision block (preserved for round-trip).
     pub revision: AcisRevision,
+    /// R2007+ material bindings attached to binary modeler geometry.
+    pub materials: Vec<AcisMaterial>,
+    /// Whether the source record carried the optional wireframe cache.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub wireframe_data_present: bool,
+    /// Whether the wireframe cache carried its reference point.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub wireframe_point_present: bool,
+    /// Whether the wireframe cache carried the isoline/wire list.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub wireframe_isoline_present: bool,
+    /// Secondary COMMON_3DSOLID empty flag, preserved independently from the
+    /// leading modeler-data empty flag.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub acis_empty_bit: bool,
+    /// Optional secondary modeler stream carried after the wireframe cache.
+    ///
+    /// AutoCAD uses this for construction geometry on surfaces. It is a
+    /// separate SAT/SAB stream, not a raw copy of the containing DWG object.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub extra_acis_data: Option<Box<AcisData>>,
     /// ISOLINES display setting from the DWG wireframe section (preserved
     /// for round-trip; 0 when the entity carried no wireframe data).
     #[cfg_attr(feature = "serde", serde(default))]
@@ -297,6 +336,12 @@ impl AcisData {
             sab_data: Vec::new(),
             is_binary: false,
             revision: AcisRevision::default(),
+            materials: Vec::new(),
+            wireframe_data_present: false,
+            wireframe_point_present: false,
+            wireframe_isoline_present: false,
+            acis_empty_bit: false,
+            extra_acis_data: None,
             wireframe_isolines: 0,
         }
     }
@@ -312,6 +357,12 @@ impl AcisData {
             sab_data: Vec::new(),
             is_binary: false,
             revision: AcisRevision::default(),
+            materials: Vec::new(),
+            wireframe_data_present: false,
+            wireframe_point_present: false,
+            wireframe_isoline_present: false,
+            acis_empty_bit: false,
+            extra_acis_data: None,
             wireframe_isolines: 0,
         }
     }
@@ -324,6 +375,12 @@ impl AcisData {
             sab_data: sab,
             is_binary: true,
             revision: AcisRevision::default(),
+            materials: Vec::new(),
+            wireframe_data_present: false,
+            wireframe_point_present: false,
+            wireframe_isoline_present: false,
+            acis_empty_bit: false,
+            extra_acis_data: None,
             wireframe_isolines: 0,
         }
     }
@@ -1437,4 +1494,3 @@ mod tests {
         assert!(solid.parse_sat().is_none());
     }
 }
-

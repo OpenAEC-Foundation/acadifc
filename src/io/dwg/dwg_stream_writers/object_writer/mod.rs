@@ -16,8 +16,13 @@
 //! The merged-stream bytes contain main + text + handle sub-streams
 //! interleaved per the DWG spec.
 
+pub mod associative;
 pub mod common;
+pub mod class_object;
+pub mod data_objects;
+pub mod dynamic_block;
 pub mod entities;
+pub mod field;
 pub mod objects;
 
 use std::collections::HashSet;
@@ -41,11 +46,14 @@ use crate::types::{BoundingBox3D, DxfVersion, Handle, Vector2};
 /// for deduplication.  This function strips them back for writing.
 fn dwg_block_name(name: &str) -> &str {
     // Known multi-word prefixes first
-    for prefix in &["*Model_Space"] {
-        if name.starts_with(prefix) {
+    for prefix in &["*Model_Space", "*Paper_Space"] {
+        if name
+            .get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+        {
             let rest = &name[prefix.len()..];
             if rest.is_empty() || rest.chars().all(|c| c.is_ascii_digit()) {
-                return prefix;
+                return &name[..prefix.len()];
             }
         }
     }
@@ -131,7 +139,10 @@ impl<'a> DwgObjectWriter<'a> {
     pub fn new(document: &'a CadDocument) -> crate::error::Result<Self> {
         let version = DwgVersion::from_dxf_version(document.version)?;
         let dxf_version = document.version;
-        let writer = DwgMergedWriter::new(version, dxf_version);
+        let encoding =
+            crate::io::dxf::code_page::encoding_from_code_page(&document.header.code_page)
+                .unwrap_or(encoding_rs::WINDOWS_1252);
+        let writer = DwgMergedWriter::with_encoding(version, dxf_version, encoding);
 
         // Compute safe starting handle for allocation.
         // document.header.handle_seed may be stale (e.g. DWG roundtrip
@@ -288,6 +299,9 @@ impl<'a> DwgObjectWriter<'a> {
         self.write_vport_entries();
         self.write_appid_entries();
         self.write_dimstyle_entries();
+        if self.version.r13_15_only() {
+            self.write_vx_entries();
+        }
 
         // ── Block entities ──────────────────────────────────────
         self.write_block_entities();
@@ -512,22 +526,79 @@ impl<'a> DwgObjectWriter<'a> {
     }
 
     /// VPENT_HDR_CONTROL — R13-R2000 only.
-    /// Empty table control for the viewport entity header table.
+    /// Viewport entity header table control.
     /// The header section references this via hard-ownership handle.
     fn write_vpent_hdr_control(&mut self) {
-        let table_handle = self.document.header.vpent_hdr_control_handle;
+        let table_handle = self.document.vx_table.handle();
         if table_handle.is_null() {
             return;
         }
 
-        self.write_table_control(
-            table_handle,
+        let mut handles = self.document.vx_control_entries.clone();
+        for record in self.document.vx_table.iter() {
+            if !handles.contains(&record.handle) {
+                handles.push(record.handle);
+            }
+        }
+
+        self.write_common_non_entity_data(
             common::OBJ_VPENT_HDR_CONTROL,
-            &[], // no entries — always empty
+            table_handle,
+            Handle::NULL,
+            &[],
+            &None,
         );
+        self.writer.write_bit_short(handles.len() as i16);
+        for handle in &handles {
+            self.writer.write_handle(
+                DwgReferenceType::SoftOwnership,
+                handle.value(),
+            );
+        }
+        self.register_object(table_handle);
     }
 
     // ── Table entry writers ─────────────────────────────────────────
+
+    fn write_vx_entries(&mut self) {
+        let entries: Vec<_> = self.document.vx_table.iter().cloned().collect();
+        for entry in &entries {
+            self.write_vx_entry(entry);
+        }
+    }
+
+    fn write_vx_entry(&mut self, entry: &crate::tables::VxTableRecord) {
+        self.write_common_non_entity_data(
+            common::OBJ_VPENT_HDR,
+            entry.handle,
+            self.document.vx_table.handle(),
+            &[],
+            &None,
+        );
+
+        self.writer.write_variable_text(&entry.name);
+        self.writer.write_bit(entry.is_xref_reference);
+        self.writer.write_bit_short(if entry.is_xref_resolved {
+            256
+        } else {
+            0
+        });
+        self.writer.write_bit(entry.is_xref_dependent);
+        self.writer.write_bit(entry.is_on);
+        self.writer.write_handle(
+            DwgReferenceType::HardPointer,
+            entry.xref_handle.value(),
+        );
+        self.writer.write_handle(
+            DwgReferenceType::SoftPointer,
+            entry.viewport.value(),
+        );
+        self.writer.write_handle(
+            DwgReferenceType::HardPointer,
+            entry.previous_entry.value(),
+        );
+        self.register_object(entry.handle);
+    }
 
     fn write_layer_entries(&mut self) {
         let entries: Vec<_> = self.document.layers.iter().map(|l| l.clone()).collect();
@@ -753,8 +824,7 @@ impl<'a> DwgObjectWriter<'a> {
                             .flat_map(u16::to_le_bytes)
                             .collect::<Vec<_>>()
                     } else {
-                        let (encoded, _, _) = encoding_rs::WINDOWS_1252.encode(text);
-                        encoded.into_owned()
+                        self.writer.encode_legacy_text(text)
                     };
                     let terminator_len = if unicode_text { 2 } else { 1 };
                     if text_cursor + bytes.len() + terminator_len <= area.len() {
@@ -824,7 +894,11 @@ impl<'a> DwgObjectWriter<'a> {
         );
 
         self.writer.write_variable_text(&view.name);
-        self.write_xref_dependant_bit();
+        self.write_xref_table_flags(
+            view.xref_reference,
+            view.xref_resolved,
+            view.xref_dependent,
+        );
 
         self.writer.write_bit_double(view.height);
         self.writer.write_bit_double(view.width);
@@ -838,48 +912,62 @@ impl<'a> DwgObjectWriter<'a> {
         self.writer.write_bit_double(view.back_clip);
 
         // View mode (4 bits)
-        self.writer.write_bit(false); // perspective
-        self.writer.write_bit(false); // front clipping
-        self.writer.write_bit(false); // back clipping
-        self.writer.write_bit(false); // front clipping z
+        self.writer.write_bit(view.perspective);
+        self.writer.write_bit(view.front_clipping);
+        self.writer.write_bit(view.back_clipping);
+        self.writer.write_bit(view.front_clip_at_eye);
 
         if self.version.r2000_plus() {
-            self.writer.write_byte(0); // render mode
+            self.writer.write_byte(view.render_mode.to_value() as u8);
         }
 
         if self.version.r2007_plus() {
-            self.writer.write_bit(true);   // use default lights
-            self.writer.write_byte(1);     // default lighting
-            self.writer.write_bit_double(0.0);
-            self.writer.write_bit_double(0.0);
-            self.writer.write_cm_color(&crate::types::Color::from_index(250));
+            self.writer.write_bit(view.use_default_lights);
+            self.writer.write_byte(view.default_lighting_type as u8);
+            self.writer.write_bit_double(view.brightness);
+            self.writer.write_bit_double(view.contrast);
+            self.writer.write_cm_color(&view.ambient_color);
         }
 
-        // Paper space flag
-        self.writer.write_bit(false);
+        self.writer.write_bit(view.paper_space);
 
         if self.version.r2000_plus() {
-            // Is UCS associated
-            self.writer.write_bit(false);
+            self.writer.write_bit(view.ucs_associated);
+            if view.ucs_associated {
+                self.writer.write_3bit_double(view.ucs_origin);
+                self.writer.write_3bit_double(view.ucs_x_axis);
+                self.writer.write_3bit_double(view.ucs_y_axis);
+                self.writer.write_bit_double(view.ucs_elevation);
+                self.writer.write_bit_short(view.ucs_ortho_type);
+            }
         }
 
-        // Xref block handle (H 5, null for non-xref entries)
+        if self.version.r2007_plus() {
+            self.writer.write_bit(view.camera_plottable);
+        }
+
         self.writer
-            .write_handle(DwgReferenceType::HardPointer, 0);
+            .write_handle(DwgReferenceType::HardPointer, view.xref_handle.value());
 
         if self.version.r2007_plus() {
-            self.writer.write_bit(false); // camera plottable
             self.writer
-                .write_handle(DwgReferenceType::SoftPointer, 0);
+                .write_handle(DwgReferenceType::SoftPointer, view.background_handle.value());
             self.writer
-                .write_handle(DwgReferenceType::HardPointer, 0);
+                .write_handle(DwgReferenceType::HardPointer, view.visual_style_handle.value());
             self.writer
-                .write_handle(DwgReferenceType::HardOwnership, 0);
+                .write_handle(DwgReferenceType::HardOwnership, view.sun_handle.value());
+        }
+
+        if self.version.r2000_plus() && view.ucs_associated {
+            self.writer
+                .write_handle(DwgReferenceType::HardPointer, view.base_ucs_handle.value());
+            self.writer
+                .write_handle(DwgReferenceType::HardPointer, view.named_ucs_handle.value());
         }
 
         if self.version.r2007_plus() {
             self.writer
-                .write_handle(DwgReferenceType::SoftPointer, 0);
+                .write_handle(DwgReferenceType::SoftPointer, view.live_section_handle.value());
         }
 
         self.register_object(view.handle);
@@ -902,27 +990,30 @@ impl<'a> DwgObjectWriter<'a> {
         );
 
         self.writer.write_variable_text(&ucs.name);
-        self.write_xref_dependant_bit();
+        self.write_xref_table_flags(
+            ucs.xref_reference,
+            ucs.xref_resolved,
+            ucs.xref_dependent,
+        );
 
         self.writer.write_3bit_double(ucs.origin);
         self.writer.write_3bit_double(ucs.x_axis);
         self.writer.write_3bit_double(ucs.y_axis);
 
         if self.version.r2000_plus() {
-            self.writer.write_bit_double(0.0);  // elevation
-            self.writer.write_bit_short(0);     // ortho view type
-            self.writer.write_bit_short(0);     // ortho type
+            self.writer.write_bit_double(ucs.elevation);
+            self.writer.write_bit_short(ucs.ortho_view_type);
+            self.writer.write_bit_short(ucs.ortho_type);
         }
 
-        // External reference block handle (null for non-xref entries)
         self.writer
-            .write_handle(DwgReferenceType::HardPointer, 0);
+            .write_handle(DwgReferenceType::HardPointer, ucs.xref_handle.value());
 
         if self.version.r2000_plus() {
             self.writer
-                .write_handle(DwgReferenceType::HardPointer, 0);
+                .write_handle(DwgReferenceType::HardPointer, ucs.base_ucs_handle.value());
             self.writer
-                .write_handle(DwgReferenceType::HardPointer, 0);
+                .write_handle(DwgReferenceType::HardPointer, ucs.named_ucs_handle.value());
         }
 
         self.register_object(ucs.handle);
@@ -1008,7 +1099,11 @@ impl<'a> DwgObjectWriter<'a> {
 
         // Common: Entry name TV 2
         self.writer.write_variable_text(&vport.name);
-        self.write_xref_dependant_bit();
+        self.write_xref_table_flags(
+            vport.xref_reference,
+            vport.xref_resolved,
+            vport.xref_dependent,
+        );
 
         // View height BD 40
         self.writer.write_bit_double(vport.view_height);
@@ -1036,10 +1131,10 @@ impl<'a> DwgObjectWriter<'a> {
         self.writer.write_bit_double(vport.back_clip);
 
         // View mode X 71 — 4 bits: 0123
-        self.writer.write_bit(false); // perspective
-        self.writer.write_bit(false); // front clipping
-        self.writer.write_bit(false); // back clipping
-        self.writer.write_bit(false); // front clipping at eye (OPPOSITE of bit 4)
+        self.writer.write_bit(vport.perspective);
+        self.writer.write_bit(vport.front_clipping);
+        self.writer.write_bit(vport.back_clipping);
+        self.writer.write_bit(vport.front_clip_at_eye);
 
         // R2000+: Render Mode RC 281
         if self.version.r2000_plus() {
@@ -1049,15 +1144,15 @@ impl<'a> DwgObjectWriter<'a> {
         // R2007+: lighting
         if self.version.r2007_plus() {
             // Use default lights B 292
-            self.writer.write_bit(true);
+            self.writer.write_bit(vport.use_default_lights);
             // Default lighting type RC 282
-            self.writer.write_byte(1);
+            self.writer.write_byte(vport.default_lighting_type as u8);
             // Brightness BD 141
-            self.writer.write_bit_double(0.0);
+            self.writer.write_bit_double(vport.brightness);
             // Contrast BD 142
-            self.writer.write_bit_double(0.0);
+            self.writer.write_bit_double(vport.contrast);
             // Ambient Color CMC 63
-            self.writer.write_cm_color(&crate::types::Color::from_index(250));
+            self.writer.write_cm_color(&vport.ambient_color);
         }
 
         // Common: Lower left 2RD 10
@@ -1080,8 +1175,8 @@ impl<'a> DwgObjectWriter<'a> {
         // Fast zoom B 73
         self.writer.write_bit(vport.fast_zoom);
         // UCSICON X 74 — 2 individual bits
-        self.writer.write_bit(true); // bit 0: UCS icon display ON
-        self.writer.write_bit(true); // bit 1: UCS icon at origin
+        self.writer.write_bit(vport.ucsicon_lower);
+        self.writer.write_bit(vport.ucsicon_origin);
         // Grid on/off B 76
         self.writer.write_bit(vport.grid_on);
         // Grid spacing 2RD 15
@@ -1113,49 +1208,60 @@ impl<'a> DwgObjectWriter<'a> {
 
         // R2000+
         if self.version.r2000_plus() {
-            // Unknown B
-            self.writer.write_bit(false);
-            // UCS per Viewport B 71
-            self.writer.write_bit(true);
-            // UCS Origin 3BD 110
-            self.writer.write_3bit_double(crate::types::Vector3::ZERO);
-            // UCS X Axis 3BD 111
-            self.writer.write_3bit_double(crate::types::Vector3::UNIT_X);
-            // UCS Y Axis 3BD 112
-            self.writer.write_3bit_double(crate::types::Vector3::UNIT_Y);
-            // UCS Elevation BD 146
-            self.writer.write_bit_double(0.0);
-            // UCS Orthographic type BS 79
-            self.writer.write_bit_short(0);
+            self.writer.write_bit(vport.ucs_at_origin);
+            self.writer.write_bit(vport.ucs_per_viewport);
+            self.writer.write_3bit_double(vport.ucs_origin);
+            self.writer.write_3bit_double(vport.ucs_x_axis);
+            self.writer.write_3bit_double(vport.ucs_y_axis);
+            self.writer.write_bit_double(vport.ucs_elevation);
+            self.writer.write_bit_short(vport.ucs_ortho_type);
         }
 
         // R2007+
         if self.version.r2007_plus() {
             // Grid flags BS 60 — adaptive grid enabled
-            self.writer.write_bit_short(2);
+            self.writer.write_bit_short(vport.grid_flags.to_bits());
             // Grid major BS 61
-            self.writer.write_bit_short(5);
+            self.writer.write_bit_short(vport.grid_major);
         }
 
         // Common: External reference block handle (hard pointer)
-        self.writer.write_handle(DwgReferenceType::HardPointer, 0);
+        self.writer.write_handle(
+            DwgReferenceType::HardPointer,
+            vport.xref_handle.value(),
+        );
 
         // R2007+
         if self.version.r2007_plus() {
             // Background handle H 332 soft pointer (code 4)
-            self.writer.write_handle(DwgReferenceType::SoftPointer, 0);
+            self.writer.write_handle(
+                DwgReferenceType::SoftPointer,
+                vport.background_handle.value(),
+            );
             // Visual Style handle H 348 hard pointer (code 5)
-            self.writer.write_handle(DwgReferenceType::HardPointer, 0);
+            self.writer.write_handle(
+                DwgReferenceType::HardPointer,
+                vport.visual_style_handle.value(),
+            );
             // Sun handle H 361 hard owner (code 3)
-            self.writer.write_handle(DwgReferenceType::HardOwnership, 0);
+            self.writer.write_handle(
+                DwgReferenceType::HardOwnership,
+                vport.sun_handle.value(),
+            );
         }
 
         // R2000+
         if self.version.r2000_plus() {
             // Named UCS Handle H 345 hard pointer
-            self.writer.write_handle(DwgReferenceType::HardPointer, 0);
+            self.writer.write_handle(
+                DwgReferenceType::HardPointer,
+                vport.named_ucs_handle.value(),
+            );
             // Base UCS Handle H 346 hard pointer
-            self.writer.write_handle(DwgReferenceType::HardPointer, 0);
+            self.writer.write_handle(
+                DwgReferenceType::HardPointer,
+                vport.base_ucs_handle.value(),
+            );
         }
 
         self.register_object(vport.handle);
@@ -1212,6 +1318,18 @@ impl<'a> DwgObjectWriter<'a> {
     }
 
     fn write_dimstyle(&mut self, ds: &crate::tables::DimStyle) {
+        let dimclrd_color = ds
+            .dimclrd_true_color
+            .unwrap_or_else(|| crate::types::Color::from_index(ds.dimclrd));
+        let dimclre_color = ds
+            .dimclre_true_color
+            .unwrap_or_else(|| crate::types::Color::from_index(ds.dimclre));
+        let dimclrt_color = ds
+            .dimclrt_true_color
+            .unwrap_or_else(|| crate::types::Color::from_index(ds.dimclrt));
+        let dimtfillclr_color = ds
+            .dimtfillclr_true_color
+            .unwrap_or_else(|| crate::types::Color::from_index(ds.dimtfillclr));
         let anno = self.annotative_eed_block(ds.annotative);
         self.write_common_non_entity_data_eed(
             common::OBJ_DIMSTYLE,
@@ -1224,7 +1342,11 @@ impl<'a> DwgObjectWriter<'a> {
 
         // Common: Entry name TV 2
         self.writer.write_variable_text(&ds.name);
-        self.write_xref_dependant_bit();
+        self.write_xref_table_flags(
+            ds.xref_reference,
+            ds.xref_resolved,
+            ds.xref_dependent,
+        );
 
         // ── R13/R14 Only: DimStyle fields ───────────────────────────
         // These fields are ONLY written for R13/R14 (not R2000+).
@@ -1265,7 +1387,7 @@ impl<'a> DwgObjectWriter<'a> {
             // DIMJUST RC 280
             self.writer.write_byte(ds.dimjust as u8);
             // DIMFIT RC 287
-            self.writer.write_byte(3); // default
+            self.writer.write_byte(ds.dimfit as u8);
             // DIMUPT B 288
             self.writer.write_bit(ds.dimupt);
             // DIMTZIN RC 284
@@ -1277,7 +1399,7 @@ impl<'a> DwgObjectWriter<'a> {
             // DIMTAD RC 77
             self.writer.write_byte(ds.dimtad as u8);
             // DIMUNIT BS 270
-            self.writer.write_bit_short(ds.dimlunit); // R13/R14 uses DIMUNIT (270)
+            self.writer.write_bit_short(ds.dimunit);
             // DIMAUNIT BS 275
             self.writer.write_bit_short(ds.dimaunit);
             // DIMDEC BS 271
@@ -1327,17 +1449,17 @@ impl<'a> DwgObjectWriter<'a> {
             // DIMAPOST T 4
             self.writer.write_variable_text(&ds.dimapost);
             // DIMBLK T 5
-            self.writer.write_variable_text("");
+            self.writer.write_variable_text(&ds.dimblk_name);
             // DIMBLK1 T 6
-            self.writer.write_variable_text("");
+            self.writer.write_variable_text(&ds.dimblk1_name);
             // DIMBLK2 T 7
-            self.writer.write_variable_text("");
+            self.writer.write_variable_text(&ds.dimblk2_name);
             // DIMCLRD BS 176
-            self.writer.write_cm_color(&crate::types::Color::from_index(ds.dimclrd));
+            self.writer.write_cm_color(&dimclrd_color);
             // DIMCLRE BS 177
-            self.writer.write_cm_color(&crate::types::Color::from_index(ds.dimclre));
+            self.writer.write_cm_color(&dimclre_color);
             // DIMCLRT BS 178
-            self.writer.write_cm_color(&crate::types::Color::from_index(ds.dimclrt));
+            self.writer.write_cm_color(&dimclrt_color);
         }
 
         // ── R2000+ DimStyle fields ──────────────────────────────────
@@ -1377,7 +1499,7 @@ impl<'a> DwgObjectWriter<'a> {
             // DIMTFILL BS 69
             self.writer.write_bit_short(ds.dimtfill);
             // DIMTFILLCLR CMC 70
-            self.writer.write_cm_color(&crate::types::Color::from_index(ds.dimtfillclr));
+            self.writer.write_cm_color(&dimtfillclr_color);
         }
 
         // R2000+
@@ -1441,11 +1563,11 @@ impl<'a> DwgObjectWriter<'a> {
             // DIMSOXD B 175
             self.writer.write_bit(ds.dimsoxd);
             // DIMCLRD BS 176
-            self.writer.write_cm_color(&crate::types::Color::from_index(ds.dimclrd));
+            self.writer.write_cm_color(&dimclrd_color);
             // DIMCLRE BS 177
-            self.writer.write_cm_color(&crate::types::Color::from_index(ds.dimclre));
+            self.writer.write_cm_color(&dimclre_color);
             // DIMCLRT BS 178
-            self.writer.write_cm_color(&crate::types::Color::from_index(ds.dimclrt));
+            self.writer.write_cm_color(&dimclrt_color);
             // DIMADEC BS 179
             self.writer.write_bit_short(ds.dimadec);
             // DIMDEC BS 271
@@ -1482,8 +1604,8 @@ impl<'a> DwgObjectWriter<'a> {
             self.writer.write_bit_short(ds.dimalttz);
             // DIMUPT B 288
             self.writer.write_bit(ds.dimupt);
-            // DIMFIT BS 287
-            self.writer.write_bit_short(ds.dimfit);
+            // DIMATFIT BS 289
+            self.writer.write_bit_short(ds.dimatfit);
         }
 
         // R2007+
@@ -1497,13 +1619,13 @@ impl<'a> DwgObjectWriter<'a> {
             // DIMTXTDIRECTION B 295
             self.writer.write_bit(ds.dimtxtdirection);
             // DIMALTMZF BD
-            self.writer.write_bit_double(0.0);
+            self.writer.write_bit_double(ds.dimaltmzf);
             // DIMALTMZS T
-            self.writer.write_variable_text("");
+            self.writer.write_variable_text(&ds.dimaltmzs);
             // DIMMZF BD
-            self.writer.write_bit_double(0.0);
+            self.writer.write_bit_double(ds.dimmzf);
             // DIMMZS T
-            self.writer.write_variable_text("");
+            self.writer.write_variable_text(&ds.dimmzs);
         }
 
         // R2000+
@@ -1520,7 +1642,8 @@ impl<'a> DwgObjectWriter<'a> {
         // ── Handle references ───────────────────────────────────────
 
         // External reference block handle (hard pointer)
-        self.writer.write_handle(DwgReferenceType::HardPointer, 0);
+        self.writer
+            .write_handle(DwgReferenceType::HardPointer, ds.xref_handle.value());
 
         // 340 DIMTXSTY (hard pointer)
         self.writer
@@ -1744,11 +1867,18 @@ impl<'a> DwgObjectWriter<'a> {
     }
 
     fn serialize_parallel_entity_batch(&self, handles: &[Handle]) -> ParallelEntityBatch {
+        let encoding =
+            crate::io::dxf::code_page::encoding_from_code_page(&self.document.header.code_page)
+                .unwrap_or(encoding_rs::WINDOWS_1252);
         let mut worker = Self {
             version: self.version,
             dxf_version: self.dxf_version,
             document: self.document,
-            writer: DwgMergedWriter::new(self.version, self.dxf_version),
+            writer: DwgMergedWriter::with_encoding(
+                self.version,
+                self.dxf_version,
+                encoding,
+            ),
             output: Vec::with_capacity(handles.len().saturating_mul(64)),
             handle_map: Vec::with_capacity(handles.len()),
             object_queue: VecDeque::new(),
@@ -2027,11 +2157,14 @@ impl<'a> DwgObjectWriter<'a> {
             common.invisible,
             common.linetype_scale,
             &common.linetype,
+            &common.linetype_handle,
             &common.extended_data,
             &common.reactors,
             &common.xdictionary_handle,
             common.graphic_data.as_deref(),
             common.entity_mode, common.material_flags, &common.material_handle, common.shadow_flags, common.plotstyle_flags, &common.plotstyle_handle,
+            &common.color_book_handle, &common.full_visual_style_handle,
+            &common.face_visual_style_handle, &common.edge_visual_style_handle,
         );
 
         // Use the original name as-is when we have the Block entity from binary;
@@ -2080,11 +2213,14 @@ impl<'a> DwgObjectWriter<'a> {
             common.invisible,
             common.linetype_scale,
             &common.linetype,
+            &common.linetype_handle,
             &common.extended_data,
             &common.reactors,
             &common.xdictionary_handle,
             common.graphic_data.as_deref(),
             common.entity_mode, common.material_flags, &common.material_handle, common.shadow_flags, common.plotstyle_flags, &common.plotstyle_handle,
+            &common.color_book_handle, &common.full_visual_style_handle,
+            &common.face_visual_style_handle, &common.edge_visual_style_handle,
         );
 
         self.register_object(common.handle);

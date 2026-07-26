@@ -213,6 +213,11 @@ pub struct AttributeDefinition {
     pub is_multiline: bool,
     /// Number of lines for multiline attribute
     pub line_count: i16,
+    /// Embedded MTEXT payload used by R2018+ multiline attributes.
+    ///
+    /// The plain attribute text only carries the first line. Keeping the
+    /// embedded object preserves its layout, style, background and full value.
+    pub embedded_mtext: Option<Box<crate::entities::MText>>,
     /// Lock position in block
     pub lock_position: bool,
 }
@@ -241,6 +246,7 @@ impl AttributeDefinition {
             mtext_flag: MTextFlag::SingleLine,
             is_multiline: false,
             line_count: 1,
+            embedded_mtext: None,
             lock_position: false,
         }
     }
@@ -591,4 +597,3 @@ mod tests {
         assert_eq!(VerticalAlignment::Middle.to_value(), 2);
     }
 }
-

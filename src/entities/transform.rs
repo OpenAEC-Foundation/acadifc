@@ -1074,6 +1074,7 @@ impl EntityType {
             EntityType::Light(_) => {}
             // Anchored to their drawing view (see translate).
             EntityType::SectionSymbol(_) | EntityType::ViewBorder(_) => {}
+            EntityType::Extended(_) => {}
             EntityType::Unknown(e) => transform_unknown(e, transform),
         }
     }

@@ -31,6 +31,20 @@ use crate::types::DxfVersion;
 /// # Returns
 /// `DxfClassCollection` containing all parsed class definitions.
 pub fn read_classes(data: &[u8], version: DxfVersion, maintenance_version: u8) -> Result<DxfClassCollection> {
+    read_classes_with_encoding(
+        data,
+        version,
+        maintenance_version,
+        encoding_rs::WINDOWS_1252,
+    )
+}
+
+pub fn read_classes_with_encoding(
+    data: &[u8],
+    version: DxfVersion,
+    maintenance_version: u8,
+    encoding: &'static encoding_rs::Encoding,
+) -> Result<DxfClassCollection> {
     let dwg = DwgVersion::from_dxf_version(version)?;
 
     // ── Verify start sentinel ──
@@ -62,7 +76,8 @@ pub fn read_classes(data: &[u8], version: DxfVersion, maintenance_version: u8) -
     let section_data = &data[data_start..data_start + section_size];
 
     // ── Create the bit reader over the section data ──
-    let mut reader = DwgBitReader::new(section_data.to_vec(), dwg, version);
+    let mut reader =
+        DwgBitReader::with_encoding(section_data.to_vec(), dwg, version, encoding);
 
     // R2007+: The section data has an RL prefix (total data size in bits)
     // from save_position_for_size. Text is INLINE (not in a separate stream).
@@ -189,13 +204,13 @@ mod tests {
             "Class count mismatch: wrote {}, read {}",
             classes.len(), read_classes.len());
 
-        // Verify a specific class (ACDBPLACEHOLDER is 16th, class_number=515
-        // after the three underlay reference classes + the HELIX class).
+        // Verify a specific class and preserve its positional class number.
         let acdb_placeholder = read_classes.get_by_name("ACDBPLACEHOLDER");
         assert!(acdb_placeholder.is_some(), "Should find ACDBPLACEHOLDER class");
         let cls = acdb_placeholder.unwrap();
+        let expected = classes.get_by_name("ACDBPLACEHOLDER").unwrap();
         assert_eq!(cls.cpp_class_name, "AcDbPlaceHolder");
-        assert_eq!(cls.class_number, 515);
+        assert_eq!(cls.class_number, expected.class_number);
     }
 
     #[test]

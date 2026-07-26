@@ -600,6 +600,14 @@ impl Default for BlockAttribute {
     }
 }
 
+/// Pre-R2007 per-leader arrowhead override.
+#[derive(Debug, Clone, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct MultiLeaderArrowheadOverride {
+    pub is_default: bool,
+    pub arrowhead_handle: Option<Handle>,
+}
+
 // ============================================================================
 // MultiLeader Context Data
 // ============================================================================
@@ -610,6 +618,12 @@ impl Default for BlockAttribute {
 pub struct MultiLeaderAnnotContext {
     /// Leader roots (each can have multiple leader lines).
     pub leader_roots: Vec<LeaderRoot>,
+    /// Undocumented low five flags in the standalone object-context leader
+    /// root header. Root-count bits are derived from `leader_roots`.
+    pub standalone_flags: u8,
+    /// Whether standalone DWG context stores a zero root count followed by
+    /// the seven-bit compatibility header instead of a direct BL count.
+    pub standalone_uses_root_flags: bool,
 
     // Scale and positioning
     /// Overall scale factor.
@@ -660,6 +674,8 @@ pub struct MultiLeaderAnnotContext {
     pub text_height_automatic: bool,
     /// Word break enabled.
     pub word_break: bool,
+    /// Undocumented text-context bit following the word-break flag.
+    pub dwg_unknown_text_bit: bool,
     /// Text style handle.
     pub text_style_handle: Option<Handle>,
 
@@ -741,6 +757,8 @@ impl MultiLeaderAnnotContext {
 
         Self {
             leader_roots: Vec::new(),
+            standalone_flags: 0,
+            standalone_uses_root_flags: false,
             scale_factor: 1.0,
             content_base_point: Vector3::ZERO,
             has_text_contents: false,
@@ -764,6 +782,7 @@ impl MultiLeaderAnnotContext {
             text_bottom_attachment: TextAttachmentType::CenterOfText,
             text_height_automatic: false,
             word_break: true,
+            dwg_unknown_text_bit: false,
             text_style_handle: None,
             has_block_contents: false,
             block_content_handle: None,
@@ -860,6 +879,8 @@ impl Default for MultiLeaderAnnotContext {
 pub struct MultiLeader {
     /// Common entity data.
     pub common: EntityCommon,
+    /// Native DWG MLEADER version (expected value is 2 on R2010+).
+    pub dwg_version: i16,
 
     // Style reference
     /// Handle to MultiLeader style.
@@ -872,6 +893,8 @@ pub struct MultiLeader {
     pub context: MultiLeaderAnnotContext,
     /// Block attributes (for block content).
     pub block_attributes: Vec<BlockAttribute>,
+    /// Pre-R2007 arrowhead overrides.
+    pub arrowhead_overrides: Vec<MultiLeaderArrowheadOverride>,
 
     // Leader line settings
     /// Path type (straight, spline, invisible).
@@ -950,10 +973,8 @@ pub struct MultiLeader {
     /// DXF version that produced `raw_dxf_codes`.
     #[cfg_attr(feature = "serde", serde(skip))]
     pub raw_dxf_version: Option<crate::types::DxfVersion>,
-    /// Raw DWG record bytes, preserved verbatim for lossless round-trip.
-    /// The MLEADER context is a large, intricate structure; until the native
-    /// encoder is byte-exact, the DWG reader captures the original record so
-    /// the writer can re-emit it verbatim (same encoding family only).
+    /// Original DWG record retained for diagnostics; native writer does not
+    /// depend on raw passthrough.
     #[cfg_attr(feature = "serde", serde(skip))]
     pub raw_dwg_data: Option<Vec<u8>>,
     /// Handle-stream bit count captured alongside `raw_dwg_data`.
@@ -968,10 +989,12 @@ impl MultiLeader {
     pub fn new() -> Self {
         Self {
             common: EntityCommon::default(),
+            dwg_version: 2,
             style_handle: None,
             content_type: LeaderContentType::MText,
             context: MultiLeaderAnnotContext::new(),
             block_attributes: Vec::new(),
+            arrowhead_overrides: Vec::new(),
             path_type: MultiLeaderPathType::StraightLineSegments,
             line_color: Color::ByBlock,
             line_type_handle: None,

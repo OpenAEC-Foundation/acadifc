@@ -49,6 +49,7 @@ pub mod dwg_stream_writers;
 pub mod dwg_version;
 pub mod dwg_writer;
 pub mod eed_codec;
+pub(crate) mod embedded_entity;
 pub mod file_headers;
 mod parallel;
 pub mod preview;

@@ -435,6 +435,10 @@ fn write_ac15<W: Write + Seek>(
     version: DxfVersion,
 ) -> Result<()> {
     let mut fhw = DwgFileHeaderWriterAC15::new(version);
+    fhw.set_maintenance_version(document.maintenance_version);
+    fhw.set_code_page(
+        crate::io::dxf::code_page::dwg_code_page_index(&document.header.code_page),
+    );
 
     // ── Phase 1: Compute objects FIRST to get handle map ──
     let objects_started = web_time::Instant::now();
@@ -454,12 +458,25 @@ fn write_ac15<W: Write + Seek>(
 
     // ── Section: Header (uses synced + corrected header) ──
     let maint = document.maintenance_version;
-    let header_data = header_writer::write_header(version, &corrected_header, maint);
+    let header_encoding =
+        crate::io::dxf::code_page::encoding_from_code_page(&document.header.code_page)
+            .unwrap_or(encoding_rs::WINDOWS_1252);
+    let header_data = header_writer::write_header_with_encoding(
+        version,
+        &corrected_header,
+        maint,
+        header_encoding,
+    );
     fhw.add_section(section_names::HEADER, header_data);
 
     // ── Section: Classes ──
     let classes: Vec<_> = document.classes.iter().cloned().collect();
-    let classes_data = classes_writer::write_classes(version, &classes, maint);
+    let classes_data = classes_writer::write_classes_with_encoding(
+        version,
+        &classes,
+        maint,
+        header_encoding,
+    );
     fhw.add_section(section_names::CLASSES, classes_data);
 
     // ── Section: AcDbObjects (pre-computed) ──
@@ -520,6 +537,9 @@ fn write_ac18<W: Write + Seek>(
 
     // AC18 writer reserves 0x100 bytes at file start for metadata
     let mut fhw = DwgFileHeaderWriterAC18::new(version, maint, output)?;
+    fhw.set_code_page(
+        crate::io::dxf::code_page::dwg_code_page_index(&document.header.code_page),
+    );
 
     // R2004+ default page size for most sections
     const PAGE_SIZE: usize = 0x7400;
@@ -543,12 +563,25 @@ fn write_ac18<W: Write + Seek>(
     let corrected_header = prepare_header(document, &handle_map_u32, &extents);
 
     // ── Section: Header (uses synced + corrected header) ──
-    let header_data = header_writer::write_header(version, &corrected_header, maint);
+    let header_encoding =
+        crate::io::dxf::code_page::encoding_from_code_page(&document.header.code_page)
+            .unwrap_or(encoding_rs::WINDOWS_1252);
+    let header_data = header_writer::write_header_with_encoding(
+        version,
+        &corrected_header,
+        maint,
+        header_encoding,
+    );
     fhw.add_section(output, section_names::HEADER, &header_data, true, PAGE_SIZE)?;
 
     // ── Section: Classes ──
     let classes: Vec<_> = document.classes.iter().cloned().collect();
-    let classes_data = classes_writer::write_classes(version, &classes, maint);
+    let classes_data = classes_writer::write_classes_with_encoding(
+        version,
+        &classes,
+        maint,
+        header_encoding,
+    );
     fhw.add_section(output, section_names::CLASSES, &classes_data, true, PAGE_SIZE)?;
 
     // ── Section: SummaryInfo ──
@@ -725,7 +758,15 @@ fn write_ac21_impl<W: Write + Seek>(
     // Classes
     let classes: Vec<_> = document.classes.iter().cloned().collect();
     let maint = document.maintenance_version;
-    let classes_data = classes_writer::write_classes(version, &classes, maint);
+    let header_encoding =
+        crate::io::dxf::code_page::encoding_from_code_page(&document.header.code_page)
+            .unwrap_or(encoding_rs::WINDOWS_1252);
+    let classes_data = classes_writer::write_classes_with_encoding(
+        version,
+        &classes,
+        maint,
+        header_encoding,
+    );
     fhw.add_section(output, section_names::CLASSES, &classes_data)?;
 
     // AuxHeader (uses corrected HANDSEED)
@@ -733,7 +774,12 @@ fn write_ac21_impl<W: Write + Seek>(
     fhw.add_section(output, section_names::AUX_HEADER, &aux_data)?;
 
     // Header (uses corrected HANDSEED)
-    let header_data = header_writer::write_header(version, &corrected_header, maint);
+    let header_data = header_writer::write_header_with_encoding(
+        version,
+        &corrected_header,
+        maint,
+        header_encoding,
+    );
     fhw.add_section(output, section_names::HEADER, &header_data)?;
 
     // ── Finalize: section map, page map, file header, metadata ──

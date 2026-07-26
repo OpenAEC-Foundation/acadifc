@@ -222,12 +222,14 @@ mod tests {
             bulge: 0.5,
             start_width: 0.0,
             end_width: 0.0,
+            vertex_id: 0,
         });
         lw.vertices.push(LwVertex {
             location: crate::types::Vector2::new(10.0, 0.0),
             bulge: -0.3,
             start_width: 0.0,
             end_width: 0.0,
+            vertex_id: 0,
         });
         mirror_lwpolyline(&mut lw, &Transform::from_mirror_x());
         assert!((lw.vertices[0].bulge - (-0.5)).abs() < 1e-10);

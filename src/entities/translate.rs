@@ -163,6 +163,22 @@ pub(crate) fn translate_dimension(e: &mut Dimension, offset: Vector3) {
             d.feature_location = d.feature_location + offset;
             d.leader_endpoint = d.leader_endpoint + offset;
         }
+        Dimension::Arc(d) => {
+            d.definition_point = d.definition_point + offset;
+            d.base.text_middle_point = d.base.text_middle_point + offset;
+            d.first_extension_point = d.first_extension_point + offset;
+            d.second_extension_point = d.second_extension_point + offset;
+            d.center_point = d.center_point + offset;
+            d.first_leader_point = d.first_leader_point + offset;
+            d.second_leader_point = d.second_leader_point + offset;
+        }
+        Dimension::LargeRadial(d) => {
+            d.definition_point = d.definition_point + offset;
+            d.base.text_middle_point = d.base.text_middle_point + offset;
+            d.chord_point = d.chord_point + offset;
+            d.override_center = d.override_center + offset;
+            d.jog_point = d.jog_point + offset;
+        }
     }
 }
 
@@ -554,6 +570,7 @@ impl EntityType {
             // view; the preserved raw record is re-emitted verbatim, so a
             // display-only move would silently revert on save.
             EntityType::SectionSymbol(_) | EntityType::ViewBorder(_) => {}
+            EntityType::Extended(e) => e.translate(offset),
             EntityType::Unknown(e) => translate_unknown(e, offset),
         }
     }
