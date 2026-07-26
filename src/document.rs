@@ -2303,19 +2303,56 @@ impl CadDocument {
         self.entities.iter_mut().map(Arc::make_mut)
     }
 
-    /// Owner handle of a dictionary/unknown object, for ownership-chain walks.
-    fn object_owner(&self, h: Handle) -> Option<Handle> {
+    /// Owner handle of a database object, for ownership-chain walks.
+    ///
+    /// Dynamic-block, associative and context records are normally reached
+    /// through several typed dictionaries/objects. Keeping this exhaustive for
+    /// native object families lets consumers resolve those graphs without
+    /// depending on their original raw-object representation.
+    pub fn object_owner(&self, h: Handle) -> Option<Handle> {
         match self.objects.get(&h)? {
             ObjectType::Dictionary(d) => Some(d.owner),
-            ObjectType::DictionaryWithDefault(_) => None,
+            ObjectType::Layout(value) => Some(value.owner),
+            ObjectType::XRecord(value) => Some(value.owner),
+            ObjectType::Group(value) => Some(value.owner),
+            ObjectType::MLineStyle(value) => Some(value.owner),
+            ObjectType::ImageDefinition(value) => Some(value.owner),
+            ObjectType::PlotSettings(value) => Some(value.owner),
+            ObjectType::MultiLeaderStyle(value) => Some(value.owner_handle),
+            ObjectType::TableStyle(value) => Some(value.owner_handle),
+            ObjectType::TableContent(value) => Some(value.common.owner_handle),
+            ObjectType::Scale(value) => Some(value.owner_handle),
+            ObjectType::ObjectContextData(value) => Some(value.owner_handle),
+            ObjectType::SortEntitiesTable(value) => Some(value.owner_handle),
+            ObjectType::DictionaryVariable(value) => Some(value.owner_handle),
+            ObjectType::VisualStyle(value) => Some(value.owner),
+            ObjectType::Material(value) => Some(value.owner),
+            ObjectType::ImageDefinitionReactor(value) => Some(value.owner),
+            ObjectType::GeoData(value) => Some(value.owner),
+            ObjectType::SpatialFilter(value) => Some(value.owner),
+            ObjectType::RasterVariables(value) => Some(value.owner),
+            ObjectType::BookColor(value) => Some(value.owner),
+            ObjectType::PlaceHolder(value) => Some(value.owner),
+            ObjectType::DictionaryWithDefault(value) => Some(value.owner),
+            ObjectType::WipeoutVariables(value) => Some(value.owner),
+            ObjectType::BlockVisibilityParameter(value) => Some(value.owner),
+            ObjectType::DynamicBlock(value) => Some(value.owner),
+            ObjectType::Associative(value) => Some(value.owner),
+            ObjectType::ClassObject(value) => Some(value.owner),
+            ObjectType::DataObject(value) => Some(value.owner),
+            ObjectType::Field(value) => Some(value.owner),
+            ObjectType::FieldList(value) => Some(value.owner),
+            ObjectType::RegisteredClass(value) => Some(value.owner),
+            ObjectType::DgnLineStyle(value) => Some(value.owner),
+            ObjectType::ProxyObject(value) => Some(value.owner),
             ObjectType::Unknown { owner, .. } => Some(*owner),
-            _ => None,
+            ObjectType::UnderlayDefinition(_) => None,
         }
     }
 
     /// Walk the ownership chain upward from `start` (inclusive) and report
     /// whether it passes through `target`. Bounded to avoid cycles.
-    fn owner_chain_reaches(&self, start: Handle, target: Handle) -> bool {
+    pub fn owner_chain_reaches(&self, start: Handle, target: Handle) -> bool {
         let mut cur = start;
         for _ in 0..16 {
             if cur == target {
@@ -2351,20 +2388,37 @@ impl CadDocument {
         &self,
         insert_handle: Handle,
     ) -> Option<(Handle, &crate::objects::BlockVisibilityParameter)> {
-        let insert = self.entities.iter().find_map(|e| match e.as_ref() {
-            EntityType::Insert(i) if i.common.handle == insert_handle => Some(i),
-            _ => None,
-        })?;
-        let xdict = insert.common.xdictionary_handle?;
-        // Find the representation object owned (transitively) by this INSERT's
-        // extension dictionary; it names the dynamic definition block.
-        let def_block = self
-            .block_representations
-            .iter()
-            .find(|(rep, _)| self.owner_chain_reaches(**rep, xdict))
-            .map(|(_, def)| *def)?;
+        let def_block = self.dynamic_definition_for_insert(insert_handle)?;
         let param = self.block_visibility_param_for_def(def_block)?;
         Some((def_block, param))
+    }
+
+    /// Resolve the original dynamic definition of an INSERT.
+    ///
+    /// Evaluated anonymous blocks point back through an
+    /// `AcDbBlockRepresentationData` object. A direct reference to the
+    /// definition needs no representation object and falls back to the INSERT
+    /// block-record handle.
+    pub fn dynamic_definition_for_insert(
+        &self,
+        insert_handle: Handle,
+    ) -> Option<Handle> {
+        let EntityType::Insert(insert) = self.get_entity(insert_handle)? else {
+            return None;
+        };
+        if let Some(xdict) = insert.common.xdictionary_handle {
+            if let Some(definition) = self
+                .block_representations
+                .iter()
+                .find(|(rep, _)| self.owner_chain_reaches(**rep, xdict))
+                .map(|(_, definition)| *definition)
+            {
+                return Some(definition);
+            }
+        }
+        self.block_records
+            .get(&insert.block_name)
+            .map(|record| record.handle)
     }
 
     /// Resolve handle references after reading a DXF file.

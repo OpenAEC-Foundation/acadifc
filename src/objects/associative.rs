@@ -43,6 +43,18 @@ impl AssociativeObject {
         }
         self.data.visit_handles_mut(visit);
     }
+
+    /// Whether any owner/reactor/payload reference points at `target`.
+    ///
+    /// This read-side query deliberately reuses the exhaustive handle visitor,
+    /// so new associative payload variants cannot silently disappear from
+    /// document relationship lookups.
+    pub fn references_handle(&self, target: Handle) -> bool {
+        self.owner == target
+            || self.reactors.contains(&target)
+            || self.xdictionary_handle == Some(target)
+            || self.data.references_handle(target)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -84,6 +96,181 @@ pub enum AssociativeData {
 }
 
 impl AssociativeData {
+    fn references_handle(&self, target: Handle) -> bool {
+        match self {
+            Self::Unknown
+            | Self::ActionParam(_)
+            | Self::DimDependencyBody(_)
+            | Self::PersSubentManager(_)
+            | Self::PersSubentManagerStatic(_) => false,
+            Self::Dependency(value) => dependency_references(value, target),
+            Self::ValueDependency(value) => {
+                dependency_references(&value.dependency, target)
+                    || eval_references(&value.value, target)
+            }
+            Self::GeomDependency(value) => {
+                dependency_references(&value.dependency, target)
+            }
+            Self::SurfaceActionBody(value) => {
+                parameter_body_references(&value.parameter_body, target)
+                    || value.surface_body.dependency == target
+            }
+            Self::Action(value) => action_references(value, target),
+            Self::Network(value) => {
+                action_references(&value.action, target)
+                    || value
+                        .actions
+                        .iter()
+                        .any(|dependency| dependency.dependency == target)
+                    || value.owned_actions.contains(&target)
+            }
+            Self::AnnotationActionBody(value) => {
+                parameter_body_references(
+                    &value.annotation.parameter_body,
+                    target,
+                ) || value.annotation.dependency == target
+                    || value.entity == target
+                    || value
+                        .actions
+                        .iter()
+                        .any(|dependency| dependency.dependency == target)
+                    || value.read_node == target
+                    || value.dimension_node == target
+                    || value.dependency == target
+            }
+            Self::EdgeActionParam(value) => {
+                single_dependency_references(
+                    &value.single_dependency,
+                    target,
+                ) || value.parameter == target
+            }
+            Self::ConstraintGroup(value) => {
+                action_references(&value.action, target)
+                    || value.dependency == target
+                    || value.actions.contains(&target)
+                    || value.nodes.iter().any(|node| match &node.data {
+                        AssocConstraintNodeData::Angle {
+                            value_dependency,
+                            dimension_dependency,
+                            ..
+                        }
+                        | AssocConstraintNodeData::Distance {
+                            value_dependency,
+                            dimension_dependency,
+                            ..
+                        }
+                        | AssocConstraintNodeData::RadiusDiameter {
+                            value_dependency,
+                            dimension_dependency,
+                            ..
+                        } => {
+                            *value_dependency == target
+                                || *dimension_dependency == target
+                        }
+                        AssocConstraintNodeData::ImplicitPoint {
+                            geometry_dependency,
+                            ..
+                        }
+                        | AssocConstraintNodeData::Point {
+                            geometry_dependency,
+                            ..
+                        }
+                        | AssocConstraintNodeData::Line {
+                            geometry_dependency,
+                            ..
+                        }
+                        | AssocConstraintNodeData::BoundedLine {
+                            geometry_dependency,
+                            ..
+                        }
+                        | AssocConstraintNodeData::Circle {
+                            geometry_dependency,
+                            ..
+                        }
+                        | AssocConstraintNodeData::Arc {
+                            geometry_dependency,
+                            ..
+                        } => *geometry_dependency == target,
+                        _ => false,
+                    })
+            }
+            Self::Variable(value) => {
+                action_references(&value.action, target)
+                    || eval_references(&value.value, target)
+            }
+            Self::CompoundActionParam(value)
+            | Self::PointRefActionParam(value)
+            | Self::PathActionParam(AssocPathActionParam {
+                compound: value,
+                ..
+            }) => compound_references(value, target),
+            Self::OsnapPointRefActionParam(value) => {
+                compound_references(&value.compound, target)
+            }
+            Self::ObjectActionParam(value)
+            | Self::FaceActionParam(AssocFaceActionParam {
+                single_dependency: value,
+                ..
+            })
+            | Self::VertexActionParam(AssocVertexActionParam {
+                single_dependency: value,
+                ..
+            }) => single_dependency_references(value, target),
+            Self::AsmBodyActionParam(value) => {
+                single_dependency_references(
+                    &value.single_dependency,
+                    target,
+                ) || value.history == target
+            }
+            Self::ArrayParameters(value) => value.items.iter().any(|item| {
+                item.first_handle == Some(target)
+                    || item.second_handle == Some(target)
+            }),
+            Self::ArrayActionBody(value) => {
+                parameter_body_references(&value.parameter_body, target)
+            }
+            Self::ArrayModifyActionBody(value) => {
+                parameter_body_references(
+                    &value.body.parameter_body,
+                    target,
+                )
+            }
+            Self::DimensionAssociation(value) => {
+                value.dimension == target
+                    || value.references.iter().flatten().any(|reference| {
+                        reference.xrefs.contains(&target)
+                            || reference.intersection_objects.contains(&target)
+                    })
+            }
+            Self::ViewRepActionBody(value) => value.view_rep == target,
+            Self::ViewObjectActionParam(value) => {
+                single_dependency_references(
+                    &value.single_dependency,
+                    target,
+                )
+            }
+            Self::ViewRepHatchManager(value) => {
+                compound_references(&value.compound, target)
+                    || value
+                        .items
+                        .iter()
+                        .any(|item| item.parameter == target)
+            }
+            Self::ViewRepHatchActionParam(value) => {
+                single_dependency_references(
+                    &value.single_dependency,
+                    target,
+                )
+            }
+            Self::ViewLabelActionParam(value) => {
+                single_dependency_references(
+                    &value.single_dependency,
+                    target,
+                )
+            }
+        }
+    }
+
     pub(crate) fn visit_handles_mut(
         &mut self,
         visit: &mut impl FnMut(&mut Handle),
@@ -268,6 +455,70 @@ impl AssociativeData {
             visit(&mut value.history);
         }
     }
+}
+
+fn eval_references(value: &AssocEvalVariant, target: Handle) -> bool {
+    matches!(value.value, AssocEvalValue::Handle(handle) if handle == target)
+}
+
+fn value_param_references(value: &AssocValueParam, target: Handle) -> bool {
+    value.controlled_object_dependency == target
+        || value.variables.iter().any(|variable| {
+            variable.handle == target
+                || eval_references(&variable.value, target)
+        })
+}
+
+fn dependency_references(value: &AssocDependency, target: Handle) -> bool {
+    value.dependent_on == target
+        || value.read_dependency == target
+        || value.node == target
+        || value.dependency_body == target
+}
+
+fn action_references(value: &AssocAction, target: Handle) -> bool {
+    value.owning_network == target
+        || value.action_body == target
+        || value
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.dependency == target)
+        || value.owned_parameters.contains(&target)
+        || value
+            .values
+            .iter()
+            .any(|parameter| value_param_references(parameter, target))
+}
+
+fn parameter_body_references(
+    value: &AssocParamBasedActionBody,
+    target: Handle,
+) -> bool {
+    value.dependencies.contains(&target)
+        || value.dependency == target
+        || value
+            .values
+            .iter()
+            .any(|parameter| value_param_references(parameter, target))
+}
+
+fn single_dependency_references(
+    value: &AssocSingleDependencyActionParam,
+    target: Handle,
+) -> bool {
+    value.dependency == target
+}
+
+fn compound_references(
+    value: &AssocCompoundActionParam,
+    target: Handle,
+) -> bool {
+    value.parameters.contains(&target)
+        || value.child_parameter.as_ref().is_some_and(|child| {
+            child.parameter == target
+                || child.secondary_parameter == target
+                || child.tertiary_parameter == target
+        })
 }
 
 fn visit_eval(
