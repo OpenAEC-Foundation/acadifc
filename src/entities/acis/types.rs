@@ -881,6 +881,16 @@ impl<'a> SatFace<'a> {
         }
     }
 
+    /// First attribute attached to this face.
+    pub fn attribute(&self) -> SatPointer {
+        self.record.attribute
+    }
+
+    /// Underlying lossless face record.
+    pub fn record(&self) -> &'a SatRecord {
+        self.record
+    }
+
     /// Pointer to the next face.
     pub fn next_face(&self) -> SatPointer {
         self.record.token_pointer(1).unwrap_or(SatPointer::NULL)
@@ -2163,6 +2173,20 @@ impl SatDocument {
                 v.extend_from_slice(&components[..len]);
             } else if let Some(f) = tok.as_float() {
                 v.push(f);
+            } else if let Some(text) = tok.as_string() {
+                // ShapeManager stores the complete numeric transform payload
+                // in one ASM long-string token (0x12) in some SAB files.
+                // It is still the regular SAT transform sequence, followed
+                // by no_rotate/no_reflect/no_shear.
+                for word in text.split_ascii_whitespace() {
+                    let Ok(value) = word.parse::<f64>() else {
+                        break;
+                    };
+                    v.push(value);
+                    if v.len() >= 13 {
+                        break;
+                    }
+                }
             }
         }
         if v.len() < 13 {

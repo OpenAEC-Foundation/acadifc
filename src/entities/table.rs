@@ -731,11 +731,11 @@ pub struct TableAttribute {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CellContentGeometry {
     pub distance_to_top_left: Vector3,
-    pub content_extent: Vector3,
+    pub distance_to_center: Vector3,
     pub width: f64,
     pub height: f64,
-    pub unknown_double1: f64,
-    pub unknown_double2: f64,
+    pub outer_width: f64,
+    pub outer_height: f64,
     pub flags: i32,
 }
 
@@ -929,9 +929,17 @@ pub struct TableCell {
     /// Cell style identifier.
     pub style_id: i32,
     /// Cached geometry metadata.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub geometry_data_flag: i32,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub geometry_width_with_gap: f64,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub geometry_height_with_gap: f64,
     pub geometry_flags: i32,
     pub geometry_handle: Option<Handle>,
     pub geometry: Option<CellContentGeometry>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub geometries: Vec<CellContentGeometry>,
 }
 
 impl TableCell {
@@ -962,9 +970,13 @@ impl TableCell {
             data_link_columns: 0,
             data_link_unknown: 0,
             style_id: 0,
+            geometry_data_flag: 0,
+            geometry_width_with_gap: 0.0,
+            geometry_height_with_gap: 0.0,
             geometry_flags: 0,
             geometry_handle: None,
             geometry: None,
+            geometries: Vec::new(),
         }
     }
 

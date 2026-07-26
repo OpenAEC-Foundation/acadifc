@@ -856,7 +856,6 @@ pub(crate) fn transform_solid3d(e: &mut Solid3D, transform: &Transform) {
         for pt in &mut wire.points {
             *pt = transform.apply(*pt);
         }
-        wire.translation = transform.apply(wire.translation);
     }
     for silhouette in &mut e.silhouettes {
         silhouette.target = transform.apply(silhouette.target);
@@ -881,6 +880,17 @@ pub(crate) fn transform_region(e: &mut Region, transform: &Transform) {
             *pt = transform.apply(*pt);
         }
     }
+    for silhouette in &mut e.silhouettes {
+        silhouette.target = transform.apply(silhouette.target);
+        silhouette.view_direction =
+            transform.apply_rotation(silhouette.view_direction).normalize();
+        silhouette.up_vector = transform.apply_rotation(silhouette.up_vector).normalize();
+        for wire in &mut silhouette.wires {
+            for pt in &mut wire.points {
+                *pt = transform.apply(*pt);
+            }
+        }
+    }
 }
 
 // ── Body ─────────────────────────────────────────────────────────────────────
@@ -893,13 +903,36 @@ pub(crate) fn transform_body(e: &mut Body, transform: &Transform) {
             *pt = transform.apply(*pt);
         }
     }
+    for silhouette in &mut e.silhouettes {
+        silhouette.target = transform.apply(silhouette.target);
+        silhouette.view_direction =
+            transform.apply_rotation(silhouette.view_direction).normalize();
+        silhouette.up_vector = transform.apply_rotation(silhouette.up_vector).normalize();
+        for wire in &mut silhouette.wires {
+            for pt in &mut wire.points {
+                *pt = transform.apply(*pt);
+            }
+        }
+    }
 }
 
 pub(crate) fn transform_surface(e: &mut crate::entities::Surface, transform: &Transform) {
+    e.point_of_reference = transform.apply(e.point_of_reference);
     compose_acis_placement(&mut e.acis_data, transform);
     for wire in &mut e.wires {
         for pt in &mut wire.points {
             *pt = transform.apply(*pt);
+        }
+    }
+    for silhouette in &mut e.silhouettes {
+        silhouette.target = transform.apply(silhouette.target);
+        silhouette.view_direction =
+            transform.apply_rotation(silhouette.view_direction).normalize();
+        silhouette.up_vector = transform.apply_rotation(silhouette.up_vector).normalize();
+        for wire in &mut silhouette.wires {
+            for pt in &mut wire.points {
+                *pt = transform.apply(*pt);
+            }
         }
     }
 }

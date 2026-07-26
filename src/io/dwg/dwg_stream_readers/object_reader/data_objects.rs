@@ -98,11 +98,11 @@ pub fn read_data_object_data(
                 for _ in 0..count(reader.read_bit_long(), 10_000) {
                     geometry.push(CellContentGeometry {
                         distance_to_top_left: reader.read_3bit_double(),
-                        content_extent: reader.read_3bit_double(),
+                        distance_to_center: reader.read_3bit_double(),
                         width: reader.read_bit_double(),
                         height: reader.read_bit_double(),
-                        unknown_double1: reader.read_bit_double(),
-                        unknown_double2: reader.read_bit_double(),
+                        outer_width: reader.read_bit_double(),
+                        outer_height: reader.read_bit_double(),
                         flags: reader.read_bit_long(),
                     });
                 }

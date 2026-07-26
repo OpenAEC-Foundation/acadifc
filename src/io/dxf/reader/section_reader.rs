@@ -7287,11 +7287,11 @@ impl<'a> SectionReader<'a> {
                                         0.0,
                                         0.0,
                                     ),
-                                    content_extent: Vector3::ZERO,
+                                    distance_to_center: Vector3::ZERO,
                                     width: 0.0,
                                     height: 0.0,
-                                    unknown_double1: 0.0,
-                                    unknown_double2: 0.0,
+                                    outer_width: 0.0,
+                                    outer_height: 0.0,
                                     flags: 0,
                                 });
                             }
@@ -7336,9 +7336,9 @@ impl<'a> SectionReader<'a> {
                                         geometry.distance_to_top_left.z =
                                             number;
                                     }
-                                    11 => geometry.content_extent.x = number,
-                                    21 => geometry.content_extent.y = number,
-                                    31 => geometry.content_extent.z = number,
+                                    11 => geometry.distance_to_center.x = number,
+                                    21 => geometry.distance_to_center.y = number,
+                                    31 => geometry.distance_to_center.z = number,
                                     _ => {}
                                 }
                             }
@@ -7357,8 +7357,8 @@ impl<'a> SectionReader<'a> {
                             match pair.code {
                                 43 => geometry.width = number,
                                 44 => geometry.height = number,
-                                45 => geometry.unknown_double1 = number,
-                                46 => geometry.unknown_double2 = number,
+                                45 => geometry.outer_width = number,
+                                46 => geometry.outer_height = number,
                                 _ => {}
                             }
                         }

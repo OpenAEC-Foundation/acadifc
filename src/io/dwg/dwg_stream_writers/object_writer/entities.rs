@@ -3219,11 +3219,11 @@ impl<'a> DwgObjectWriter<'a> {
 
     fn write_table_geometry(&mut self, geometry: &CellContentGeometry) {
         self.writer.write_3bit_double(geometry.distance_to_top_left);
-        self.writer.write_3bit_double(geometry.content_extent);
+        self.writer.write_3bit_double(geometry.distance_to_center);
         self.writer.write_bit_double(geometry.width);
         self.writer.write_bit_double(geometry.height);
-        self.writer.write_bit_double(geometry.unknown_double1);
-        self.writer.write_bit_double(geometry.unknown_double2);
+        self.writer.write_bit_double(geometry.outer_width);
+        self.writer.write_bit_double(geometry.outer_height);
         self.writer.write_bit_long(geometry.flags);
     }
 
@@ -3304,36 +3304,41 @@ impl<'a> DwgObjectWriter<'a> {
         }
         self.write_table_cell_style(cell.style.as_ref());
         self.writer.write_bit_long(cell.style_id);
-        let has_geometry = cell.geometry.is_some()
+        let geometries: Vec<CellContentGeometry> = if !cell.geometries.is_empty() {
+            cell.geometries.clone()
+        } else {
+            let content_geometry: Vec<_> = cell
+                .contents
+                .iter()
+                .filter_map(|content| content.geometry.clone())
+                .collect();
+            if !content_geometry.is_empty() {
+                content_geometry
+            } else {
+                cell.geometry.iter().cloned().collect()
+            }
+        };
+        let has_geometry = !geometries.is_empty()
             || cell.geometry_handle.is_some()
+            || cell.geometry_data_flag != 0
+            || cell.geometry_width_with_gap != 0.0
+            || cell.geometry_height_with_gap != 0.0
             || cell.geometry_flags != 0
-            || cell.flag != 0
-            || cell.rotation != 0.0
-            || cell.geometry_scale != 1.0;
+            || cell.flag != 0;
         self.writer.write_bit_long(has_geometry as i32);
         if has_geometry {
-            self.writer.write_bit_long(cell.flag);
-            self.writer.write_bit_double(cell.rotation);
-            self.writer.write_bit_double(cell.geometry_scale);
-            self.writer.write_bit_long(cell.geometry_flags);
+            self.writer.write_bit_long(cell.geometry_data_flag);
+            self.writer
+                .write_bit_double(cell.geometry_width_with_gap);
+            self.writer
+                .write_bit_double(cell.geometry_height_with_gap);
             self.writer.write_handle(
                 DwgReferenceType::HardPointer,
                 cell.geometry_handle.map(|h| h.value()).unwrap_or(0),
             );
-            if cell.geometry_flags != 0 {
-                if let Some(geometry) = &cell.geometry {
-                    self.write_table_geometry(geometry);
-                } else {
-                    self.write_table_geometry(&CellContentGeometry {
-                        distance_to_top_left: Vector3::ZERO,
-                        content_extent: Vector3::ZERO,
-                        width: 0.0,
-                        height: 0.0,
-                        unknown_double1: 0.0,
-                        unknown_double2: 0.0,
-                        flags: 0,
-                    });
-                }
+            self.writer.write_bit_long(geometries.len() as i32);
+            for geometry in &geometries {
+                self.write_table_geometry(geometry);
             }
         }
     }

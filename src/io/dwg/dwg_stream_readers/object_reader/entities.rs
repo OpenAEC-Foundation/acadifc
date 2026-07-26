@@ -3389,11 +3389,11 @@ fn read_cell_content_format(reader: &mut DwgMergedReader) -> TableContentFormatD
 fn read_cell_content_geometry(reader: &mut DwgMergedReader) -> CellContentGeometry {
     CellContentGeometry {
         distance_to_top_left: reader.read_3bit_double(),
-        content_extent: reader.read_3bit_double(),
+        distance_to_center: reader.read_3bit_double(),
         width: reader.read_bit_double(),
         height: reader.read_bit_double(),
-        unknown_double1: reader.read_bit_double(),
-        unknown_double2: reader.read_bit_double(),
+        outer_width: reader.read_bit_double(),
+        outer_height: reader.read_bit_double(),
         flags: reader.read_bit_long(),
     }
 }
@@ -3539,15 +3539,22 @@ fn read_table_cell(reader: &mut DwgMergedReader, version: DwgVersion) -> TableCe
     cell.style_id = reader.read_bit_long();
     let has_geometry = reader.read_bit_long();
     if has_geometry != 0 {
-        cell.flag = reader.read_bit_long();
-        cell.rotation = reader.read_bit_double();
-        cell.geometry_scale = reader.read_bit_double();
-        cell.geometry_flags = reader.read_bit_long();
+        cell.geometry_data_flag = reader.read_bit_long();
+        cell.geometry_width_with_gap = reader.read_bit_double();
+        cell.geometry_height_with_gap = reader.read_bit_double();
         let handle = reader.read_handle();
         cell.geometry_handle = (handle != 0).then(|| Handle::from(handle));
-        if cell.geometry_flags != 0 {
-            cell.geometry = Some(read_cell_content_geometry(reader));
+        let geometry_count = safe_count(reader.read_bit_long());
+        cell.geometry_flags = geometry_count;
+        cell.geometries.reserve(geometry_count as usize);
+        for index in 0..geometry_count as usize {
+            let geometry = read_cell_content_geometry(reader);
+            if let Some(content) = cell.contents.get_mut(index) {
+                content.geometry = Some(geometry.clone());
+            }
+            cell.geometries.push(geometry);
         }
+        cell.geometry = cell.geometries.first().cloned();
     }
     cell
 }

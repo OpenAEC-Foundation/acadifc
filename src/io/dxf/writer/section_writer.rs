@@ -7811,14 +7811,14 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                         )?;
                         self.writer.write_point3d(
                             11,
-                            geometry.content_extent,
+                            geometry.distance_to_center,
                         )?;
                         self.writer.write_double(43, geometry.width)?;
                         self.writer.write_double(44, geometry.height)?;
                         self.writer
-                            .write_double(45, geometry.unknown_double1)?;
+                            .write_double(45, geometry.outer_width)?;
                         self.writer
-                            .write_double(46, geometry.unknown_double2)?;
+                            .write_double(46, geometry.outer_height)?;
                         self.writer.write_i32(95, geometry.flags)?;
                     }
                 }

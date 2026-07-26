@@ -391,7 +391,6 @@ pub(crate) fn translate_solid3d(e: &mut Solid3D, offset: Vector3) {
         for pt in &mut wire.points {
             *pt = *pt + offset;
         }
-        wire.translation = wire.translation + offset;
     }
 
     for silhouette in &mut e.silhouettes {
@@ -414,6 +413,14 @@ pub(crate) fn translate_region(e: &mut Region, offset: Vector3) {
             *pt = *pt + offset;
         }
     }
+    for silhouette in &mut e.silhouettes {
+        silhouette.target = silhouette.target + offset;
+        for wire in &mut silhouette.wires {
+            for pt in &mut wire.points {
+                *pt = *pt + offset;
+            }
+        }
+    }
 }
 
 // ── Body ─────────────────────────────────────────────────────────────────────
@@ -426,13 +433,30 @@ pub(crate) fn translate_body(e: &mut Body, offset: Vector3) {
             *pt = *pt + offset;
         }
     }
+    for silhouette in &mut e.silhouettes {
+        silhouette.target = silhouette.target + offset;
+        for wire in &mut silhouette.wires {
+            for pt in &mut wire.points {
+                *pt = *pt + offset;
+            }
+        }
+    }
 }
 
 pub(crate) fn translate_surface(e: &mut crate::entities::Surface, offset: Vector3) {
+    e.point_of_reference = e.point_of_reference + offset;
     super::transform::compose_acis_placement(&mut e.acis_data, &Transform::from_translation(offset));
     for wire in &mut e.wires {
         for pt in &mut wire.points {
             *pt = *pt + offset;
+        }
+    }
+    for silhouette in &mut e.silhouettes {
+        silhouette.target = silhouette.target + offset;
+        for wire in &mut silhouette.wires {
+            for pt in &mut wire.points {
+                *pt = *pt + offset;
+            }
         }
     }
 }
