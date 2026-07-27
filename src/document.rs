@@ -1500,7 +1500,11 @@ impl CadDocument {
         self.header.acad_visualstyle_dict_handle = self.allocate_handle();
 
         // Allocate handles for objects that live inside dictionaries
+        let mleaderstyle_dict_handle = self.allocate_handle();
+        let tablestyle_dict_handle = self.allocate_handle();
         let mlinestyle_std_handle = self.allocate_handle();
+        let mleaderstyle_std_handle = self.allocate_handle();
+        let tablestyle_std_handle = self.allocate_handle();
         let model_layout_handle = self.allocate_handle();
         let paper_layout_handle = self.allocate_handle();
         let plotstylename_placeholder_handle = self.allocate_handle();
@@ -1529,6 +1533,8 @@ impl CadDocument {
         root_dict.add_entry("ACAD_MATERIAL", self.header.acad_material_dict_handle);
         root_dict.add_entry("ACAD_COLOR", self.header.acad_color_dict_handle);
         root_dict.add_entry("ACAD_VISUALSTYLE", self.header.acad_visualstyle_dict_handle);
+        root_dict.add_entry("ACAD_MLEADERSTYLE", mleaderstyle_dict_handle);
+        root_dict.add_entry("ACAD_TABLESTYLE", tablestyle_dict_handle);
         self.objects.insert(root_dict_handle, ObjectType::Dictionary(root_dict));
 
         // -- ACAD_GROUP dictionary (empty) --
@@ -1549,6 +1555,49 @@ impl CadDocument {
         mlinestyle_std.handle = mlinestyle_std_handle;
         mlinestyle_std.owner = self.header.acad_mlinestyle_dict_handle;
         self.objects.insert(mlinestyle_std_handle, ObjectType::MLineStyle(mlinestyle_std));
+
+        // -- ACAD_MLEADERSTYLE dictionary (contains "Standard") --
+        let mut mleaderstyle_dict = crate::objects::Dictionary::new();
+        mleaderstyle_dict.handle = mleaderstyle_dict_handle;
+        mleaderstyle_dict.owner = root_dict_handle;
+        mleaderstyle_dict.add_entry("Standard", mleaderstyle_std_handle);
+        self.objects.insert(
+            mleaderstyle_dict_handle,
+            ObjectType::Dictionary(mleaderstyle_dict),
+        );
+
+        // -- MultiLeaderStyle Standard object --
+        let mut mleaderstyle_std = crate::objects::MultiLeaderStyle::standard();
+        mleaderstyle_std.handle = mleaderstyle_std_handle;
+        mleaderstyle_std.owner_handle = mleaderstyle_dict_handle;
+        mleaderstyle_std.text_style_handle = Some(self.header.current_text_style_handle);
+        self.objects.insert(
+            mleaderstyle_std_handle,
+            ObjectType::MultiLeaderStyle(mleaderstyle_std),
+        );
+
+        // -- ACAD_TABLESTYLE dictionary (contains "Standard") --
+        let mut tablestyle_dict = crate::objects::Dictionary::new();
+        tablestyle_dict.handle = tablestyle_dict_handle;
+        tablestyle_dict.owner = root_dict_handle;
+        tablestyle_dict.add_entry("Standard", tablestyle_std_handle);
+        self.objects.insert(
+            tablestyle_dict_handle,
+            ObjectType::Dictionary(tablestyle_dict),
+        );
+
+        // -- TableStyle Standard object --
+        let mut tablestyle_std = crate::objects::TableStyle::standard();
+        tablestyle_std.handle = tablestyle_std_handle;
+        tablestyle_std.owner_handle = tablestyle_dict_handle;
+        tablestyle_std.set_all_text_styles(
+            "Standard",
+            Some(self.header.current_text_style_handle),
+        );
+        self.objects.insert(
+            tablestyle_std_handle,
+            ObjectType::TableStyle(tablestyle_std),
+        );
 
         // -- ACAD_LAYOUT dictionary (Model + Layout1) --
         let mut layout_dict = crate::objects::Dictionary::new();
