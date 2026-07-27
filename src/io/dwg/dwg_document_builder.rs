@@ -3150,8 +3150,14 @@ impl DwgDocumentBuilder {
                     e.creation_type = LeaderCreationType::from_value(data.annotation_type);
                     e.hookline_direction =
                         HooklineDirection::from_value(data.hookline_on_x_dir as i16);
-                    e.text_height = data.text_height;
-                    e.text_width = data.text_width;
+                    // R2010+ LEADER records do not carry the annotation box
+                    // height/width. Keep Leader::new()'s semantic defaults
+                    // instead of replacing them with the reader's absence
+                    // sentinel (0.0).
+                    if self.obj_reader.dxf_version() <= crate::types::DxfVersion::AC1021 {
+                        e.text_height = data.text_height;
+                        e.text_width = data.text_width;
+                    }
                     e.block_offset = data.block_offset;
                     e.annotation_offset = data.annotation_offset;
                     e.origin = data.origin;

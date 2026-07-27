@@ -655,6 +655,13 @@ fn normalize_entity_for_comparison(entity: &mut EntityType) {
         EntityType::MLine(ml) => {
             ml.style_handle = None;
         }
+        // MText: this is a lossless cache of the raw DWG X-axis vector.
+        // Programmatic entities leave it empty and the writer derives the
+        // equivalent vector from rotation, so it is not part of semantic
+        // roundtrip equality.
+        EntityType::MText(m) => {
+            m.dwg_x_direction = None;
+        }
         // MultiLeader: many handle fields at multiple levels
         EntityType::MultiLeader(mld) => {
             mld.style_handle = None;
