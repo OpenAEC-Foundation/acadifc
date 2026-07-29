@@ -135,6 +135,7 @@ pub mod notification;
 pub mod types;
 pub mod tables;
 pub mod document;
+pub mod layer_state;
 pub mod io;
 pub mod xdata;
 pub mod objects;
@@ -162,6 +163,7 @@ pub use tables::{
 // Re-export document
 pub use document::CadDocument;
 pub use document::{Preview, PreviewFormat};
+pub use layer_state::{LayerState, LayerStateLayer, LayerStateMask};
 
 // Re-export I/O types
 pub use io::dxf::{DxfReader, DxfReaderConfiguration, DxfWriter};

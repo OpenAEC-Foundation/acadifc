@@ -7751,6 +7751,8 @@ impl<'a> SectionReader<'a> {
 
     /// Read LAYER table
     fn read_layer_table(&mut self, document: &mut CadDocument) -> Result<()> {
+        let mut table_handle = document.layers.handle();
+        let mut xdictionary_handle = None;
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 && pair.value_string == "ENDTAB" {
                 break;
@@ -7760,7 +7762,22 @@ impl<'a> SectionReader<'a> {
                 if let Some(layer) = self.read_layer_entry()? {
                     document.layers.add_or_replace(layer);
                 }
+            } else if pair.code == 5 {
+                if let Ok(handle) = u64::from_str_radix(pair.value_string.trim(), 16) {
+                    table_handle = Handle::new(handle);
+                    document.layers.set_handle(table_handle);
+                    document.header.layer_control_handle = table_handle;
+                }
+            } else if pair.code == 102
+                && pair.value_string.trim() == "{ACAD_XDICTIONARY"
+            {
+                xdictionary_handle = self.read_xdictionary_handle()?;
             }
+        }
+        if let Some(xdictionary_handle) = xdictionary_handle {
+            document
+                .xdic_by_handle
+                .insert(table_handle, xdictionary_handle);
         }
         Ok(())
     }
