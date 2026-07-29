@@ -395,16 +395,21 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.write_table_header("VPORT", document.vports.len(), table_handle, document)?;
 
         for vport in document.vports.iter() {
-            self.write_vport_entry(vport, table_handle)?;
+            self.write_vport_entry(vport, table_handle, document)?;
         }
 
         self.write_table_end()?;
         Ok(())
     }
 
-    fn write_vport_entry(&mut self, vport: &VPort, owner: Handle) -> Result<()> {
+    fn write_vport_entry(
+        &mut self,
+        vport: &VPort,
+        owner: Handle,
+        document: &CadDocument,
+    ) -> Result<()> {
         self.writer.write_string(0, "VPORT")?;
-        self.write_common_table_data(vport.handle(), owner)?;
+        self.write_common_table_data(vport.handle(), owner, document)?;
         self.writer.write_subclass("AcDbSymbolTableRecord")?;
         self.writer.write_subclass("AcDbViewportTableRecord")?;
         self.writer.write_string(2, vport.name())?;
@@ -552,16 +557,21 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.write_table_header("LTYPE", document.line_types.len(), table_handle, document)?;
 
         for ltype in document.line_types.iter() {
-            self.write_ltype_entry(ltype, table_handle)?;
+            self.write_ltype_entry(ltype, table_handle, document)?;
         }
 
         self.write_table_end()?;
         Ok(())
     }
 
-    fn write_ltype_entry(&mut self, ltype: &LineType, owner: Handle) -> Result<()> {
+    fn write_ltype_entry(
+        &mut self,
+        ltype: &LineType,
+        owner: Handle,
+        document: &CadDocument,
+    ) -> Result<()> {
         self.writer.write_string(0, "LTYPE")?;
-        self.write_common_table_data(ltype.handle(), owner)?;
+        self.write_common_table_data(ltype.handle(), owner, document)?;
         self.writer.write_subclass("AcDbSymbolTableRecord")?;
         self.writer.write_subclass("AcDbLinetypeTableRecord")?;
         self.writer.write_string(2, ltype.name())?;
@@ -617,16 +627,21 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.write_table_header("LAYER", document.layers.len(), table_handle, document)?;
 
         for layer in document.layers.iter() {
-            self.write_layer_entry(layer, table_handle)?;
+            self.write_layer_entry(layer, table_handle, document)?;
         }
 
         self.write_table_end()?;
         Ok(())
     }
 
-    fn write_layer_entry(&mut self, layer: &Layer, owner: Handle) -> Result<()> {
+    fn write_layer_entry(
+        &mut self,
+        layer: &Layer,
+        owner: Handle,
+        document: &CadDocument,
+    ) -> Result<()> {
         self.writer.write_string(0, "LAYER")?;
-        self.write_common_table_data(layer.handle(), owner)?;
+        self.write_common_table_data(layer.handle(), owner, document)?;
         self.writer.write_subclass("AcDbSymbolTableRecord")?;
         self.writer.write_subclass("AcDbLayerTableRecord")?;
         self.writer.write_string(2, layer.name())?;
@@ -693,7 +708,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.write_table_header("STYLE", document.text_styles.len(), table_handle, document)?;
 
         for style in document.text_styles.iter() {
-            self.write_style_entry(style, table_handle)?;
+            self.write_style_entry(style, table_handle, document)?;
         }
 
         self.write_table_end()?;
@@ -718,9 +733,14 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         Ok(())
     }
 
-    fn write_style_entry(&mut self, style: &TextStyle, owner: Handle) -> Result<()> {
+    fn write_style_entry(
+        &mut self,
+        style: &TextStyle,
+        owner: Handle,
+        document: &CadDocument,
+    ) -> Result<()> {
         self.writer.write_string(0, "STYLE")?;
-        self.write_common_table_data(style.handle(), owner)?;
+        self.write_common_table_data(style.handle(), owner, document)?;
         self.writer.write_subclass("AcDbSymbolTableRecord")?;
         self.writer.write_subclass("AcDbTextStyleTableRecord")?;
         self.writer.write_string(2, style.name())?;
@@ -748,16 +768,21 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.write_table_header("VIEW", document.views.len(), table_handle, document)?;
 
         for view in document.views.iter() {
-            self.write_view_entry(view, table_handle)?;
+            self.write_view_entry(view, table_handle, document)?;
         }
 
         self.write_table_end()?;
         Ok(())
     }
 
-    fn write_view_entry(&mut self, view: &View, owner: Handle) -> Result<()> {
+    fn write_view_entry(
+        &mut self,
+        view: &View,
+        owner: Handle,
+        document: &CadDocument,
+    ) -> Result<()> {
         self.writer.write_string(0, "VIEW")?;
-        self.write_common_table_data(view.handle(), owner)?;
+        self.write_common_table_data(view.handle(), owner, document)?;
         self.writer.write_subclass("AcDbSymbolTableRecord")?;
         self.writer.write_subclass("AcDbViewTableRecord")?;
         self.writer.write_string(2, view.name())?;
@@ -843,16 +868,21 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.write_table_header("UCS", document.ucss.len(), table_handle, document)?;
 
         for ucs in document.ucss.iter() {
-            self.write_ucs_entry(ucs, table_handle)?;
+            self.write_ucs_entry(ucs, table_handle, document)?;
         }
 
         self.write_table_end()?;
         Ok(())
     }
 
-    fn write_ucs_entry(&mut self, ucs: &Ucs, owner: Handle) -> Result<()> {
+    fn write_ucs_entry(
+        &mut self,
+        ucs: &Ucs,
+        owner: Handle,
+        document: &CadDocument,
+    ) -> Result<()> {
         self.writer.write_string(0, "UCS")?;
-        self.write_common_table_data(ucs.handle(), owner)?;
+        self.write_common_table_data(ucs.handle(), owner, document)?;
         self.writer.write_subclass("AcDbSymbolTableRecord")?;
         self.writer.write_subclass("AcDbUCSTableRecord")?;
         self.writer.write_string(2, ucs.name())?;
@@ -888,19 +918,24 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.write_table_header("APPID", document.app_ids.len(), table_handle, document)?;
 
         for appid in document.app_ids.iter() {
-            self.write_appid_entry(appid, table_handle)?;
+            self.write_appid_entry(appid, table_handle, document)?;
         }
 
         self.write_table_end()?;
         Ok(())
     }
 
-    fn write_appid_entry(&mut self, appid: &AppId, owner: Handle) -> Result<()> {
+    fn write_appid_entry(
+        &mut self,
+        appid: &AppId,
+        owner: Handle,
+        document: &CadDocument,
+    ) -> Result<()> {
         // Sanitize name: strip control chars and characters forbidden in symbol table names
         let name = sanitize_symbol_name(appid.name());
         if name.is_empty() { return Ok(()); }
         self.writer.write_string(0, "APPID")?;
-        self.write_common_table_data(appid.handle(), owner)?;
+        self.write_common_table_data(appid.handle(), owner, document)?;
         self.writer.write_subclass("AcDbSymbolTableRecord")?;
         self.writer.write_subclass("AcDbRegAppTableRecord")?;
         self.writer.write_string(2, &name)?;
@@ -917,16 +952,22 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_i16(71, document.dim_styles.len() as i16)?;
 
         for dimstyle in document.dim_styles.iter() {
-            self.write_dimstyle_entry(dimstyle, table_handle)?;
+            self.write_dimstyle_entry(dimstyle, table_handle, document)?;
         }
 
         self.write_table_end()?;
         Ok(())
     }
 
-    fn write_dimstyle_entry(&mut self, dimstyle: &DimStyle, owner: Handle) -> Result<()> {
+    fn write_dimstyle_entry(
+        &mut self,
+        dimstyle: &DimStyle,
+        owner: Handle,
+        document: &CadDocument,
+    ) -> Result<()> {
         self.writer.write_string(0, "DIMSTYLE")?;
         self.writer.write_handle(105, dimstyle.handle())?;
+        self.write_table_entry_xdictionary(dimstyle.handle(), document)?;
         self.writer.write_handle(330, owner)?;
         self.writer.write_subclass("AcDbSymbolTableRecord")?;
         self.writer.write_subclass("AcDbDimStyleTableRecord")?;
@@ -1075,16 +1116,21 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         )?;
 
         for block_record in document.block_records.iter() {
-            self.write_block_record_entry(block_record, table_handle)?;
+            self.write_block_record_entry(block_record, table_handle, document)?;
         }
 
         self.write_table_end()?;
         Ok(())
     }
 
-    fn write_block_record_entry(&mut self, block_record: &BlockRecord, owner: Handle) -> Result<()> {
+    fn write_block_record_entry(
+        &mut self,
+        block_record: &BlockRecord,
+        owner: Handle,
+        document: &CadDocument,
+    ) -> Result<()> {
         self.writer.write_string(0, "BLOCK_RECORD")?;
-        self.write_common_table_data(block_record.handle(), owner)?;
+        self.write_common_table_data(block_record.handle(), owner, document)?;
         self.writer.write_subclass("AcDbSymbolTableRecord")?;
         self.writer.write_subclass("AcDbBlockTableRecord")?;
         self.writer.write_string(2, block_record.name())?;
@@ -1110,11 +1156,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_string(0, "TABLE")?;
         self.writer.write_string(2, name)?;
         self.writer.write_handle(5, table_handle)?;
-        if let Some((handle, _)) = document.objects.iter().find(|(_, object)| {
-            matches!(object, ObjectType::Dictionary(dict) if dict.owner == table_handle)
-        }) {
+        if let Some(handle) = document.extension_dictionary_handle(table_handle) {
             self.writer.write_string(102, "{ACAD_XDICTIONARY")?;
-            self.writer.write_handle(360, *handle)?;
+            self.writer.write_handle(360, handle)?;
             self.writer.write_string(102, "}")?;
         }
         self.writer.write_handle(330, Handle::new(0))?; // Tables owned by document root (handle 0)
@@ -1129,8 +1173,33 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     }
 
     /// Write common table entry data
-    fn write_common_table_data(&mut self, handle: Handle, owner: Handle) -> Result<()> {
+    fn write_table_entry_xdictionary(
+        &mut self,
+        handle: Handle,
+        document: &CadDocument,
+    ) -> Result<()> {
+        if let Some(xdictionary) = document.extension_dictionary_handle(handle) {
+            if !xdictionary.is_null()
+                && (self.valid_handles.is_empty()
+                    || self.valid_handles.contains(&xdictionary))
+            {
+                self.writer.write_string(102, "{ACAD_XDICTIONARY")?;
+                self.writer.write_handle(360, xdictionary)?;
+                self.writer.write_string(102, "}")?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Write common table entry data
+    fn write_common_table_data(
+        &mut self,
+        handle: Handle,
+        owner: Handle,
+        document: &CadDocument,
+    ) -> Result<()> {
         self.writer.write_handle(5, handle)?;
+        self.write_table_entry_xdictionary(handle, document)?;
         self.writer.write_handle(330, owner)?;
         Ok(())
     }
@@ -6067,8 +6136,21 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 continue;
             }
             self.writer.write_string(3, key)?;
-            self.writer
-                .write_handle(if dict.hard_owner { 360 } else { 350 }, *handle)?;
+            // These dictionary keys are hard-owner entries by definition even
+            // when the dictionary-wide hard-owner flag is clear. AutoCAD,
+            // ODA and LibreDWG all emit code 360 for them.
+            let forced_hard_owner = dict.is_entry_hard_owner(key) || matches!(
+                key.to_ascii_uppercase().as_str(),
+                "ACAD_SORTENTS" | "ACAD_FILTER" | "SPATIAL"
+            );
+            self.writer.write_handle(
+                if dict.hard_owner || forced_hard_owner {
+                    360
+                } else {
+                    350
+                },
+                *handle,
+            )?;
         }
 
         Ok(())
@@ -6256,7 +6338,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                         if material.xdictionary_handle == Some(xrecord.owner)
                             && material.has_advanced_data() =>
                     {
-                        Some(vec![
+                        let values = vec![
                             XRecordEntry::double(
                                 460,
                                 material.color_bleed_scale * 100.0,
@@ -6291,7 +6373,19 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                                 273,
                                 material.final_gather,
                             ),
-                        ])
+                        ];
+                        let mut merged = xrecord.entries.clone();
+                        for value in values {
+                            if let Some(existing) = merged
+                                .iter_mut()
+                                .find(|entry| entry.code == value.code)
+                            {
+                                existing.value = value.value;
+                            } else {
+                                merged.push(value);
+                            }
+                        }
+                        Some(merged)
                     }
                     _ => None,
                 })
@@ -6306,7 +6400,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         for entry in entries {
             match &entry.value {
                 XRecordValue::String(s) => {
-                    self.writer.write_string(entry.code, s)?;
+                    self.writer.write_xrecord_string(entry.code, s)?;
                 }
                 XRecordValue::Double(d) => {
                     self.writer.write_double(entry.code, *d)?;

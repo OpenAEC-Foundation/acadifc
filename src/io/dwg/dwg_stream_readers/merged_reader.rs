@@ -443,6 +443,12 @@ impl DwgMergedReader {
         }
     }
 
+    /// Read a handle reference using the current object's handle as the base
+    /// and return both the resolved handle and its ownership/pointer kind.
+    pub fn read_typed_handle(&mut self) -> (u64, crate::io::dwg::dwg_reference_type::DwgReferenceType) {
+        self.read_handle_reference(self.ref_handle)
+    }
+
     // ════════════════════════════════════════════════════════════════════════
     //  Position and state queries
     // ════════════════════════════════════════════════════════════════════════

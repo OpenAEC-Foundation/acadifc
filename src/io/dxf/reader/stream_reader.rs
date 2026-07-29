@@ -39,7 +39,10 @@ impl DxfCodePair {
     /// Create a new code/value pair
     pub fn new(code: i32, value_string: String) -> Self {
         let dxf_code = DxfCode::from_i32(code);
-        let value_type = GroupCodeValueType::from_code(dxf_code);
+        // Use the raw group code here: DxfCode intentionally has only named
+        // variants for a subset of the legal ranges, so routing through the
+        // enum turns valid values such as XRecord code 290 into `Invalid`.
+        let value_type = GroupCodeValueType::from_raw_code(code);
         
         // Parse value based on type
         let typed_value = match value_type {
@@ -238,5 +241,4 @@ impl Default for PointReader {
         Self::new()
     }
 }
-
 

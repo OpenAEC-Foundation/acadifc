@@ -12,7 +12,7 @@ use crate::objects::{
     VisualStyleProperty, VisualStylePropertyValue, NamedTableCellStyle, RowCellStyle,
     TableBorderPropertyFlags, TableBorderType, TableCellBorder, TableCellStyleData,
     TableContentFormat, TableGridFormat, TableStyle,
-    XRecordEntry, XRecordValue,
+    ProxyObjectReference, ProxyReferenceKind, XRecordEntry, XRecordValue,
 };
 use crate::types::{Handle, LineWeight};
 use super::safe_count;
@@ -716,6 +716,8 @@ pub struct XRecordData {
     pub data_size: i32,
     pub raw_data: Vec<u8>,
     pub entries: Vec<XRecordEntry>,
+    pub object_references: Vec<ProxyObjectReference>,
+    pub entries_complete: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1225,54 +1227,34 @@ pub fn read_sort_entities_table(reader: &mut DwgMergedReader) -> SortEntitiesTab
     SortEntitiesTableData { entries, block_owner_handle }
 }
 
-fn decode_xrecord_entries(raw: &[u8], unicode: bool) -> Vec<XRecordEntry> {
+fn decode_xrecord_entries(raw: &[u8], unicode: bool) -> (Vec<XRecordEntry>, bool) {
     let read_u16 = |p: usize| u16::from_le_bytes([raw[p], raw[p + 1]]);
     let mut entries = Vec::new();
     let mut position = 0usize;
-    while position + 2 <= raw.len() {
+    let mut complete = true;
+    'entries: while position + 2 <= raw.len() {
+        let entry_start = position;
+        macro_rules! require {
+            ($size:expr) => {
+                if position.saturating_add($size) > raw.len() {
+                    position = entry_start;
+                    complete = false;
+                    break 'entries;
+                }
+            };
+        }
         let code = read_u16(position) as i16 as i32;
         position += 2;
         let value = match code {
             code if code < 0
                 || code == 5
                 || code == 105
-                || (320..=329).contains(&code)
-                || (480..=481).contains(&code) =>
+                || (320..=369).contains(&code)
+                || (390..=399).contains(&code)
+                || (480..=481).contains(&code)
+                || code == 1005 =>
             {
-                if position + 2 > raw.len() {
-                    break;
-                }
-                let length = read_u16(position) as usize;
-                position += 2;
-                let text = if unicode {
-                    if position + length * 2 > raw.len() {
-                        break;
-                    }
-                    let mut units = Vec::with_capacity(length);
-                    for _ in 0..length {
-                        units.push(read_u16(position));
-                        position += 2;
-                    }
-                    String::from_utf16_lossy(&units)
-                } else {
-                    if position + 1 + length > raw.len() {
-                        break;
-                    }
-                    position += 1;
-                    let value = String::from_utf8_lossy(
-                        &raw[position..position + length],
-                    )
-                    .into_owned();
-                    position += length;
-                    value
-                };
-                let value = u64::from_str_radix(text.trim(), 16).unwrap_or(0);
-                XRecordValue::Handle(Handle::from(value))
-            }
-            330..=369 | 390..=399 | 1005..=1009 => {
-                if position + 8 > raw.len() {
-                    break;
-                }
+                require!(8);
                 let value = u64::from_le_bytes(
                     raw[position..position + 8].try_into().unwrap(),
                 );
@@ -1281,15 +1263,11 @@ fn decode_xrecord_entries(raw: &[u8], unicode: bool) -> Vec<XRecordEntry> {
             }
             0..=4 | 6..=9 | 100..=102 | 300..=309 | 410..=419
             | 430..=439 | 470..=479 | 999 | 1000..=1003 => {
-                if position + 2 > raw.len() {
-                    break;
-                }
+                require!(2);
                 let length = read_u16(position) as usize;
                 position += 2;
                 let text = if unicode {
-                    if position + length * 2 > raw.len() {
-                        break;
-                    }
+                    require!(length.saturating_mul(2));
                     let mut units = Vec::with_capacity(length);
                     for _ in 0..length {
                         units.push(read_u16(position));
@@ -1297,14 +1275,14 @@ fn decode_xrecord_entries(raw: &[u8], unicode: bool) -> Vec<XRecordEntry> {
                     }
                     String::from_utf16_lossy(&units)
                 } else {
-                    if position + 1 + length > raw.len() {
-                        break;
-                    }
+                    require!(1usize.saturating_add(length));
+                    let code_page = raw[position] as u16;
                     position += 1;
-                    let value: String = raw[position..position + length]
-                        .iter()
-                        .map(|byte| *byte as char)
-                        .collect();
+                    let value =
+                        crate::io::dxf::code_page::encoding_from_dwg_code_page(code_page)
+                            .decode(&raw[position..position + length])
+                            .0
+                            .into_owned();
                     position += length;
                     value
                 };
@@ -1312,9 +1290,7 @@ fn decode_xrecord_entries(raw: &[u8], unicode: bool) -> Vec<XRecordEntry> {
             }
             10..=37 | 110..=139 | 210..=269 | 1010..=1039
             | 1043..=1069 => {
-                if position + 24 > raw.len() {
-                    break;
-                }
+                require!(24);
                 let x = f64::from_le_bytes(
                     raw[position..position + 8].try_into().unwrap(),
                 );
@@ -1328,9 +1304,7 @@ fn decode_xrecord_entries(raw: &[u8], unicode: bool) -> Vec<XRecordEntry> {
                 XRecordValue::Point3D(x, y, z)
             }
             38..=59 | 140..=149 | 460..=469 | 1040..=1042 => {
-                if position + 8 > raw.len() {
-                    break;
-                }
+                require!(8);
                 let value = f64::from_le_bytes(
                     raw[position..position + 8].try_into().unwrap(),
                 );
@@ -1338,9 +1312,7 @@ fn decode_xrecord_entries(raw: &[u8], unicode: bool) -> Vec<XRecordEntry> {
                 XRecordValue::Double(value)
             }
             150..=169 => {
-                if position + 8 > raw.len() {
-                    break;
-                }
+                require!(8);
                 let value = i64::from_le_bytes(
                     raw[position..position + 8].try_into().unwrap(),
                 );
@@ -1349,9 +1321,7 @@ fn decode_xrecord_entries(raw: &[u8], unicode: bool) -> Vec<XRecordEntry> {
             }
             60..=79 | 170..=179 | 270..=279 | 370..=389
             | 400..=409 | 1070 => {
-                if position + 2 > raw.len() {
-                    break;
-                }
+                require!(2);
                 let value = i16::from_le_bytes(
                     raw[position..position + 2].try_into().unwrap(),
                 );
@@ -1359,9 +1329,7 @@ fn decode_xrecord_entries(raw: &[u8], unicode: bool) -> Vec<XRecordEntry> {
                 XRecordValue::Int16(value)
             }
             80..=99 | 420..=429 | 440..=459 | 1071 => {
-                if position + 4 > raw.len() {
-                    break;
-                }
+                require!(4);
                 let value = i32::from_le_bytes(
                     raw[position..position + 4].try_into().unwrap(),
                 );
@@ -1369,44 +1337,49 @@ fn decode_xrecord_entries(raw: &[u8], unicode: bool) -> Vec<XRecordEntry> {
                 XRecordValue::Int32(value)
             }
             280..=289 => {
-                if position >= raw.len() {
-                    break;
-                }
+                require!(1);
                 let value = raw[position];
                 position += 1;
                 XRecordValue::Byte(value)
             }
             290..=299 => {
-                if position >= raw.len() {
-                    break;
-                }
+                require!(1);
                 let value = raw[position] != 0;
                 position += 1;
                 XRecordValue::Bool(value)
             }
             310..=319 | 1004 => {
-                if position >= raw.len() {
-                    break;
-                }
+                require!(1);
                 let length = raw[position] as usize;
                 position += 1;
-                if position + length > raw.len() {
-                    break;
-                }
+                require!(length);
                 let value = raw[position..position + length].to_vec();
                 position += length;
                 XRecordValue::Chunk(value)
             }
-            _ => break,
+            _ => {
+                position = entry_start;
+                complete = false;
+                break;
+            }
         };
         entries.push(XRecordEntry { code, value });
     }
-    entries
+    if position != raw.len() {
+        complete = false;
+    }
+    (entries, complete)
 }
 
 pub fn read_xrecord(reader: &mut DwgMergedReader) -> XRecordData {
-    let data_size = safe_count(reader.read_bit_long());
-    let mut raw_data = Vec::with_capacity(data_size as usize);
+    // This field is a byte length, not an array item count. Real application
+    // payloads (FBXASSET in particular) routinely exceed MAX_ARRAY_COUNT.
+    // Bound corrupt declarations by the containing object's main-data stream
+    // instead of truncating valid XRecords at 100,000 bytes.
+    let declared_size = reader.read_bit_long().max(0) as usize;
+    let available_size = (reader.main_remaining_bits().max(0) as usize) / 8;
+    let data_size = declared_size.min(available_size);
+    let mut raw_data = Vec::with_capacity(data_size);
     for _ in 0..data_size {
         raw_data.push(reader.read_byte());
     }
@@ -1415,15 +1388,52 @@ pub fn read_xrecord(reader: &mut DwgMergedReader) -> XRecordData {
     } else {
         0
     };
-    let entries = decode_xrecord_entries(
+    let (mut entries, entries_complete) = decode_xrecord_entries(
         &raw_data,
         reader.dxf_version() >= DxfVersion::AC1021,
     );
+    let mut object_references = Vec::new();
+    while reader.handle_remaining_bits() >= 8 {
+        let (handle, reference_type) = reader.read_typed_handle();
+        if handle == 0 {
+            break;
+        }
+        let kind = match reference_type {
+            crate::io::dwg::dwg_reference_type::DwgReferenceType::Undefined => {
+                ProxyReferenceKind::Undefined
+            }
+            crate::io::dwg::dwg_reference_type::DwgReferenceType::SoftOwnership => {
+                ProxyReferenceKind::SoftOwnership
+            }
+            crate::io::dwg::dwg_reference_type::DwgReferenceType::HardOwnership => {
+                ProxyReferenceKind::HardOwnership
+            }
+            crate::io::dwg::dwg_reference_type::DwgReferenceType::SoftPointer => {
+                ProxyReferenceKind::SoftPointer
+            }
+            crate::io::dwg::dwg_reference_type::DwgReferenceType::HardPointer => {
+                ProxyReferenceKind::HardPointer
+            }
+        };
+        object_references.push(ProxyObjectReference {
+            handle: Handle::from(handle),
+            kind,
+        });
+    }
+    for (entry, reference) in entries
+        .iter_mut()
+        .filter(|entry| (330..=369).contains(&entry.code))
+        .zip(object_references.iter())
+    {
+        entry.value = XRecordValue::Handle(reference.handle);
+    }
     XRecordData {
         cloning_flags,
-        data_size,
+        data_size: data_size.min(i32::MAX as usize) as i32,
         raw_data,
         entries,
+        object_references,
+        entries_complete,
     }
 }
 

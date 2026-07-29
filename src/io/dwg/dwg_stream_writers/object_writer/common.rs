@@ -786,7 +786,8 @@ impl<'a> DwgObjectWriter<'a> {
         // Only use it if the xdictionary object actually exists in document.objects,
         // otherwise BricsCAD reports "Object was erased" for the dangling reference.
         let effective_xdic = if xdictionary_handle.is_none() {
-            self.document.xdic_by_handle.get(&handle).copied()
+            self.document
+                .extension_dictionary_handle(handle)
                 .filter(|xdic| self.document.objects.contains_key(xdic))
         } else {
             *xdictionary_handle

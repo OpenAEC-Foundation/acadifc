@@ -2414,6 +2414,351 @@ impl CadDocument {
         }
     }
 
+    /// Resolve the extension dictionary attached to an entity, table record or
+    /// non-graphical object.
+    pub fn extension_dictionary_handle(&self, owner: Handle) -> Option<Handle> {
+        if let Some(entity) = self.get_entity(owner) {
+            if let Some(handle) = entity.common().xdictionary_handle {
+                return (!handle.is_null()).then_some(handle);
+            }
+        }
+        if let Some(handle) = self.xdic_by_handle.get(&owner).copied() {
+            return (!handle.is_null()).then_some(handle);
+        }
+        if let Some(handle) = match self.objects.get(&owner) {
+            Some(ObjectType::Dictionary(value)) => value.xdictionary_handle,
+            Some(ObjectType::Layout(value)) => value.xdictionary_handle,
+            Some(ObjectType::XRecord(value)) => value.xdictionary_handle,
+            Some(ObjectType::PlotSettings(value)) => value.xdictionary_handle,
+            Some(ObjectType::VisualStyle(value)) => value.xdictionary_handle,
+            Some(ObjectType::Material(value)) => value.xdictionary_handle,
+            Some(ObjectType::ProxyObject(value)) => value.xdictionary_handle,
+            _ => None,
+        } {
+            if !handle.is_null() {
+                return Some(handle);
+            }
+        }
+        // A dictionary can own ordinary child dictionaries, so ownership alone
+        // is not sufficient to identify an extension dictionary for that
+        // specific owner type. Other objects and symbol-table records have at
+        // most one owned dictionary here: their extension dictionary.
+        if matches!(self.objects.get(&owner), Some(ObjectType::Dictionary(_))) {
+            return None;
+        }
+        self.objects.iter().find_map(|(handle, object)| match object {
+            ObjectType::Dictionary(dictionary)
+                if dictionary.owner == owner && !handle.is_null() =>
+            {
+                Some(*handle)
+            }
+            _ => None,
+        })
+    }
+
+    /// Resolve a named XRecord in `owner`'s extension dictionary.
+    pub fn xrecord(&self, owner: Handle, key: &str) -> Option<&crate::objects::XRecord> {
+        let dictionary_handle = self.extension_dictionary_handle(owner)?;
+        let record_handle = match self.objects.get(&dictionary_handle)? {
+            ObjectType::Dictionary(dictionary) => dictionary.get(key)?,
+            _ => return None,
+        };
+        match self.objects.get(&record_handle)? {
+            ObjectType::XRecord(record) => Some(record),
+            _ => None,
+        }
+    }
+
+    /// Mutable counterpart of [`CadDocument::xrecord`].
+    pub fn xrecord_mut(
+        &mut self,
+        owner: Handle,
+        key: &str,
+    ) -> Option<&mut crate::objects::XRecord> {
+        let dictionary_handle = self.extension_dictionary_handle(owner)?;
+        let record_handle = match self.objects.get(&dictionary_handle)? {
+            ObjectType::Dictionary(dictionary) => dictionary.get(key)?,
+            _ => return None,
+        };
+        match self.objects.get_mut(&record_handle)? {
+            ObjectType::XRecord(record) => Some(record),
+            _ => None,
+        }
+    }
+
+    /// Ensure a named XRecord and its extension dictionary exist.
+    ///
+    /// The created dictionary owns its records and is attached through both
+    /// the entity common data and the non-entity side map so DWG and DXF
+    /// writers observe the same graph.
+    pub fn ensure_xrecord(&mut self, owner: Handle, key: &str) -> Handle {
+        let dictionary_handle = match self.extension_dictionary_handle(owner) {
+            Some(handle) => handle,
+            None => {
+                let handle = self.allocate_handle();
+                let mut dictionary = crate::objects::Dictionary::new();
+                dictionary.handle = handle;
+                dictionary.owner = owner;
+                dictionary.hard_owner = true;
+                self.objects
+                    .insert(handle, ObjectType::Dictionary(dictionary));
+                if let Some(entity) = self.get_entity_mut(owner) {
+                    entity.common_mut().xdictionary_handle = Some(handle);
+                }
+                self.xdic_by_handle.insert(owner, handle);
+                handle
+            }
+        };
+
+        if let Some(ObjectType::Dictionary(dictionary)) =
+            self.objects.get(&dictionary_handle)
+        {
+            if let Some(handle) = dictionary.get(key) {
+                if matches!(self.objects.get(&handle), Some(ObjectType::XRecord(_))) {
+                    return handle;
+                }
+            }
+        }
+
+        let record_handle = self.allocate_handle();
+        let mut record = crate::objects::XRecord::named(key);
+        record.handle = record_handle;
+        record.owner = dictionary_handle;
+        self.objects
+            .insert(record_handle, ObjectType::XRecord(record));
+        if let Some(ObjectType::Dictionary(dictionary)) =
+            self.objects.get_mut(&dictionary_handle)
+        {
+            if let Some((_, handle)) = dictionary
+                .entries
+                .iter_mut()
+                .find(|(name, _)| name.eq_ignore_ascii_case(key))
+            {
+                *handle = record_handle;
+            } else {
+                dictionary.add_entry(key, record_handle);
+            }
+        }
+        record_handle
+    }
+
+    /// Assign dictionary keys to XRecord objects after file loading.
+    pub fn resolve_xrecord_names(&mut self) {
+        let mut names: Vec<(Handle, String)> = self
+            .objects
+            .values()
+            .filter_map(|object| match object {
+                ObjectType::Dictionary(dictionary) => Some(
+                    dictionary
+                        .entries
+                        .iter()
+                        .map(|(name, handle)| (*handle, name.clone()))
+                        .collect::<Vec<_>>(),
+                ),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        names.sort_by_key(|(handle, name)| (handle.value(), name.clone()));
+        for (handle, name) in names {
+            if let Some(ObjectType::XRecord(record)) = self.objects.get_mut(&handle) {
+                record.name = name;
+            }
+        }
+    }
+
+    /// Project typed properties whose authoritative storage is a named
+    /// XRecord onto their public object models.
+    pub fn resolve_xrecord_backed_properties(&mut self) {
+        let advanced_values: HashMap<
+            Handle,
+            Vec<crate::objects::XRecordEntry>,
+        > = self
+            .objects
+            .values()
+            .filter_map(|object| match object {
+                ObjectType::Dictionary(dictionary) => dictionary
+                    .get("ADVMATERIAL")
+                    .and_then(|record| match self.objects.get(&record) {
+                        Some(ObjectType::XRecord(xrecord)) => {
+                            Some((dictionary.handle, xrecord.entries.clone()))
+                        }
+                        _ => None,
+                    }),
+                _ => None,
+            })
+            .collect();
+        for object in self.objects.values_mut() {
+            let ObjectType::Material(material) = object else {
+                continue;
+            };
+            let Some(dictionary) = material.xdictionary_handle else {
+                continue;
+            };
+            let Some(entries) = advanced_values.get(&dictionary) else {
+                continue;
+            };
+            material.advanced_data_present = true;
+            for entry in entries {
+                match (entry.code, &entry.value) {
+                    (460, crate::objects::XRecordValue::Double(value)) => {
+                        material.color_bleed_scale = *value / 100.0;
+                    }
+                    (461, crate::objects::XRecordValue::Double(value)) => {
+                        material.indirect_bump_scale = *value / 100.0;
+                    }
+                    (462, crate::objects::XRecordValue::Double(value)) => {
+                        material.reflectance_scale = *value / 100.0;
+                    }
+                    (463, crate::objects::XRecordValue::Double(value)) => {
+                        material.transmittance_scale = *value / 100.0;
+                    }
+                    (464, crate::objects::XRecordValue::Double(value)) => {
+                        material.luminance = *value;
+                    }
+                    (270, crate::objects::XRecordValue::Int16(value)) => {
+                        material.luminance_mode = *value;
+                    }
+                    (290, crate::objects::XRecordValue::Bool(value)) => {
+                        material.two_sided_material = *value;
+                    }
+                    (293, crate::objects::XRecordValue::Bool(value)) => {
+                        material.is_anonymous = *value;
+                    }
+                    (272, crate::objects::XRecordValue::Int16(value)) => {
+                        material.global_illumination = *value;
+                    }
+                    (273, crate::objects::XRecordValue::Int16(value)) => {
+                        material.final_gather = *value;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    /// Read the annotation scale attached to a viewport.
+    pub fn viewport_annotation_scale(&self, viewport: Handle) -> Option<Handle> {
+        self.xrecord(viewport, "ASDK_XREC_ANNOTATION_SCALE_INFO")?
+            .annotation_scale_handle()
+    }
+
+    /// Set the annotation scale attached to a viewport.
+    pub fn set_viewport_annotation_scale(
+        &mut self,
+        viewport: Handle,
+        scale: Handle,
+    ) {
+        self.ensure_xrecord(viewport, "ASDK_XREC_ANNOTATION_SCALE_INFO");
+        if let Some(record) =
+            self.xrecord_mut(viewport, "ASDK_XREC_ANNOTATION_SCALE_INFO")
+        {
+            record.set_annotation_scale_handle(scale);
+        }
+    }
+
+    /// Read Autodesk subdivision-mesh UVW coordinates.
+    pub fn mesh_texture_coordinates(&self, mesh: Handle) -> Vec<Vector3> {
+        self.xrecord(mesh, "ADSK_XREC_SUBDVERTEXTEXCOORDS")
+            .map(|record| record.mesh_texture_coordinates())
+            .unwrap_or_default()
+    }
+
+    /// Replace Autodesk subdivision-mesh UVW coordinates.
+    pub fn set_mesh_texture_coordinates(
+        &mut self,
+        mesh: Handle,
+        coordinates: &[Vector3],
+    ) {
+        self.ensure_xrecord(mesh, "ADSK_XREC_SUBDVERTEXTEXCOORDS");
+        if let Some(record) =
+            self.xrecord_mut(mesh, "ADSK_XREC_SUBDVERTEXTEXCOORDS")
+        {
+            record.set_mesh_texture_coordinates(coordinates);
+        }
+    }
+
+    /// Set an Autodesk viewport-specific layer override.
+    pub fn set_layer_viewport_override(
+        &mut self,
+        layer: Handle,
+        kind: crate::objects::KnownXRecordKind,
+        viewport: Handle,
+        value: crate::objects::XRecordValue,
+    ) -> bool {
+        let (key, section, value_code) = match kind {
+            crate::objects::KnownXRecordKind::LayerViewportAlphaOverride => (
+                "ADSK_XREC_LAYER_ALPHA_OVR",
+                "ADSK_LYR_ALPHA_OVERRIDE",
+                440,
+            ),
+            crate::objects::KnownXRecordKind::LayerViewportColorOverride => (
+                "ADSK_XREC_LAYER_COLOR_OVR",
+                "ADSK_LYR_COLOR_OVERRIDE",
+                420,
+            ),
+            crate::objects::KnownXRecordKind::LayerViewportLinetypeOverride => (
+                "ADSK_XREC_LAYER_LINETYPE_OVR",
+                "ADSK_LYR_LINETYPE_OVERRIDE",
+                343,
+            ),
+            crate::objects::KnownXRecordKind::LayerViewportLineweightOverride => (
+                "ADSK_XREC_LAYER_LINEWT_OVR",
+                "ADSK_LYR_LINEWT_OVERRIDE",
+                91,
+            ),
+            _ => return false,
+        };
+        let valid_value = match value_code {
+            343 => matches!(value, crate::objects::XRecordValue::Handle(_)),
+            91 | 420 | 440 => {
+                matches!(value, crate::objects::XRecordValue::Int32(_))
+            }
+            _ => false,
+        };
+        if !valid_value {
+            return false;
+        }
+        self.ensure_xrecord(layer, key);
+        if let Some(record) = self.xrecord_mut(layer, key) {
+            record.set_layer_viewport_override(
+                section,
+                value_code,
+                viewport,
+                value,
+            );
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Read all viewport-specific overrides of one kind from a layer.
+    pub fn layer_viewport_overrides(
+        &self,
+        layer: Handle,
+        kind: crate::objects::KnownXRecordKind,
+    ) -> Vec<(Handle, crate::objects::XRecordValue)> {
+        let (key, value_code) = match kind {
+            crate::objects::KnownXRecordKind::LayerViewportAlphaOverride => {
+                ("ADSK_XREC_LAYER_ALPHA_OVR", 440)
+            }
+            crate::objects::KnownXRecordKind::LayerViewportColorOverride => {
+                ("ADSK_XREC_LAYER_COLOR_OVR", 420)
+            }
+            crate::objects::KnownXRecordKind::LayerViewportLinetypeOverride => {
+                ("ADSK_XREC_LAYER_LINETYPE_OVR", 343)
+            }
+            crate::objects::KnownXRecordKind::LayerViewportLineweightOverride => {
+                ("ADSK_XREC_LAYER_LINEWT_OVR", 91)
+            }
+            _ => return Vec::new(),
+        };
+        self.xrecord(layer, key)
+            .map(|record| record.layer_viewport_overrides(value_code))
+            .unwrap_or_default()
+    }
+
     /// Walk the ownership chain upward from `start` (inclusive) and report
     /// whether it passes through `target`. Bounded to avoid cycles.
     pub fn owner_chain_reaches(&self, start: Handle, target: Handle) -> bool {
@@ -2711,6 +3056,13 @@ impl CadDocument {
                                 {
                                     *handle = *new_handle;
                                 }
+                            }
+                        }
+                        for reference in &mut x.object_references {
+                            if let Some(new_handle) =
+                                remap_map.get(&reference.handle.value())
+                            {
+                                reference.handle = *new_handle;
                             }
                         }
                     }
@@ -3492,6 +3844,8 @@ impl CadDocument {
                 }
             }
         }
+        self.resolve_xrecord_names();
+        self.resolve_xrecord_backed_properties();
     }
 }
 

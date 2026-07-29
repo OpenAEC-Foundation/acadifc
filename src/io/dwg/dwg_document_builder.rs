@@ -1615,91 +1615,14 @@ impl DwgDocumentBuilder {
             }
         }
 
+        document.resolve_xrecord_names();
+
         // Advanced material properties are not stored in the AcDbMaterial
         // object body. AutoCAD keeps them in the ADVMATERIAL XRECORD owned by
         // the material's extension dictionary. Expose those values on the
         // Material model while retaining the XRECORD as the authoritative
         // on-disk representation.
-        {
-            let advanced_records: HashMap<Handle, Handle> = document
-                .objects
-                .iter()
-                .filter_map(|(handle, object)| match object {
-                    crate::objects::ObjectType::Dictionary(dictionary) => {
-                        dictionary
-                            .entries
-                            .iter()
-                            .find(|(name, _)| {
-                                name.eq_ignore_ascii_case("ADVMATERIAL")
-                            })
-                            .map(|(_, record)| (*handle, *record))
-                    }
-                    _ => None,
-                })
-                .collect();
-            let advanced_values: HashMap<
-                Handle,
-                Vec<crate::objects::XRecordEntry>,
-            > = advanced_records
-                .iter()
-                .filter_map(|(dictionary, record)| {
-                    match document.objects.get(record) {
-                        Some(crate::objects::ObjectType::XRecord(xrecord)) => {
-                            Some((*dictionary, xrecord.entries.clone()))
-                        }
-                        _ => None,
-                    }
-                })
-                .collect();
-            for object in document.objects.values_mut() {
-                let crate::objects::ObjectType::Material(material) = object
-                else {
-                    continue;
-                };
-                let Some(dictionary) = material.xdictionary_handle else {
-                    continue;
-                };
-                let Some(entries) = advanced_values.get(&dictionary) else {
-                    continue;
-                };
-                material.advanced_data_present = true;
-                for entry in entries {
-                    match (entry.code, &entry.value) {
-                        (460, crate::objects::XRecordValue::Double(value)) => {
-                            material.color_bleed_scale = *value / 100.0;
-                        }
-                        (461, crate::objects::XRecordValue::Double(value)) => {
-                            material.indirect_bump_scale = *value / 100.0;
-                        }
-                        (462, crate::objects::XRecordValue::Double(value)) => {
-                            material.reflectance_scale = *value / 100.0;
-                        }
-                        (463, crate::objects::XRecordValue::Double(value)) => {
-                            material.transmittance_scale = *value / 100.0;
-                        }
-                        (464, crate::objects::XRecordValue::Double(value)) => {
-                            material.luminance = *value;
-                        }
-                        (270, crate::objects::XRecordValue::Int16(value)) => {
-                            material.luminance_mode = *value;
-                        }
-                        (290, crate::objects::XRecordValue::Bool(value)) => {
-                            material.two_sided_material = *value;
-                        }
-                        (293, crate::objects::XRecordValue::Bool(value)) => {
-                            material.is_anonymous = *value;
-                        }
-                        (272, crate::objects::XRecordValue::Int16(value)) => {
-                            material.global_illumination = *value;
-                        }
-                        (273, crate::objects::XRecordValue::Int16(value)) => {
-                            material.final_gather = *value;
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
+        document.resolve_xrecord_backed_properties();
 
         // ── Post-pass: cache each RasterImage's path from its IMAGEDEF ──
         //
@@ -4794,7 +4717,13 @@ impl DwgDocumentBuilder {
                     obj.cloning_flags =
                         crate::objects::DictionaryCloningFlags::from_value(data.cloning_flags);
                     obj.entries = data.entries;
+                    obj.object_references = data.object_references;
+                    obj.preserve_object_reference_stream = true;
+                    obj.entries_complete = data.entries_complete;
                     obj.raw_data = data.raw_data;
+                    obj.raw_dwg_data = Some(reader.raw_merged_data());
+                    obj.raw_dwg_handle_bits = reader.get_handle_bits();
+                    obj.raw_dwg_version = Some(document.version);
                     document.objects.insert(
                         Handle::from(handle),
                         crate::objects::ObjectType::XRecord(obj),

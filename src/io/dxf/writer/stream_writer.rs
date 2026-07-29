@@ -8,6 +8,9 @@ use crate::types::{Color, Handle, Vector2, Vector3};
 pub trait DxfStreamWriter {
     /// Write a code/value pair with a string value
     fn write_string(&mut self, code: i32, value: &str) -> Result<()>;
+
+    /// Write an XRecord string without applying MTEXT-specific substitutions.
+    fn write_xrecord_string(&mut self, code: i32, value: &str) -> Result<()>;
     
     /// Write a code/value pair with a byte value (for codes 280-289)
     fn write_byte(&mut self, code: i32, value: u8) -> Result<()>;

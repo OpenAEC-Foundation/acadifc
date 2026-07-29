@@ -57,7 +57,8 @@ fn xdata_value_type(gc: i16) -> XdVt {
         290..=299 => Int8, // bool, one byte
         300..=309 => Str,
         310..=319 => Binary,
-        320..=369 => Handle, // 320-329 handle, 330-369 objectid (8 bytes)
+        320..=329 => Handle,
+        330..=369 => Handle,
         370..=389 => Int16,
         390..=399 => Handle,
         400..=409 => Int16,
@@ -67,15 +68,27 @@ fn xdata_value_type(gc: i16) -> XdVt {
         440..=459 => Int32,
         460..=469 => Real,
         470..=479 => Str,
+        480..=481 => Handle,
         999 => Str,
         1004 => Binary,
-        1000..=1009 => Str,
+        1000..=1003 => Str,
+        1005 => Handle,
         1010..=1039 => Point3d,
         1040..=1042 => Real,
         1043..=1069 => Point3d,
         1070 => Int16,
         1071 => Int32,
         _ => Invalid,
+    }
+}
+
+fn xrecord_reference_type(kind: ProxyReferenceKind) -> DwgReferenceType {
+    match kind {
+        ProxyReferenceKind::Undefined => DwgReferenceType::Undefined,
+        ProxyReferenceKind::SoftOwnership => DwgReferenceType::SoftOwnership,
+        ProxyReferenceKind::HardOwnership => DwgReferenceType::HardOwnership,
+        ProxyReferenceKind::SoftPointer => DwgReferenceType::SoftPointer,
+        ProxyReferenceKind::HardPointer => DwgReferenceType::HardPointer,
     }
 }
 
@@ -86,9 +99,15 @@ fn xdata_value_type(gc: i16) -> XdVt {
 /// path; only the inline strings inside the xdata are version-specific. Without
 /// this a cross-version save would emit the source version's strings and the
 /// reader would mis-parse them ("Invalid xdata type"). Items are byte-aligned
-/// (every value is a byte multiple). Code-page strings are treated as Latin-1,
-/// which is exact for the ASCII keys/app names XRECORDs carry.
-fn transcode_xrecord_xdata(raw: &[u8], src_unicode: bool, tgt_unicode: bool) -> Vec<u8> {
+/// (every value is a byte multiple). Each legacy string's embedded code-page
+/// index is honored.
+fn transcode_xrecord_xdata(
+    raw: &[u8],
+    src_unicode: bool,
+    tgt_unicode: bool,
+    target_encoding: &'static encoding_rs::Encoding,
+    target_code_page: u8,
+) -> Vec<u8> {
     if src_unicode == tgt_unicode {
         return raw.to_vec();
     }
@@ -96,10 +115,19 @@ fn transcode_xrecord_xdata(raw: &[u8], src_unicode: bool, tgt_unicode: bool) -> 
     let mut out = Vec::with_capacity(raw.len() + raw.len() / 2);
     let mut p = 0usize;
     while p + 2 <= raw.len() {
+        let item_start = p;
+        let output_start = out.len();
+        macro_rules! preserve_tail {
+            () => {{
+                out.truncate(output_start);
+                out.extend_from_slice(&raw[item_start..]);
+                return out;
+            }};
+        }
         let gc = rd_u16(raw, p) as i16;
         let vt = xdata_value_type(gc);
         if vt == XdVt::Invalid {
-            break;
+            preserve_tail!();
         }
         out.extend_from_slice(&raw[p..p + 2]); // group code
         p += 2;
@@ -114,7 +142,7 @@ fn transcode_xrecord_xdata(raw: &[u8], src_unicode: bool, tgt_unicode: bool) -> 
         };
         if let Some(n) = fixed {
             if p + n > raw.len() {
-                break;
+                preserve_tail!();
             }
             out.extend_from_slice(&raw[p..p + n]);
             p += n;
@@ -122,11 +150,11 @@ fn transcode_xrecord_xdata(raw: &[u8], src_unicode: bool, tgt_unicode: bool) -> 
         }
         if vt == XdVt::Binary {
             if p >= raw.len() {
-                break;
+                preserve_tail!();
             }
             let size = raw[p] as usize;
             if p + 1 + size > raw.len() {
-                break;
+                preserve_tail!();
             }
             out.extend_from_slice(&raw[p..p + 1 + size]);
             p += 1 + size;
@@ -134,13 +162,13 @@ fn transcode_xrecord_xdata(raw: &[u8], src_unicode: bool, tgt_unicode: bool) -> 
         }
         // Str: decode source format, re-encode target format.
         if p + 2 > raw.len() {
-            break;
+            preserve_tail!();
         }
         let len = rd_u16(raw, p) as usize;
         p += 2;
         let text: String = if src_unicode {
             if p + len * 2 > raw.len() {
-                break;
+                preserve_tail!();
             }
             let units: Vec<u16> = (0..len).map(|i| rd_u16(raw, p + i * 2)).collect();
             p += len * 2;
@@ -148,30 +176,46 @@ fn transcode_xrecord_xdata(raw: &[u8], src_unicode: bool, tgt_unicode: bool) -> 
         } else {
             // [u8 codepage][len bytes]
             if p + 1 + len > raw.len() {
-                break;
+                preserve_tail!();
             }
-            p += 1; // codepage byte (treat bytes as Latin-1)
-            let s: String = raw[p..p + len].iter().map(|&b| b as char).collect();
+            let source_code_page = raw[p] as u16;
+            p += 1;
+            let s = crate::io::dxf::code_page::encoding_from_dwg_code_page(
+                source_code_page,
+            )
+            .decode(&raw[p..p + len])
+            .0
+            .into_owned();
             p += len;
             s
         };
         if tgt_unicode {
-            let utf16: Vec<u16> = text.encode_utf16().collect();
+            let utf16: Vec<u16> = text
+                .encode_utf16()
+                .take(u16::MAX as usize)
+                .collect();
             out.extend_from_slice(&(utf16.len() as u16).to_le_bytes());
             for u in utf16 {
                 out.extend_from_slice(&u.to_le_bytes());
             }
         } else {
-            let bytes: Vec<u8> = text.chars().map(|c| c as u8).collect();
+            let encoded = target_encoding.encode(&text).0;
+            let bytes = &encoded.as_ref()[..encoded.len().min(u16::MAX as usize)];
             out.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
-            out.push(30); // ANSI_1252 code page
+            out.push(target_code_page);
             out.extend_from_slice(&bytes);
         }
     }
+    out.extend_from_slice(&raw[p..]);
     out
 }
 
-fn encode_xrecord_entries(entries: &[XRecordEntry], unicode: bool) -> Vec<u8> {
+fn encode_xrecord_entries(
+    entries: &[XRecordEntry],
+    unicode: bool,
+    encoding: &'static encoding_rs::Encoding,
+    code_page: u8,
+) -> Vec<u8> {
     let mut output = Vec::new();
     for entry in entries {
         output.extend_from_slice(&(entry.code as i16 as u16).to_le_bytes());
@@ -186,21 +230,12 @@ fn encode_xrecord_entries(entries: &[XRecordEntry], unicode: bool) -> Vec<u8> {
                         output.extend_from_slice(&unit.to_le_bytes());
                     }
                 } else {
-                    let bytes: Vec<u8> = value
-                        .chars()
-                        .map(|value| {
-                            let code = value as u32;
-                            if code <= u8::MAX as u32 {
-                                code as u8
-                            } else {
-                                b'?'
-                            }
-                        })
-                        .collect();
+                    let encoded = encoding.encode(value).0;
+                    let bytes = encoded.as_ref();
                     output.extend_from_slice(
                         &(bytes.len().min(u16::MAX as usize) as u16).to_le_bytes(),
                     );
-                    output.push(30);
+                    output.push(code_page);
                     output.extend_from_slice(
                         &bytes[..bytes.len().min(u16::MAX as usize)],
                     );
@@ -221,27 +256,7 @@ fn encode_xrecord_entries(entries: &[XRecordEntry], unicode: bool) -> Vec<u8> {
             XRecordValue::Byte(value) => output.push(*value),
             XRecordValue::Bool(value) => output.push(*value as u8),
             XRecordValue::Handle(value) => {
-                if entry.code < 0
-                    || entry.code == 5
-                    || entry.code == 105
-                    || (320..=329).contains(&entry.code)
-                    || (480..=481).contains(&entry.code)
-                {
-                    let text = format!("{:X}", value.value());
-                    if unicode {
-                        let units: Vec<u16> = text.encode_utf16().collect();
-                        output.extend_from_slice(&(units.len() as u16).to_le_bytes());
-                        for unit in units {
-                            output.extend_from_slice(&unit.to_le_bytes());
-                        }
-                    } else {
-                        output.extend_from_slice(&(text.len() as u16).to_le_bytes());
-                        output.push(30);
-                        output.extend_from_slice(text.as_bytes());
-                    }
-                } else {
-                    output.extend_from_slice(&value.value().to_le_bytes());
-                }
+                output.extend_from_slice(&value.value().to_le_bytes());
             }
             XRecordValue::Point3D(x, y, z) => {
                 output.extend_from_slice(&x.to_le_bytes());
@@ -281,7 +296,31 @@ impl<'a> DwgObjectWriter<'a> {
         match obj {
             ObjectType::Dictionary(d) => self.write_dictionary(d),
             ObjectType::Layout(l) => self.write_layout(l),
-            ObjectType::XRecord(x) => self.write_xrecord(x),
+            ObjectType::XRecord(x) => {
+                if !x.entries_complete {
+                    if let Some(raw) = &x.raw_dwg_data {
+                        if self.raw_passthrough_compatible(x.raw_dwg_version) {
+                            for reference in &x.object_references {
+                                if self.document.objects.contains_key(&reference.handle) {
+                                    self.object_queue.push_back(reference.handle);
+                                }
+                            }
+                            if let Some(xdictionary) = x.xdictionary_handle {
+                                if self.document.objects.contains_key(&xdictionary) {
+                                    self.object_queue.push_back(xdictionary);
+                                }
+                            }
+                            self.register_raw_object(
+                                x.handle,
+                                raw,
+                                x.raw_dwg_handle_bits,
+                            );
+                            return;
+                        }
+                    }
+                }
+                self.write_xrecord(x)
+            }
             ObjectType::Group(g) => self.write_group(g),
             ObjectType::MLineStyle(m) => self.write_mlinestyle(m),
             ObjectType::MultiLeaderStyle(m) => self.write_multileader_style(m),
@@ -2430,7 +2469,7 @@ impl<'a> DwgObjectWriter<'a> {
                         if material.xdictionary_handle == Some(xrec.owner)
                             && material.has_advanced_data() =>
                     {
-                        Some(vec![
+                        let values = vec![
                             XRecordEntry::double(
                                 460,
                                 material.color_bleed_scale * 100.0,
@@ -2465,7 +2504,19 @@ impl<'a> DwgObjectWriter<'a> {
                                 273,
                                 material.final_gather,
                             ),
-                        ])
+                        ];
+                        let mut merged = xrec.entries.clone();
+                        for value in values {
+                            if let Some(existing) = merged
+                                .iter_mut()
+                                .find(|entry| entry.code == value.code)
+                            {
+                                existing.value = value.value;
+                            } else {
+                                merged.push(value);
+                            }
+                        }
+                        Some(merged)
                     }
                     _ => None,
                 })
@@ -2475,15 +2526,40 @@ impl<'a> DwgObjectWriter<'a> {
         let xrecord_entries = advanced_material_entries
             .as_deref()
             .unwrap_or(&xrec.entries);
+        let encoding =
+            crate::io::dxf::code_page::encoding_from_code_page(
+                &self.document.header.code_page,
+            )
+            .unwrap_or(encoding_rs::WINDOWS_1252);
+        let code_page = crate::io::dxf::code_page::dwg_code_page_index(
+            &self.document.header.code_page,
+        )
+        .min(u8::MAX as u16) as u8;
 
         // Write xdata bytes first (per spec: data before cloning flags). The
         // blob is captured verbatim from the source version; when saving to a
         // different string-encoding family (code page <-> UTF-16) re-encode the
         // inline strings so the xdata stays valid instead of being dropped.
-        let xdata = if !xrecord_entries.is_empty() {
+        let xdata = if !xrec.entries_complete && !xrec.raw_data.is_empty() {
+            let tgt_unicode = self.dxf_version >= DxfVersion::AC1021;
+            match self.document.dwg_source_version {
+                Some(src) if (src >= DxfVersion::AC1021) != tgt_unicode => {
+                    transcode_xrecord_xdata(
+                        &xrec.raw_data,
+                        src >= DxfVersion::AC1021,
+                        tgt_unicode,
+                        encoding,
+                        code_page,
+                    )
+                }
+                _ => xrec.raw_data.clone(),
+            }
+        } else if !xrecord_entries.is_empty() {
             encode_xrecord_entries(
                 xrecord_entries,
                 self.dxf_version >= DxfVersion::AC1021,
+                encoding,
+                code_page,
             )
         } else if xrec.raw_data.is_empty() {
             Vec::new()
@@ -2491,7 +2567,13 @@ impl<'a> DwgObjectWriter<'a> {
             let tgt_unicode = self.dxf_version >= DxfVersion::AC1021;
             match self.document.dwg_source_version {
                 Some(src) if (src >= DxfVersion::AC1021) != tgt_unicode => {
-                    transcode_xrecord_xdata(&xrec.raw_data, src >= DxfVersion::AC1021, tgt_unicode)
+                    transcode_xrecord_xdata(
+                        &xrec.raw_data,
+                        src >= DxfVersion::AC1021,
+                        tgt_unicode,
+                        encoding,
+                        code_page,
+                    )
                 }
                 _ => xrec.raw_data.clone(),
             }
@@ -2508,6 +2590,60 @@ impl<'a> DwgObjectWriter<'a> {
         // R2000+: Cloning flags (valid range 0..5; enum already constrains to valid values)
         if self.dxf_version >= DxfVersion::AC1015 {
             self.writer.write_bit_short(xrec.cloning_flags.to_value());
+        }
+
+        if xrec.preserve_object_reference_stream {
+            // A decoded DWG may deliberately omit the translation vector even
+            // when its payload contains 330-369 values. Preserve that exact
+            // representation; adding synthesized handles changes clone
+            // semantics in otherwise valid third-party files.
+            for reference in &xrec.object_references {
+                self.writer.write_handle(
+                    xrecord_reference_type(reference.kind),
+                    reference.handle.value(),
+                );
+                if self.document.objects.contains_key(&reference.handle) {
+                    self.object_queue.push_back(reference.handle);
+                }
+            }
+        } else {
+            // DXF-originated and newly edited XRecords need one translation
+            // handle for every 330-369 value. Preserve a supplied kind when
+            // available, otherwise derive it from the group-code range.
+            let object_id_entries: Vec<_> = xrecord_entries
+                .iter()
+                .filter(|entry| (330..=369).contains(&entry.code))
+                .collect();
+            for (index, entry) in object_id_entries.iter().enumerate() {
+                let decoded = xrec.object_references.get(index);
+                let handle = entry
+                    .value
+                    .as_handle()
+                    .or_else(|| decoded.map(|reference| reference.handle))
+                    .unwrap_or(Handle::NULL);
+                let reference_type = decoded
+                    .map(|reference| xrecord_reference_type(reference.kind))
+                    .unwrap_or_else(|| match entry.code {
+                        330..=339 => DwgReferenceType::SoftPointer,
+                        340..=349 => DwgReferenceType::HardPointer,
+                        350..=359 => DwgReferenceType::SoftOwnership,
+                        360..=369 => DwgReferenceType::HardOwnership,
+                        _ => DwgReferenceType::SoftPointer,
+                    });
+                self.writer.write_handle(reference_type, handle.value());
+                if self.document.objects.contains_key(&handle) {
+                    self.object_queue.push_back(handle);
+                }
+            }
+            for reference in xrec.object_references.iter().skip(object_id_entries.len()) {
+                self.writer.write_handle(
+                    xrecord_reference_type(reference.kind),
+                    reference.handle.value(),
+                );
+                if self.document.objects.contains_key(&reference.handle) {
+                    self.object_queue.push_back(reference.handle);
+                }
+            }
         }
 
         self.register_object(xrec.handle);

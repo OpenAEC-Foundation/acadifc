@@ -5584,6 +5584,9 @@ impl<'a> SectionReader<'a> {
                     // Entry value (handle) - 350 is soft owner, 360 is hard owner
                     if let Some(key) = current_key.take() {
                         if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) {
+                            if pair.code == 360 {
+                                dict.set_entry_hard_owner(&key, true);
+                            }
                             dict.add_entry(key, Handle::new(h));
                         }
                     }
@@ -7759,7 +7762,12 @@ impl<'a> SectionReader<'a> {
             }
 
             if pair.code == 0 && pair.value_string == "LAYER" {
-                if let Some(layer) = self.read_layer_entry()? {
+                if let Some((layer, xdictionary)) = self.read_layer_entry()? {
+                    if let Some(xdictionary) = xdictionary {
+                        document
+                            .xdic_by_handle
+                            .insert(layer.handle, xdictionary);
+                    }
                     document.layers.add_or_replace(layer);
                 }
             } else if pair.code == 5 {
@@ -7783,8 +7791,9 @@ impl<'a> SectionReader<'a> {
     }
 
     /// Read a single LAYER entry
-    fn read_layer_entry(&mut self) -> Result<Option<Layer>> {
+    fn read_layer_entry(&mut self) -> Result<Option<(Layer, Option<Handle>)>> {
         let mut layer = Layer::new("0");
+        let mut xdictionary_handle = None;
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 {
@@ -7795,6 +7804,9 @@ impl<'a> SectionReader<'a> {
 
             match pair.code {
                 5 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { layer.handle = Handle::new(h); } }
+                102 if pair.value_string.trim() == "{ACAD_XDICTIONARY" => {
+                    xdictionary_handle = self.read_xdictionary_handle()?;
+                }
                 2 => layer.name = pair.value_string.clone(),
                 62 => {
                     if let Some(color_index) = pair.as_i16() {
@@ -7859,7 +7871,7 @@ impl<'a> SectionReader<'a> {
             }
         }
 
-        Ok(Some(layer))
+        Ok(Some((layer, xdictionary_handle)))
     }
 
     /// Read LTYPE table
@@ -16013,7 +16025,11 @@ impl<'a> SectionReader<'a> {
                             XRecordValue::String(pair.value_string.clone())
                         }
                         XRecordValueType::Point3D => {
-                            let x = pair.as_double().unwrap_or(0.0);
+                            let x = pair
+                                .value_string
+                                .trim()
+                                .parse::<f64>()
+                                .unwrap_or(0.0);
                             let mut y = 0.0;
                             let mut z = 0.0;
                             if let Some(next) = self.reader.read_pair()? {
@@ -16022,14 +16038,22 @@ impl<'a> SectionReader<'a> {
                                         next.code,
                                         next.value_string.clone(),
                                     ));
-                                    y = next.as_double().unwrap_or(0.0);
+                                    y = next
+                                        .value_string
+                                        .trim()
+                                        .parse::<f64>()
+                                        .unwrap_or(0.0);
                                     if let Some(next_z) = self.reader.read_pair()? {
                                         if next_z.code == pair.code + 20 {
                                             raw_dxf_codes.push((
                                                 next_z.code,
                                                 next_z.value_string.clone(),
                                             ));
-                                            z = next_z.as_double().unwrap_or(0.0);
+                                            z = next_z
+                                                .value_string
+                                                .trim()
+                                                .parse::<f64>()
+                                                .unwrap_or(0.0);
                                         } else {
                                             self.reader.push_back(next_z);
                                         }
@@ -16041,27 +16065,51 @@ impl<'a> SectionReader<'a> {
                             XRecordValue::Point3D(x, y, z)
                         }
                         XRecordValueType::Double => {
-                            pair.as_double().map(XRecordValue::Double)
+                            pair.value_string
+                                .trim()
+                                .parse::<f64>()
+                                .ok()
+                                .map(XRecordValue::Double)
                                 .unwrap_or(XRecordValue::String(pair.value_string.clone()))
                         }
                         XRecordValueType::Int16 => {
-                            pair.as_i16().map(XRecordValue::Int16)
+                            pair.value_string
+                                .trim()
+                                .parse::<i16>()
+                                .ok()
+                                .map(XRecordValue::Int16)
                                 .unwrap_or(XRecordValue::String(pair.value_string.clone()))
                         }
                         XRecordValueType::Int32 => {
-                            pair.as_i32().map(XRecordValue::Int32)
+                            pair.value_string
+                                .trim()
+                                .parse::<i32>()
+                                .ok()
+                                .map(XRecordValue::Int32)
                                 .unwrap_or(XRecordValue::String(pair.value_string.clone()))
                         }
                         XRecordValueType::Int64 => {
-                            pair.as_int().map(XRecordValue::Int64)
+                            pair.value_string
+                                .trim()
+                                .parse::<i64>()
+                                .ok()
+                                .map(XRecordValue::Int64)
                                 .unwrap_or(XRecordValue::String(pair.value_string.clone()))
                         }
                         XRecordValueType::Byte => {
-                            pair.as_i16().map(|v| XRecordValue::Byte(v as u8))
+                            pair.value_string
+                                .trim()
+                                .parse::<u8>()
+                                .ok()
+                                .map(XRecordValue::Byte)
                                 .unwrap_or(XRecordValue::String(pair.value_string.clone()))
                         }
                         XRecordValueType::Bool => {
-                            pair.as_i16().map(|v| XRecordValue::Bool(v != 0))
+                            pair.value_string
+                                .trim()
+                                .parse::<i32>()
+                                .ok()
+                                .map(|value| XRecordValue::Bool(value != 0))
                                 .unwrap_or(XRecordValue::String(pair.value_string.clone()))
                         }
                         XRecordValueType::Handle | XRecordValueType::ObjectId => {
@@ -16085,8 +16133,26 @@ impl<'a> SectionReader<'a> {
                             xr.raw_data.extend_from_slice(&bytes);
                             XRecordValue::Chunk(bytes)
                         }
-                        _ => XRecordValue::String(pair.value_string.clone()),
+                        _ => {
+                            xr.entries_complete = false;
+                            XRecordValue::String(pair.value_string.clone())
+                        }
                     };
+                    if (330..=369).contains(&pair.code) {
+                        if let XRecordValue::Handle(handle) = &value {
+                            let kind = match pair.code {
+                                330..=339 => ProxyReferenceKind::SoftPointer,
+                                340..=349 => ProxyReferenceKind::HardPointer,
+                                350..=359 => ProxyReferenceKind::SoftOwnership,
+                                360..=369 => ProxyReferenceKind::HardOwnership,
+                                _ => ProxyReferenceKind::Undefined,
+                            };
+                            xr.object_references.push(ProxyObjectReference {
+                                handle: *handle,
+                                kind,
+                            });
+                        }
+                    }
                     xr.entries.push(XRecordEntry {
                         code: pair.code,
                         value,

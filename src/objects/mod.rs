@@ -116,7 +116,10 @@ pub use table_style::{
     TableCellStylePropertyFlags, TableFlowDirection, TableStyle, TableStyleFlags,
     TableContentFormat, TableGridFormat, TableCellStyleData, NamedTableCellStyle,
 };
-pub use xrecord::{DictionaryCloningFlags, XRecord, XRecordEntry, XRecordValue, XRecordValueType};
+pub use xrecord::{
+    DictionaryCloningFlags, KnownXRecordKind, XRecord, XRecordEntry, XRecordSection,
+    XRecordValue, XRecordValueType,
+};
 pub use stub_objects::{
     VisualStyle, VisualStyleProperty, VisualStylePropertyValue,
     Material, MaterialColor, MaterialMap, MaterialProceduralValue, MaterialTexture,
@@ -137,6 +140,10 @@ pub struct Dictionary {
     pub owner: Handle,
     /// Dictionary entries (key -> handle)
     pub entries: Vec<(String, Handle)>,
+    /// Entry keys that were encoded as hard-owner references (DXF code 360)
+    /// even when `hard_owner` is false.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub hard_owner_entries: Vec<String>,
     /// Duplicate record cloning flag
     pub duplicate_cloning: i16,
     /// Hard owner flag
@@ -154,6 +161,7 @@ impl Dictionary {
             handle: Handle::NULL,
             owner: Handle::NULL,
             entries: Vec::new(),
+            hard_owner_entries: Vec::new(),
             duplicate_cloning: 1,
             hard_owner: false,
             reactors: Vec::new(),
@@ -166,11 +174,27 @@ impl Dictionary {
         self.entries.push((key.into(), handle));
     }
 
+    /// Record whether a specific entry uses hard ownership.
+    pub fn set_entry_hard_owner(&mut self, key: &str, hard_owner: bool) {
+        self.hard_owner_entries
+            .retain(|name| !name.eq_ignore_ascii_case(key));
+        if hard_owner {
+            self.hard_owner_entries.push(key.to_string());
+        }
+    }
+
+    /// Return the per-entry ownership mode retained from DXF.
+    pub fn is_entry_hard_owner(&self, key: &str) -> bool {
+        self.hard_owner_entries
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(key))
+    }
+
     /// Get a handle by key
     pub fn get(&self, key: &str) -> Option<Handle> {
         self.entries
             .iter()
-            .find(|(k, _)| k == key)
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
             .map(|(_, h)| *h)
     }
 

@@ -158,6 +158,18 @@ impl<W: Write> DxfStreamWriter for DxfTextWriter<W> {
         Ok(())
     }
 
+    fn write_xrecord_string(&mut self, code: i32, value: &str) -> Result<()> {
+        self.write_code(code)?;
+        let escaped = value
+            .replace('^', "^ ")
+            .replace("\r\n", "^M^J")
+            .replace('\r', "^M")
+            .replace('\n', "^J")
+            .replace('\t', "^I");
+        self.write_value_crlf(escaped.as_bytes())?;
+        Ok(())
+    }
+
     #[inline]
     fn write_byte(&mut self, code: i32, value: u8) -> Result<()> {
         self.write_code(code)?;
