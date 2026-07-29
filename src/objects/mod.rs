@@ -306,7 +306,7 @@ impl Layout {
             flags: 0,
             tab_order: 0,
             min_limits: (0.0, 0.0),
-            max_limits: (12.0, 9.0),
+            max_limits: (0.0, 0.0),
             insertion_base: (0.0, 0.0, 0.0),
             min_extents: (0.0, 0.0, 0.0),
             max_extents: (12.0, 9.0, 0.0),

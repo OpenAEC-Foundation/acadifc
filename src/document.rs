@@ -816,14 +816,14 @@ impl Default for HeaderVariables {
             model_space_extents_min: Vector3::new(1e20, 1e20, 1e20),
             model_space_extents_max: Vector3::new(-1e20, -1e20, -1e20),
             model_space_limits_min: Vector2::new(0.0, 0.0),
-            model_space_limits_max: Vector2::new(12.0, 9.0),
+            model_space_limits_max: Vector2::new(0.0, 0.0),
             
             // Extents and limits - Paper space
             paper_space_insertion_base: Vector3::ZERO,
             paper_space_extents_min: Vector3::new(1e20, 1e20, 1e20),
             paper_space_extents_max: Vector3::new(-1e20, -1e20, -1e20),
             paper_space_limits_min: Vector2::new(0.0, 0.0),
-            paper_space_limits_max: Vector2::new(12.0, 9.0),
+            paper_space_limits_max: Vector2::new(0.0, 0.0),
             
             // UCS settings
             ucs_base: String::new(),
