@@ -1482,6 +1482,11 @@ impl CadDocument {
         annotative.set_handle(self.allocate_handle());
         self.app_ids.add(annotative).ok();
 
+        // Layer transparency is stored as AcCmTransparency XDATA/EED.
+        let mut layer_transparency = AppId::new("AcCmTransparency");
+        layer_transparency.set_handle(self.allocate_handle());
+        self.app_ids.add(layer_transparency).ok();
+
         // Add standard viewport
         let mut active_vport = VPort::active();
         active_vport.set_handle(self.allocate_handle());
@@ -2090,9 +2095,19 @@ impl CadDocument {
     /// ```
     pub fn add_entity_to_layout(
         &mut self,
-        entity: EntityType,
+        mut entity: EntityType,
         layout_name: &str,
     ) -> Result<Handle> {
+        if let EntityType::Viewport(viewport) = &mut entity {
+            if viewport.id > 1 && viewport.frozen_layers.is_empty() {
+                viewport.frozen_layers = self
+                    .layers
+                    .iter()
+                    .filter(|layer| layer.flags.frozen_in_new_viewport)
+                    .map(|layer| layer.handle)
+                    .collect();
+            }
+        }
         // Find the Layout object by name to get its block_record handle
         let block_handle = self
             .objects

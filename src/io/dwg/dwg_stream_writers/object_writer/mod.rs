@@ -608,12 +608,31 @@ impl<'a> DwgObjectWriter<'a> {
     }
 
     fn write_layer(&mut self, layer: &crate::tables::Layer) {
-        self.write_common_non_entity_data(
+        let transparency_app = self.document.app_ids.get("AcCmTransparency");
+        let had_transparency_eed = transparency_app.is_some_and(|app| {
+            self.document
+                .eed_by_handle
+                .get(&layer.handle)
+                .is_some_and(|blocks| {
+                    blocks
+                        .iter()
+                        .any(|(app_handle, _)| *app_handle == app.handle.value())
+                })
+        });
+        let transparency_eed = transparency_app.and_then(|app| {
+            (!layer.transparency.is_opaque() || had_transparency_eed).then(|| {
+                let mut bytes = vec![71];
+                bytes.extend_from_slice(&layer.transparency.to_dxf_value().to_le_bytes());
+                (app.handle.value(), bytes)
+            })
+        });
+        self.write_common_non_entity_data_eed(
             common::OBJ_LAYER,
             layer.handle,
             self.document.layers.handle(),
             &[],
             &None,
+            transparency_eed,
         );
 
         // Entry name
@@ -633,9 +652,7 @@ impl<'a> DwgObjectWriter<'a> {
             if layer.flags.off {
                 values |= 0b0010;
             }
-            // frozen in new VP (bit 2) — always false for now
-            // (LayerFlags doesn't expose a separate frozen_in_new_vp flag)
-            if false {
+            if layer.flags.frozen_in_new_viewport {
                 values |= 0b0100;
             }
             if layer.flags.locked {
@@ -648,7 +665,7 @@ impl<'a> DwgObjectWriter<'a> {
         } else {
             self.writer.write_bit(layer.flags.frozen);
             self.writer.write_bit(layer.flags.off); // off flag (0=on, 1=off, same as R2000+)
-            self.writer.write_bit(false); // frozen in new VP
+            self.writer.write_bit(layer.flags.frozen_in_new_viewport);
             self.writer.write_bit(layer.flags.locked);
         }
 

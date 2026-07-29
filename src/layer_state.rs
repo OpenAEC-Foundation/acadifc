@@ -39,10 +39,12 @@ impl LayerStateMask {
             | Self::FROZEN.0
             | Self::LOCKED.0
             | Self::PLOT.0
+            | Self::NEW_VIEWPORT.0
             | Self::COLOR.0
             | Self::LINE_TYPE.0
             | Self::LINE_WEIGHT.0
-            | Self::PLOT_STYLE.0,
+            | Self::PLOT_STYLE.0
+            | Self::TRANSPARENCY.0,
     );
 
     /// All standard AutoCAD layer-state properties.
@@ -162,7 +164,7 @@ impl CadDocument {
                 frozen: layer.flags.frozen,
                 locked: layer.flags.locked,
                 plottable: layer.is_plottable,
-                new_viewport_frozen: false,
+                new_viewport_frozen: layer.flags.frozen_in_new_viewport,
                 color: layer.color,
                 line_type: layer.line_type.clone(),
                 line_weight: layer.line_weight,
@@ -171,7 +173,7 @@ impl CadDocument {
                 } else {
                     layer.plot_style.clone()
                 },
-                transparency: None,
+                transparency: Some(layer.transparency),
             })
             .collect();
 
@@ -263,6 +265,9 @@ impl CadDocument {
             if state.mask.contains(LayerStateMask::PLOT) {
                 layer.is_plottable = saved.plottable;
             }
+            if state.mask.contains(LayerStateMask::NEW_VIEWPORT) {
+                layer.flags.frozen_in_new_viewport = saved.new_viewport_frozen;
+            }
             if state.mask.contains(LayerStateMask::COLOR) {
                 layer.color = saved.color;
             }
@@ -274,6 +279,11 @@ impl CadDocument {
             }
             if state.mask.contains(LayerStateMask::PLOT_STYLE) {
                 layer.plot_style.clone_from(&saved.plot_style);
+            }
+            if state.mask.contains(LayerStateMask::TRANSPARENCY) {
+                if let Some(transparency) = saved.transparency {
+                    layer.transparency = transparency;
+                }
             }
             restored += 1;
         }

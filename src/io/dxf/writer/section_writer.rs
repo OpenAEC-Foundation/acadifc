@@ -636,6 +636,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         if layer.is_frozen() {
             flags |= 1;
         }
+        if layer.flags.frozen_in_new_viewport {
+            flags |= 2;
+        }
         if layer.is_locked() {
             flags |= 4;
         }
@@ -673,6 +676,13 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // Plot flag (code 290 is Bool type - single byte in binary)
         self.writer
             .write_bool(290, layer.is_plottable)?;
+
+        // AutoCAD stores layer transparency as AcCmTransparency XDATA.
+        if !layer.transparency.is_opaque() {
+            self.writer.write_string(1001, "AcCmTransparency")?;
+            self.writer
+                .write_i32(1071, layer.transparency.to_dxf_value())?;
+        }
 
         Ok(())
     }

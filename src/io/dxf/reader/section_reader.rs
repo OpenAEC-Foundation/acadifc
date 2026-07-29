@@ -7817,6 +7817,7 @@ impl<'a> SectionReader<'a> {
                 70 => {
                     if let Some(flags) = pair.as_i16() {
                         layer.flags.frozen = (flags & 1) != 0;
+                        layer.flags.frozen_in_new_viewport = (flags & 2) != 0;
                         layer.flags.locked = (flags & 4) != 0;
                         // Bit 2 is "frozen by default in NEW viewports", NOT
                         // off — the AEC sample's GRIDLINES layer carries it
@@ -7833,6 +7834,25 @@ impl<'a> SectionReader<'a> {
                 370 => {
                     if let Some(lw) = pair.as_i16() {
                         layer.line_weight = LineWeight::from_value(lw);
+                    }
+                }
+                1001 => {
+                    self.reader.push_back(pair);
+                    let (xdata, next_pair) = self.read_extended_data()?;
+                    if let Some(next_pair) = next_pair {
+                        self.reader.push_back(next_pair);
+                    }
+                    if let Some(value) = xdata
+                        .get_record("AcCmTransparency")
+                        .and_then(|record| {
+                            record.values.iter().find_map(|value| match value {
+                                XDataValue::Integer32(value) => Some(*value),
+                                _ => None,
+                            })
+                        })
+                    {
+                        layer.transparency =
+                            crate::types::Transparency::from_alpha_value(value as u32);
                     }
                 }
                 _ => {}

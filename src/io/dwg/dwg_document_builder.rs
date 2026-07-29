@@ -748,6 +748,14 @@ impl DwgDocumentBuilder {
         let _ = document.block_records.remove("*Model_Space");
         let _ = document.block_records.remove("*Paper_Space");
 
+        let layer_transparency_app_handle = parsed_entries.iter().find_map(|entry| match entry {
+            ParsedEntry::AppId(handle, data)
+                if data.name.eq_ignore_ascii_case("AcCmTransparency") =>
+            {
+                Some(*handle)
+            }
+            _ => None,
+        });
         let mut cleared_default_vports = false;
         for entry in &parsed_entries {
             match entry {
@@ -756,11 +764,32 @@ impl DwgDocumentBuilder {
                     layer.handle = Handle::from(*h);
                     layer.flags.frozen = data.frozen;
                     layer.flags.off = data.off;
+                    layer.flags.frozen_in_new_viewport = data.frozen_in_new_vp;
                     layer.flags.locked = data.locked;
                     layer.flags.xref_dependent = data.xref_dependent;
                     layer.is_plottable = data.plottable;
                     layer.line_weight = LineWeight::from_value(data.line_weight);
                     layer.color = data.color;
+                    if let Some(app_handle) = layer_transparency_app_handle {
+                        if let Some(bytes) = document
+                            .eed_by_handle
+                            .get(&Handle::from(*h))
+                            .and_then(|blocks| {
+                                blocks
+                                    .iter()
+                                    .find(|(handle, _)| *handle == app_handle)
+                                    .map(|(_, bytes)| bytes.as_slice())
+                            })
+                        {
+                            if bytes.first() == Some(&71) && bytes.len() >= 5 {
+                                let raw = i32::from_le_bytes([
+                                    bytes[1], bytes[2], bytes[3], bytes[4],
+                                ]);
+                                layer.transparency =
+                                    crate::types::Transparency::from_alpha_value(raw as u32);
+                            }
+                        }
+                    }
                     // Resolve linetype handle → name
                     layer.line_type = maps
                         .linetypes
