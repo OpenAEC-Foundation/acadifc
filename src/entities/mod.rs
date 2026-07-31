@@ -56,6 +56,7 @@ pub mod ole_presentation;
 pub mod polygon_mesh;
 pub mod light;
 pub mod section_symbol;
+pub mod proxy_graphics;
 pub mod unknown_entity;
 pub mod view_border;
 pub mod extended_entity;
@@ -146,6 +147,9 @@ pub use polygon_mesh::{
 pub use light::{Light, LightPhotometricData};
 pub use section_symbol::{
     SectionSymbol, SectionSymbolPoint, SectionViewStyle,
+};
+pub use proxy_graphics::{
+    ProxyGraphicRecord, ProxyGraphics, ProxyUnicodeText,
 };
 pub use unknown_entity::UnknownEntity;
 pub use view_border::ViewBorder;
