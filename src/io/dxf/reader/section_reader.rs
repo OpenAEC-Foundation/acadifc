@@ -1,6 +1,7 @@
 //! DXF section readers
 
 mod associative;
+mod table_content;
 
 use super::stream_reader::{DxfStreamReader, PointReader};
 use crate::document::CadDocument;
@@ -1999,7 +2000,7 @@ impl<'a> SectionReader<'a> {
                         }
                     }
                     "MULTILEADER" | "MLEADER" => {
-                        if let Some(entity) = self.read_multileader(document.version)? {
+                        if let Some(entity) = self.read_multileader()? {
                             block_entities.push(EntityType::MultiLeader(entity));
                         }
                     }
@@ -2034,7 +2035,7 @@ impl<'a> SectionReader<'a> {
                         }
                     }
                     "ACAD_TABLE" | "TABLE" => {
-                        if let Some(entity) = self.read_table_entity(document.version)? {
+                        if let Some(entity) = self.read_table_entity()? {
                             block_entities.push(EntityType::Table(entity));
                         }
                     }
@@ -2306,7 +2307,7 @@ impl<'a> SectionReader<'a> {
                         }
                     }
                     "MULTILEADER" | "MLEADER" => {
-                        if let Some(entity) = self.read_multileader(document.version)? {
+                        if let Some(entity) = self.read_multileader()? {
                             let _ = document.add_entity(EntityType::MultiLeader(entity));
                         }
                     }
@@ -2355,7 +2356,7 @@ impl<'a> SectionReader<'a> {
                         }
                     }
                     "ACAD_TABLE" | "TABLE" => {
-                        if let Some(entity) = self.read_table_entity(document.version)? {
+                        if let Some(entity) = self.read_table_entity()? {
                             let _ = document.add_entity(EntityType::Table(entity));
                         }
                     }
@@ -3547,10 +3548,7 @@ impl<'a> SectionReader<'a> {
                 300 if is_mleader
                     && pair.value_string.starts_with("CONTEXT_DATA") =>
                 {
-                    self.read_mleader_context(
-                        &mut mleader_context,
-                        &mut Vec::new(),
-                    )?;
+                    self.read_mleader_context(&mut mleader_context)?;
                 }
                 _ => fields.push(&section, pair.code, pair.value_string),
             }
@@ -5253,7 +5251,7 @@ impl<'a> SectionReader<'a> {
                     }
                     "TABLECONTENT" => {
                         if let Some(obj) =
-                            self.read_table_entity(document.version)?
+                            self.read_table_content_object_typed_dxf()?
                         {
                             document.objects.insert(
                                 obj.common.handle,
@@ -8766,10 +8764,6 @@ impl<'a> SectionReader<'a> {
                 // "}" closing tokens are handled inside the group readers
                 Ok(true)
             }
-            // Proxy graphics — skip data (matches ACadSharp behavior)
-            92 | 160 | 310 => {
-                Ok(true)
-            }
             // True color (code 420): packed 24-bit RGB overrides ACI index.
             420 => {
                 if let Some(v) = pair.as_i32() {
@@ -8777,8 +8771,8 @@ impl<'a> SectionReader<'a> {
                 }
                 Ok(true)
             }
-            // Color book name (code 430): consumed but not stored on EntityCommon.
             430 => {
+                common.color_name = Some(pair.value_string.clone());
                 Ok(true)
             }
             // Transparency (code 440): packed alpha value.
@@ -12049,12 +12043,26 @@ impl<'a> SectionReader<'a> {
         let mut object_data = Vec::new();
         let mut object_ids = Vec::new();
         let mut reading_object_data = false;
+        let mut subclass = String::new();
+        let mut common_graphics_size = 0usize;
+        let mut common_graphics = Vec::new();
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 {
                 self.reader.push_back(pair);
                 break;
             }
             match pair.code {
+                100 => subclass = pair.value_string.clone(),
+                92 | 160 if subclass == "AcDbEntity" => {
+                    common_graphics_size =
+                        pair.as_int().unwrap_or(0).max(0) as usize;
+                }
+                310..=319 if subclass == "AcDbEntity" => {
+                    append_hex_bytes(
+                        &mut common_graphics,
+                        &pair.value_string,
+                    );
+                }
                 90 => proxy_id = pair.as_i32().unwrap_or(498),
                 91 => class_id = pair.as_i32().unwrap_or(0),
                 95 => version = pair.as_i32().unwrap_or(0),
@@ -12093,9 +12101,12 @@ impl<'a> SectionReader<'a> {
                     });
                 }
                 94 => {}
-                100 => {}
                 _ => self.read_extended_common(&pair, &mut common)?,
             }
+        }
+        common_graphics.truncate(common_graphics_size);
+        if common_graphics_size != 0 || !common_graphics.is_empty() {
+            common.graphic_data = Some(common_graphics);
         }
         proxy_data.truncate(proxy_data_size);
         if dwg_version == 0 && maintenance_version == 0 {
@@ -12114,8 +12125,9 @@ impl<'a> SectionReader<'a> {
                 &payload,
             )
         {
-            common.graphic_data = (!proxy_data.is_empty())
-                .then_some(proxy_data);
+            if !proxy_data.is_empty() {
+                common.graphic_data = Some(proxy_data);
+            }
             return Ok(Some(ExtendedEntity {
                 common,
                 data: ExtendedEntityData::RegisteredClass(
@@ -14231,28 +14243,33 @@ impl<'a> SectionReader<'a> {
     /// used to leave the context empty: no leader lines, no text — invisible
     /// multileaders from DXF while the same drawing's DWG was fine).
     /// Code mapping mirrors `write_multileader` for round-trip fidelity.
-    fn read_multileader(
-        &mut self,
-        version: crate::types::DxfVersion,
-    ) -> Result<Option<MultiLeader>> {
+    fn read_multileader(&mut self) -> Result<Option<MultiLeader>> {
         use crate::entities::multileader as mlt;
         let mut ml = MultiLeader::new();
         let mut block_scale = PointReader::new();
-        let mut raw_dxf_codes = Vec::new();
+        let mut section = String::new();
+        let mut current_block_attribute: Option<mlt::BlockAttribute> = None;
+        let mut proxy_graphics_size = 0usize;
+        let mut proxy_graphics = Vec::new();
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 { self.reader.push_back(pair); break; }
-            raw_dxf_codes.push((pair.code, pair.value_string.clone()));
             match pair.code {
+                100 => section = pair.value_string.clone(),
                 8 => ml.common.layer = pair.value_string.clone(),
                 62 => { if let Some(v) = pair.as_i16() { ml.common.color = Color::from_index(v); } }
                 370 => { if let Some(v) = pair.as_i16() { ml.common.line_weight = LineWeight::from_value(v); } }
+                92 | 160 if section == "AcDbEntity" => {
+                    proxy_graphics_size =
+                        pair.as_int().unwrap_or(0).max(0) as usize;
+                }
+                310 if section == "AcDbEntity" => {
+                    append_hex_bytes(&mut proxy_graphics, &pair.value_string);
+                }
                 102 => {
                     let group = pair.value_string.trim().to_string();
                     if group.starts_with('{') {
                         while let Some(group_pair) = self.reader.read_pair()? {
-                            raw_dxf_codes
-                                .push((group_pair.code, group_pair.value_string.clone()));
                             if group_pair.code == 102 && group_pair.value_string.trim() == "}" {
                                 break;
                             }
@@ -14272,15 +14289,19 @@ impl<'a> SectionReader<'a> {
                         }
                     }
                 }
-                270 => {} // class version
+                270 => {
+                    if let Some(value) = pair.as_i16() {
+                        ml.dwg_version = value;
+                    }
+                }
                 300 if pair.value_string.starts_with("CONTEXT_DATA") => {
-                    self.read_mleader_context(&mut ml.context, &mut raw_dxf_codes)?;
+                    self.read_mleader_context(&mut ml.context)?;
                 }
                 340 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { ml.style_handle = Some(Handle::new(h)); } }
                 90 => {
                     if let Some(v) = pair.as_i32() {
                         ml.property_override_flags =
-                            mlt::MultiLeaderPropertyOverrideFlags::from_bits_truncate(v as u32);
+                            mlt::MultiLeaderPropertyOverrideFlags::from_bits_retain(v as u32);
                     }
                 }
                 170 => { if let Some(v) = pair.as_i16() { ml.path_type = mlt::MultiLeaderPathType::from(v); } }
@@ -14316,17 +14337,66 @@ impl<'a> SectionReader<'a> {
                 93 => { if let Some(v) = pair.as_i32() { ml.block_content_color = color_from_i32(v); } }
                 10 | 20 | 30 => { block_scale.add_coordinate(&pair); }
                 43 => { if let Some(v) = pair.as_double() { ml.block_rotation = v; } }
+                45 => { if let Some(v) = pair.as_double() { ml.scale_factor = v; } }
                 176 => { if let Some(v) = pair.as_i16() { ml.block_connection_type = mlt::BlockContentConnectionType::from(v); } }
                 293 => { if let Some(v) = pair.as_bool() { ml.enable_annotation_scale = v; } }
-                // Entity-level 271 is the text attachment DIRECTION
-                // (0=horizontal, 1=vertical), not text-align-in-place-edit.
+                94 => {
+                    if let Some(index) = pair.as_i32() {
+                        ml.arrowhead_overrides.push(mlt::MultiLeaderArrowheadOverride {
+                            index,
+                            is_default: index == 0,
+                            arrowhead_handle: None,
+                        });
+                    }
+                }
+                345 => {
+                    if let Ok(value) = u64::from_str_radix(pair.value_string.trim(), 16) {
+                        let entry = ml.arrowhead_overrides.last_mut();
+                        if let Some(entry) = entry {
+                            entry.arrowhead_handle = (value != 0).then(|| Handle::new(value));
+                        }
+                    }
+                }
+                330 if section == "AcDbMLeader" => {
+                    if let Some(attribute) = current_block_attribute.take() {
+                        ml.block_attributes.push(attribute);
+                    }
+                    let mut attribute = mlt::BlockAttribute::default();
+                    if let Ok(value) = u64::from_str_radix(pair.value_string.trim(), 16) {
+                        attribute.attribute_definition_handle =
+                            (value != 0).then(|| Handle::new(value));
+                    }
+                    current_block_attribute = Some(attribute);
+                }
+                177 if current_block_attribute.is_some() => {
+                    if let (Some(attribute), Some(value)) =
+                        (current_block_attribute.as_mut(), pair.as_i16())
+                    {
+                        attribute.index = value;
+                    }
+                }
+                44 if current_block_attribute.is_some() => {
+                    if let (Some(attribute), Some(value)) =
+                        (current_block_attribute.as_mut(), pair.as_double())
+                    {
+                        attribute.width = value;
+                    }
+                }
+                302 if current_block_attribute.is_some() => {
+                    if let Some(mut attribute) = current_block_attribute.take() {
+                        attribute.text = pair.value_string.clone();
+                        ml.block_attributes.push(attribute);
+                    }
+                }
+                294 => { if let Some(v) = pair.as_bool() { ml.text_direction_negative = v; } }
+                178 => { if let Some(v) = pair.as_i16() { ml.text_align_in_ipe = v; } }
+                179 => { if let Some(v) = pair.as_i16() { ml.text_attachment_point = mlt::TextAttachmentPointType::from(v); } }
                 271 => { if let Some(v) = pair.as_i16() { ml.text_attachment_direction = mlt::TextAttachmentDirectionType::from(v); } }
                 272 => { if let Some(v) = pair.as_i16() { ml.text_bottom_attachment = mlt::TextAttachmentType::from(v); } }
                 273 => { if let Some(v) = pair.as_i16() { ml.text_top_attachment = mlt::TextAttachmentType::from(v); } }
                 295 => { if let Some(v) = pair.as_bool() { ml.extend_leader_to_text = v; } }
                 // Lenient extras some exporters emit at entity level.
                 44 => { if let Some(v) = pair.as_double() { ml.text_height = v; } }
-                45 => { if let Some(v) = pair.as_double() { ml.scale_factor = v; } }
                 _ => { self.try_read_common_entity_code(&pair, &mut ml.common)?; }
             }
         }
@@ -14334,8 +14404,13 @@ impl<'a> SectionReader<'a> {
         if let Some(s) = block_scale.get_point() {
             ml.block_scale = s;
         }
-        ml.raw_dxf_codes = Some(raw_dxf_codes);
-        ml.raw_dxf_version = Some(version);
+        if let Some(attribute) = current_block_attribute {
+            ml.block_attributes.push(attribute);
+        }
+        if proxy_graphics_size != 0 || !proxy_graphics.is_empty() {
+            proxy_graphics.truncate(proxy_graphics_size);
+            ml.common.graphic_data = Some(proxy_graphics);
+        }
         Ok(Some(ml))
     }
 
@@ -14344,7 +14419,6 @@ impl<'a> SectionReader<'a> {
     fn read_mleader_context(
         &mut self,
         ctx: &mut crate::entities::multileader::MultiLeaderAnnotContext,
-        raw_dxf_codes: &mut Vec<(i32, String)>,
     ) -> Result<()> {
         use crate::entities::multileader as mlt;
         let mut content_base = PointReader::new();
@@ -14365,11 +14439,10 @@ impl<'a> SectionReader<'a> {
                 self.reader.push_back(pair);
                 break;
             }
-            raw_dxf_codes.push((pair.code, pair.value_string.clone()));
             match pair.code {
                 301 => break, // "}"
                 302 if pair.value_string.starts_with("LEADER") => {
-                    let root = self.read_mleader_leader_root(raw_dxf_codes)?;
+                    let root = self.read_mleader_leader_root()?;
                     ctx.leader_roots.push(root);
                 }
                 40 => { if let Some(v) = pair.as_double() { ctx.scale_factor = v; } }
@@ -14453,7 +14526,6 @@ impl<'a> SectionReader<'a> {
     /// nested `304 LEADER_LINE{ … }` lines.
     fn read_mleader_leader_root(
         &mut self,
-        raw_dxf_codes: &mut Vec<(i32, String)>,
     ) -> Result<crate::entities::multileader::LeaderRoot> {
         use crate::entities::multileader::{LeaderRoot, StartEndPointPair};
         let mut root = LeaderRoot::new(0);
@@ -14468,13 +14540,11 @@ impl<'a> SectionReader<'a> {
                 self.reader.push_back(pair);
                 break;
             }
-            raw_dxf_codes.push((pair.code, pair.value_string.clone()));
             match pair.code {
                 303 => break, // "}"
                 304 if pair.value_string.starts_with("LEADER_LINE") => {
                     let line = self.read_mleader_leader_line(
                         root.lines.len() as i32,
-                        raw_dxf_codes,
                     )?;
                     root.lines.push(line);
                 }
@@ -14484,7 +14554,17 @@ impl<'a> SectionReader<'a> {
                 11 | 21 | 31 => { direction.add_coordinate(&pair); }
                 90 => { if let Some(v) = pair.as_i32() { root.leader_index = v; } }
                 40 => { if let Some(v) = pair.as_double() { root.landing_distance = v; } }
-                12 | 22 | 32 => { break_start.add_coordinate(&pair); }
+                12 => {
+                    if let (Some(start), Some(end)) =
+                        (break_start.get_point(), break_end.get_point())
+                    {
+                        root.break_points.push(StartEndPointPair::new(start, end));
+                        break_start.reset();
+                        break_end.reset();
+                    }
+                    break_start.add_coordinate(&pair);
+                }
+                22 | 32 => { break_start.add_coordinate(&pair); }
                 13 | 23 | 33 => { break_end.add_coordinate(&pair); }
                 271 => {
                     if let Some(v) = pair.as_i16() {
@@ -14499,7 +14579,7 @@ impl<'a> SectionReader<'a> {
         if let Some(p) = connection.get_point() { root.connection_point = p; }
         if let Some(p) = direction.get_point() { root.direction = p; }
         if let (Some(s), Some(e)) = (break_start.get_point(), break_end.get_point()) {
-            root.break_points.push(StartEndPointPair { start_point: s, end_point: e });
+            root.break_points.push(StartEndPointPair::new(s, e));
         }
         Ok(root)
     }
@@ -14509,17 +14589,19 @@ impl<'a> SectionReader<'a> {
     fn read_mleader_leader_line(
         &mut self,
         index: i32,
-        raw_dxf_codes: &mut Vec<(i32, String)>,
     ) -> Result<crate::entities::multileader::LeaderLine> {
         use crate::entities::multileader as mlt;
         let mut line = mlt::LeaderLine::from_points(index, Vec::new());
+        let mut break_start = PointReader::new();
+        let mut break_end = PointReader::new();
+        let mut current_break_segment: Option<i32> = None;
+        let mut current_break_points = Vec::new();
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 {
                 self.reader.push_back(pair);
                 break;
             }
-            raw_dxf_codes.push((pair.code, pair.value_string.clone()));
             match pair.code {
                 305 => break, // "}"
                 10 => {
@@ -14537,6 +14619,39 @@ impl<'a> SectionReader<'a> {
                         p.z = v;
                     }
                 }
+                90 => {
+                    if let Some(value) = pair.as_i32() {
+                        if let (Some(start), Some(end)) =
+                            (break_start.get_point(), break_end.get_point())
+                        {
+                            current_break_points
+                                .push(mlt::StartEndPointPair::new(start, end));
+                        }
+                        break_start.reset();
+                        break_end.reset();
+                        if let Some(segment_index) = current_break_segment.take() {
+                            line.break_infos.push(mlt::LeaderLineBreakInfo {
+                                segment_index,
+                                break_points: std::mem::take(&mut current_break_points),
+                            });
+                        }
+                        current_break_segment = Some(value);
+                    }
+                }
+                11 => {
+                    current_break_segment.get_or_insert(0);
+                    if let (Some(start), Some(end)) =
+                        (break_start.get_point(), break_end.get_point())
+                    {
+                        current_break_points
+                            .push(mlt::StartEndPointPair::new(start, end));
+                        break_start.reset();
+                        break_end.reset();
+                    }
+                    break_start.add_coordinate(&pair);
+                }
+                21 | 31 => { break_start.add_coordinate(&pair); }
+                12 | 22 | 32 => { break_end.add_coordinate(&pair); }
                 91 => { if let Some(v) = pair.as_i32() { line.index = v; } }
                 170 => { if let Some(v) = pair.as_i16() { line.path_type = mlt::MultiLeaderPathType::from(v); } }
                 92 => { if let Some(v) = pair.as_i32() { line.line_color = color_from_i32(v); } }
@@ -14555,12 +14670,28 @@ impl<'a> SectionReader<'a> {
                 93 => {
                     if let Some(v) = pair.as_i32() {
                         line.override_flags =
-                            mlt::LeaderLinePropertyOverrideFlags::from_bits_truncate(v as u32);
+                            mlt::LeaderLinePropertyOverrideFlags::from_bits_retain(v as u32);
                     }
                 }
-                271 => { if let Some(v) = pair.as_i16() { line.break_info_count = v as i32; } }
                 _ => {}
             }
+        }
+        if let (Some(start), Some(end)) =
+            (break_start.get_point(), break_end.get_point())
+        {
+            current_break_points
+                .push(mlt::StartEndPointPair::new(start, end));
+        }
+        if let Some(segment_index) = current_break_segment {
+            line.break_infos.push(mlt::LeaderLineBreakInfo {
+                segment_index,
+                break_points: current_break_points,
+            });
+        }
+        line.break_info_count = line.break_infos.len() as i32;
+        if let Some(info) = line.break_infos.first() {
+            line.segment_index = info.segment_index;
+            line.break_points = info.break_points.clone();
         }
         Ok(line)
     }
@@ -14930,13 +15061,27 @@ impl<'a> SectionReader<'a> {
         let mut web_rotation = PointReader::new();
         let mut photo = LightPhotometricData::default();
         let mut in_photometric = false;
+        let mut subclass = String::new();
+        let mut proxy_graphics_size = 0usize;
+        let mut proxy_graphics = Vec::new();
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 {
                 self.reader.push_back(pair);
                 break;
             }
+            if pair.code == 100 {
+                subclass = pair.value_string.clone();
+                continue;
+            }
             match pair.code {
+                92 | 160 if subclass == "AcDbEntity" => {
+                    proxy_graphics_size =
+                        pair.as_int().unwrap_or(0).max(0) as usize;
+                }
+                310 if subclass == "AcDbEntity" => {
+                    append_hex_bytes(&mut proxy_graphics, &pair.value_string);
+                }
                 1 if !in_photometric => light.name = pair.value_string.clone(),
                 90 if !in_photometric => {
                     light.class_version = pair.as_i32().unwrap_or(light.class_version)
@@ -15074,6 +15219,10 @@ impl<'a> SectionReader<'a> {
                 web_rotation.get_point().unwrap_or(Vector3::new(1.0, 1.0, 1.0));
             light.photometric_data = Some(photo);
         }
+        if proxy_graphics_size != 0 || !proxy_graphics.is_empty() {
+            proxy_graphics.truncate(proxy_graphics_size);
+            light.common.graphic_data = Some(proxy_graphics);
+        }
         Ok(Some(light))
     }
 
@@ -15103,6 +15252,8 @@ impl<'a> SectionReader<'a> {
         let mut sweep_entity_bits = 0usize;
         let mut path_entity_type = 0i32;
         let mut path_entity_bits = 0usize;
+        let mut proxy_graphics_size = 0usize;
+        let mut proxy_graphics = Vec::new();
         let swept_has_class_version =
             crate::io::dwg::DwgVersion::from_dxf_version(dxf_version)
                 .map(|version| version.r2007_plus())
@@ -15115,6 +15266,27 @@ impl<'a> SectionReader<'a> {
             }
             if pair.code == 100 {
                 subclass = pair.value_string.clone();
+                continue;
+            }
+            if subclass == "AcDbEntity" {
+                match pair.code {
+                    92 | 160 => {
+                        proxy_graphics_size =
+                            pair.as_int().unwrap_or(0).max(0) as usize;
+                    }
+                    310 => {
+                        append_hex_bytes(
+                            &mut proxy_graphics,
+                            &pair.value_string,
+                        );
+                    }
+                    _ => {
+                        self.try_read_common_entity_code(
+                            &pair,
+                            &mut surface.common,
+                        )?;
+                    }
+                }
                 continue;
             }
             if subclass == "AcDbModelerGeometry" {
@@ -15511,21 +15683,25 @@ impl<'a> SectionReader<'a> {
             }
             _ => {}
         }
+        if proxy_graphics_size != 0 || !proxy_graphics.is_empty() {
+            proxy_graphics.truncate(proxy_graphics_size);
+            surface.common.graphic_data = Some(proxy_graphics);
+        }
         Ok(Some(surface))
     }
 
     /// Read a TABLE entity (basic properties)
-    fn read_table_entity(
-        &mut self,
-        version: crate::types::DxfVersion,
-    ) -> Result<Option<crate::entities::Table>> {
+    fn read_table_entity(&mut self) -> Result<Option<crate::entities::Table>> {
         use crate::entities::table::{
-            CellContent, CellType, CellValueType, TableCell, TableCellContentType,
-            TableColumn, TableRow, ValueUnitType,
+            CellContent, CellStateFlags, CellType, CellValueType,
+            LegacyBorderOverrides, LegacyTableStyleOverride, TableAttribute,
+            TableCell, TableCellContentType, TableColumn, TableRow,
+            ValueUnitType,
         };
 
         let mut insertion_point = PointReader::new();
         let mut horizontal = PointReader::new();
+        let mut normal = PointReader::new();
         let mut table = crate::entities::Table::new(Vector3::zero(), 0, 0);
         table.rows.clear();
         table.columns.clear();
@@ -15533,18 +15709,17 @@ impl<'a> SectionReader<'a> {
         let mut row_heights: Vec<f64> = Vec::new();
         let mut col_widths: Vec<f64> = Vec::new();
         let mut cells: Vec<TableCell> = Vec::new();
+        let mut nrows: usize = 0;
         let mut ncols: usize = 0;
         let mut cur: Option<TableCell> = None;
-        let mut raw_dxf_codes = Vec::new();
+        let mut section = String::new();
+        let mut pending_attribute_index: Option<usize> = None;
+        let mut proxy_graphics_size = 0usize;
+        let mut proxy_graphics = Vec::new();
         // True while inside a cell's CELL_VALUE block (301 … 304), so per-cell
         // codes that collide with table-level ones (92, 90) are routed to the
         // cell value rather than the table header.
         let mut in_value = false;
-        // The compact writer emits the optional cell style after all contents.
-        // Several of its group codes overlap content/value codes, so keep that
-        // tail distinct instead of creating a phantom content entry.
-        let mut in_cell_style = false;
-
         // Ensure the current cell has at least one content to receive a value.
         fn ensure_content(cell: &mut TableCell) {
             if cell.contents.is_empty() {
@@ -15557,19 +15732,12 @@ impl<'a> SectionReader<'a> {
                 self.reader.push_back(pair);
                 break;
             }
-            raw_dxf_codes.push((pair.code, pair.value_string.clone()));
             match pair.code {
+                100 => section = pair.value_string.clone(),
                 8 => table.common.layer = pair.value_string.clone(),
                 62 if cur.is_none() => {
                     if let Some(v) = pair.as_i16() {
                         table.common.color = Color::from_index(v);
-                    }
-                }
-                62 => {
-                    if let (Some(c), Some(v)) = (cur.as_mut(), pair.as_i16()) {
-                        let style = c.style.get_or_insert_with(crate::entities::CellStyle::new);
-                        style.content_color = Color::from_index(v);
-                        in_cell_style = true;
                     }
                 }
                 370 if cur.is_none() => {
@@ -15577,12 +15745,17 @@ impl<'a> SectionReader<'a> {
                         table.common.line_weight = LineWeight::from_value(v);
                     }
                 }
+                92 | 160 if section == "AcDbEntity" => {
+                    proxy_graphics_size =
+                        pair.as_int().unwrap_or(0).max(0) as usize;
+                }
+                310 if section == "AcDbEntity" => {
+                    append_hex_bytes(&mut proxy_graphics, &pair.value_string);
+                }
                 102 if cur.is_none() => {
                     let group = pair.value_string.trim().to_string();
                     if group.starts_with('{') {
                         while let Some(group_pair) = self.reader.read_pair()? {
-                            raw_dxf_codes
-                                .push((group_pair.code, group_pair.value_string.clone()));
                             if group_pair.code == 102 && group_pair.value_string.trim() == "}" {
                                 break;
                             }
@@ -15602,15 +15775,64 @@ impl<'a> SectionReader<'a> {
                         }
                     }
                 }
-                // Block record handle: acadrust writes it under 2, AutoCAD under 343.
-                2 | 343 => {
+                2 if cur.is_none() => {
+                    table.block_name = pair.value_string.clone();
+                }
+                343 if cur.is_none() => {
                     if let Ok(h) = u64::from_str_radix(pair.value_string.trim(), 16) {
                         table.block_record_handle = Some(Handle::new(h));
+                    }
+                }
+                2 => {
+                    if let Some(c) = cur.as_mut() {
+                        ensure_content(c);
+                        let content = c.contents.last_mut().unwrap();
+                        content.content_type = TableCellContentType::Value;
+                        content.value.text.push_str(&pair.value_string);
+                        if content.value.value_type == CellValueType::Unknown {
+                            content.value.value_type = CellValueType::String;
+                            content.value.raw_type_code = CellValueType::String as i32;
+                        }
                     }
                 }
                 342 => {
                     if let Ok(h) = u64::from_str_radix(pair.value_string.trim(), 16) {
                         table.table_style_handle = Some(Handle::new(h));
+                    }
+                }
+                280 if cur.is_none() && table.legacy_style_override.is_some() => {
+                    if let (Some(style), Some(value)) =
+                        (table.legacy_style_override.as_mut(), pair.as_bool())
+                    {
+                        style.title_suppressed = Some(value);
+                    }
+                }
+                281 if cur.is_none() => {
+                    if let (Some(style), Some(value)) =
+                        (table.legacy_style_override.as_mut(), pair.as_bool())
+                    {
+                        style.header_suppressed = Some(value);
+                    }
+                }
+                70 if cur.is_none() => {
+                    if let (Some(style), Some(value)) =
+                        (table.legacy_style_override.as_mut(), pair.as_i16())
+                    {
+                        style.flow_direction = Some(value);
+                    }
+                }
+                40 if cur.is_none() => {
+                    if let (Some(style), Some(value)) =
+                        (table.legacy_style_override.as_mut(), pair.as_double())
+                    {
+                        style.horizontal_cell_margin = Some(value);
+                    }
+                }
+                41 if cur.is_none() => {
+                    if let (Some(style), Some(value)) =
+                        (table.legacy_style_override.as_mut(), pair.as_double())
+                    {
+                        style.vertical_cell_margin = Some(value);
                     }
                 }
                 280 if cur.is_none() => {
@@ -15620,6 +15842,9 @@ impl<'a> SectionReader<'a> {
                 }
                 10 | 20 | 30 => {
                     insertion_point.add_coordinate(&pair);
+                }
+                210 | 220 | 230 => {
+                    normal.add_coordinate(&pair);
                 }
                 11 | 21 | 31 if in_value => {
                     if let (Some(c), Some(v)) = (cur.as_mut(), pair.as_double()) {
@@ -15652,6 +15877,63 @@ impl<'a> SectionReader<'a> {
                         ncols = v.max(0) as usize;
                     }
                 }
+                92 => {
+                    if let (Some(c), Some(value)) = (cur.as_mut(), pair.as_i32()) {
+                        c.state = CellStateFlags::from_bits_retain(value as u32);
+                    }
+                }
+                90 if cur.is_none() => {
+                    if let Some(value) = pair.as_i32() {
+                        table.value_flags = value;
+                    }
+                }
+                91 if cur.is_none() => {
+                    if let Some(value) = pair.as_i32() {
+                        nrows = value.max(0) as usize;
+                    }
+                }
+                93 if cur.is_none() => {
+                    if let Some(value) = pair.as_i32() {
+                        table.override_flag = value != 0;
+                        table.legacy_style_override = (value != 0).then(|| {
+                            LegacyTableStyleOverride {
+                                flags: value,
+                                ..LegacyTableStyleOverride::default()
+                            }
+                        });
+                    }
+                }
+                94 if cur.is_none() => {
+                    if let Some(value) = pair.as_i32() {
+                        table.override_border_color = value != 0;
+                        table.legacy_border_colors = (value != 0).then(|| {
+                            LegacyBorderOverrides {
+                                flags: value,
+                                values: Vec::new(),
+                            }
+                        });
+                    }
+                }
+                95 if cur.is_none() => {
+                    if let Some(value) = pair.as_i32() {
+                        table.override_border_line_weight = value != 0;
+                        table.legacy_border_line_weights =
+                            (value != 0).then(|| LegacyBorderOverrides {
+                                flags: value,
+                                values: Vec::new(),
+                            });
+                    }
+                }
+                96 if cur.is_none() => {
+                    if let Some(value) = pair.as_i32() {
+                        table.override_border_visibility = value != 0;
+                        table.legacy_border_visibility =
+                            (value != 0).then(|| LegacyBorderOverrides {
+                                flags: value,
+                                values: Vec::new(),
+                            });
+                    }
+                }
                 141 => {
                     if let Some(v) = pair.as_double() {
                         row_heights.push(v);
@@ -15668,16 +15950,26 @@ impl<'a> SectionReader<'a> {
                         cells.push(c);
                     }
                     in_value = false;
-                    in_cell_style = false;
+                    pending_attribute_index = None;
                     let mut c = TableCell::new();
                     if let Some(v) = pair.as_i16() {
                         c.cell_type = if v == 2 { CellType::Block } else { CellType::Text };
                     }
                     cur = Some(c);
                 }
+                172 => {
+                    if let (Some(c), Some(value)) = (cur.as_mut(), pair.as_i16()) {
+                        c.edge_flags = value as u8;
+                    }
+                }
+                173 => {
+                    if let (Some(c), Some(value)) = (cur.as_mut(), pair.as_i16()) {
+                        c.merged = value as i32;
+                    }
+                }
                 174 => {
                     if let (Some(c), Some(v)) = (cur.as_mut(), pair.as_i16()) {
-                        c.merged = v as i32;
+                        c.auto_fit = v != 0;
                     }
                 }
                 175 => {
@@ -15692,53 +15984,58 @@ impl<'a> SectionReader<'a> {
                 }
                 177 => {
                     if let (Some(c), Some(v)) = (cur.as_mut(), pair.as_i16()) {
-                        c.virtual_edge = v;
+                        c.flag = v as i32;
                     }
                 }
-                144 if in_cell_style => {
-                    if let (Some(c), Some(v)) = (cur.as_mut(), pair.as_double()) {
-                        if let Some(style) = c.style.as_mut() {
-                            style.rotation = v;
-                        }
+                178 => {
+                    if let (Some(c), Some(value)) = (cur.as_mut(), pair.as_i16()) {
+                        c.virtual_edge = value;
+                    }
+                }
+                145 => {
+                    if let (Some(c), Some(value)) = (cur.as_mut(), pair.as_double()) {
+                        c.rotation = value;
                     }
                 }
                 144 => {
                     if let (Some(c), Some(v)) = (cur.as_mut(), pair.as_double()) {
-                        c.rotation = v;
+                        c.block_scale = v;
                     }
                 }
-                170 if in_cell_style => {
-                    if let (Some(c), Some(v)) = (cur.as_mut(), pair.as_i16()) {
-                        if let Some(style) = c.style.as_mut() {
-                            style.alignment = v as i32;
-                        }
+                170 if cur.is_none() => {
+                    if let (Some(style), Some(value)) =
+                        (table.legacy_style_override.as_mut(), pair.as_i16())
+                    {
+                        style.row_alignments.push(value);
                     }
                 }
                 170 => {
-                    if let Some(c) = cur.as_mut() {
-                        let mut content = CellContent::new();
-                        if let Some(v) = pair.as_i16() {
-                            content.content_type = match v {
-                                1 => TableCellContentType::Value,
-                                2 => TableCellContentType::Field,
-                                4 => TableCellContentType::Block,
-                                _ => TableCellContentType::Unknown,
-                            };
-                        }
-                        c.contents.push(content);
+                    if let (Some(c), Some(v)) = (cur.as_mut(), pair.as_i16()) {
+                        c.style
+                            .get_or_insert_with(crate::entities::CellStyle::new)
+                            .alignment = v as i32;
                     }
                 }
                 1 => {
                     if let Some(c) = cur.as_mut() {
                         ensure_content(c);
-                        let value = &mut c.contents.last_mut().unwrap().value;
+                        let content = c.contents.last_mut().unwrap();
+                        content.content_type = TableCellContentType::Value;
+                        let value = &mut content.value;
                         if !in_value || (value.flags & 3) == 0 {
-                            value.text = pair.value_string.clone();
+                            value.text.push_str(&pair.value_string);
                             if value.value_type == CellValueType::Unknown {
                                 value.value_type = CellValueType::String;
                                 value.raw_type_code = CellValueType::String as i32;
                             }
                         }
+                    }
+                }
+                140 if cur.is_none() => {
+                    if let (Some(style), Some(value)) =
+                        (table.legacy_style_override.as_mut(), pair.as_double())
+                    {
+                        style.row_heights.push(value);
                     }
                 }
                 140 if in_value => {
@@ -15750,34 +16047,20 @@ impl<'a> SectionReader<'a> {
                         }
                     }
                 }
-                140 if in_cell_style => {
-                    if let (Some(c), Some(v)) = (cur.as_mut(), pair.as_double()) {
-                        if let Some(style) = c.style.as_mut() {
-                            style.text_height = v;
-                        }
-                    }
-                }
                 140 => {
                     if let (Some(c), Some(v)) = (cur.as_mut(), pair.as_double()) {
-                        ensure_content(c);
-                        let cv = &mut c.contents.last_mut().unwrap().value;
-                        cv.numeric_value = v;
-                        cv.value_type = CellValueType::Double;
-                        cv.raw_type_code = CellValueType::Double as i32;
+                        c.style
+                            .get_or_insert_with(crate::entities::CellStyle::new)
+                            .text_height = v;
                     }
                 }
-                90 => {
-                    if in_value {
-                        // Inside CELL_VALUE: 90 is the ACValue data type
-                        // (1=Long, 2=Double, 4=String…), not a numeric value.
-                        if let (Some(c), Some(v)) = (cur.as_mut(), pair.as_i32()) {
-                            ensure_content(c);
-                            let value = &mut c.contents.last_mut().unwrap().value;
-                            value.raw_type_code = v;
-                            value.value_type = CellValueType::from(v as u32);
-                        }
+                90 if in_value => {
+                    if let (Some(c), Some(v)) = (cur.as_mut(), pair.as_i32()) {
+                        ensure_content(c);
+                        let value = &mut c.contents.last_mut().unwrap().value;
+                        value.raw_type_code = v;
+                        value.value_type = CellValueType::from(v as u32);
                     }
-                    // A table-level 90 (data flags) is intentionally ignored.
                 }
                 91 if in_value => {
                     if let (Some(c), Some(v)) = (cur.as_mut(), pair.as_i32()) {
@@ -15786,6 +16069,11 @@ impl<'a> SectionReader<'a> {
                         if (value.flags & 3) == 0 {
                             value.numeric_value = v as f64;
                         }
+                    }
+                }
+                91 => {
+                    if let (Some(c), Some(value)) = (cur.as_mut(), pair.as_i32()) {
+                        c.flag = value;
                     }
                 }
                 93 if in_value => {
@@ -15802,13 +16090,17 @@ impl<'a> SectionReader<'a> {
                         value.unit_type = ValueUnitType::from(v as u32);
                     }
                 }
+                179 => {
+                    pending_attribute_index = None;
+                }
                 // CELL_VALUE block start: the cell has an actual value → mark
                 // its content as Value.
                 301 => {
                     if let Some(c) = cur.as_mut() {
                         ensure_content(c);
-                        c.contents.last_mut().unwrap().content_type =
-                            TableCellContentType::Value;
+                        let content = c.contents.last_mut().unwrap();
+                        content.content_type = TableCellContentType::Value;
+                        content.value = crate::entities::table::CellValue::new();
                         in_value = true;
                     }
                 }
@@ -15830,7 +16122,13 @@ impl<'a> SectionReader<'a> {
                 300 => {
                     if let Some(c) = cur.as_mut() {
                         if let Some(content) = c.contents.last_mut() {
-                            content.value.format = pair.value_string.clone();
+                            if let Some(index) = pending_attribute_index.take() {
+                                if let Some(attribute) = content.attributes.get_mut(index) {
+                                    attribute.value = pair.value_string.clone();
+                                }
+                            } else {
+                                content.value.format = pair.value_string.clone();
+                            }
                         }
                     }
                 }
@@ -15859,13 +16157,169 @@ impl<'a> SectionReader<'a> {
                 }
                 340 => {
                     if let Some(c) = cur.as_mut() {
+                        ensure_content(c);
                         if let (Some(content), Ok(h)) = (
                             c.contents.last_mut(),
                             u64::from_str_radix(pair.value_string.trim(), 16),
                         ) {
                             content.block_handle = Some(Handle::new(h));
+                            content.content_type = TableCellContentType::Block;
                         }
                     }
+                }
+                344 => {
+                    if let Some(c) = cur.as_mut() {
+                        ensure_content(c);
+                        if let Ok(value) =
+                            u64::from_str_radix(pair.value_string.trim(), 16)
+                        {
+                            let content = c.contents.last_mut().unwrap();
+                            content.field_handle =
+                                (value != 0).then(|| Handle::new(value));
+                            content.content_type = TableCellContentType::Field;
+                        }
+                    }
+                }
+                7 if cur.is_none() => {
+                    if let Some(style) = table.legacy_style_override.as_mut() {
+                        style.text_style_names.push(pair.value_string.clone());
+                    }
+                }
+                7 => {
+                    if let Some(c) = cur.as_mut() {
+                        c.style
+                            .get_or_insert_with(crate::entities::CellStyle::new)
+                            .text_style_name = pair.value_string.clone();
+                    }
+                }
+                63 | 64 | 65 | 66 | 68 | 69 if cur.is_none() => {
+                    if let Some(value) = pair.as_i16() {
+                        let color = Color::from_index(value);
+                        let mut consumed = false;
+                        if let Some(style) = table.legacy_style_override.as_mut() {
+                            if pair.code == 64 {
+                                let expected = [0x0020, 0x0040, 0x0080]
+                                    .iter()
+                                    .filter(|bit| style.flags & **bit != 0)
+                                    .count();
+                                if style.row_colors.len() < expected {
+                                    style.row_colors.push(color);
+                                    consumed = true;
+                                }
+                            } else if pair.code == 63 {
+                                let expected = [0x0800, 0x1000, 0x2000]
+                                    .iter()
+                                    .filter(|bit| style.flags & **bit != 0)
+                                    .count();
+                                if style.row_fill_colors.len() < expected {
+                                    style.row_fill_colors.push(color);
+                                    consumed = true;
+                                }
+                            }
+                        }
+                        if !consumed {
+                            if let Some(overrides) =
+                                table.legacy_border_colors.as_mut()
+                            {
+                                overrides.values.push(color);
+                            }
+                        }
+                    }
+                }
+                63 | 64 | 65 | 66 | 68 | 69 => {
+                    if let (Some(c), Some(value)) = (cur.as_mut(), pair.as_i16()) {
+                        let style = c
+                            .style
+                            .get_or_insert_with(crate::entities::CellStyle::new);
+                        let color = Color::from_index(value);
+                        match pair.code {
+                            63 => style.background_color = color,
+                            64 => style.content_color = color,
+                            65 => style.right_border.color = color,
+                            66 => style.bottom_border.color = color,
+                            68 => style.left_border.color = color,
+                            69 => style.top_border.color = color,
+                            _ => {}
+                        }
+                    }
+                }
+                274..=279 if cur.is_none() => {
+                    if let (Some(overrides), Some(value)) = (
+                        table.legacy_border_line_weights.as_mut(),
+                        pair.as_i16(),
+                    ) {
+                        overrides.values.push(LineWeight::from_value(value));
+                    }
+                }
+                275 | 276 | 278 | 279 => {
+                    if let (Some(c), Some(value)) = (cur.as_mut(), pair.as_i16()) {
+                        let style = c
+                            .style
+                            .get_or_insert_with(crate::entities::CellStyle::new);
+                        let border = match pair.code {
+                            275 => &mut style.right_border,
+                            276 => &mut style.bottom_border,
+                            278 => &mut style.left_border,
+                            _ => &mut style.top_border,
+                        };
+                        border.line_weight = LineWeight::from_value(value);
+                    }
+                }
+                283 if cur.is_none() => {
+                    if let (Some(style), Some(value)) =
+                        (table.legacy_style_override.as_mut(), pair.as_bool())
+                    {
+                        style.row_fill_none.push(value);
+                    }
+                }
+                283 => {
+                    if let (Some(c), Some(value)) = (cur.as_mut(), pair.as_bool()) {
+                        c.style
+                            .get_or_insert_with(crate::entities::CellStyle::new)
+                            .fill_enabled = value;
+                    }
+                }
+                284..=289 if cur.is_none() => {
+                    if let (Some(overrides), Some(value)) = (
+                        table.legacy_border_visibility.as_mut(),
+                        pair.as_bool(),
+                    ) {
+                        overrides.values.push(value);
+                    }
+                }
+                285 | 286 | 288 | 289 => {
+                    if let (Some(c), Some(value)) = (cur.as_mut(), pair.as_bool()) {
+                        let style = c
+                            .style
+                            .get_or_insert_with(crate::entities::CellStyle::new);
+                        let border = match pair.code {
+                            285 => &mut style.right_border,
+                            286 => &mut style.bottom_border,
+                            288 => &mut style.left_border,
+                            _ => &mut style.top_border,
+                        };
+                        border.invisible = !value;
+                    }
+                }
+                331 => {
+                    if let Some(c) = cur.as_mut() {
+                        ensure_content(c);
+                        if let (Some(content), Ok(value)) = (
+                            c.contents.last_mut(),
+                            u64::from_str_radix(pair.value_string.trim(), 16),
+                        ) {
+                            let index = content.attributes.len();
+                            content.attributes.push(TableAttribute {
+                                definition_handle: Handle::new(value),
+                                value: String::new(),
+                                index: index as i32,
+                            });
+                            pending_attribute_index = Some(index);
+                        }
+                    }
+                }
+                1001 => {
+                    self.try_read_common_entity_code(&pair, &mut table.common)?;
                 }
                 _ => {
                     if cur.is_none() {
@@ -15892,6 +16346,9 @@ impl<'a> SectionReader<'a> {
         if ncols == 0 {
             ncols = table.columns.len();
         }
+        while row_heights.len() < nrows {
+            row_heights.push(0.0);
+        }
         for h in row_heights {
             table.rows.push(TableRow {
                 height: h,
@@ -15917,8 +16374,13 @@ impl<'a> SectionReader<'a> {
         if let Some(h) = horizontal.get_point() {
             table.horizontal_direction = h;
         }
-        table.raw_dxf_codes = Some(raw_dxf_codes);
-        table.raw_dxf_version = Some(version);
+        if let Some(value) = normal.get_point() {
+            table.normal = value;
+        }
+        if proxy_graphics_size != 0 || !proxy_graphics.is_empty() {
+            proxy_graphics.truncate(proxy_graphics_size);
+            table.common.graphic_data = Some(proxy_graphics);
+        }
         Ok(Some(table))
     }
 
@@ -16668,9 +17130,7 @@ impl<'a> SectionReader<'a> {
     }
 }
 
-/// Decode a colour stored as a raw i32 (MULTILEADER's 90/91/92/93 codes) —
-/// the inverse of the writer's `write_color_i32`: 0 = ByBlock, 256 = ByLayer,
-/// 1–255 = ACI index, anything else = packed 24-bit RGB.
+/// Decode a colour stored as a raw CMC i32 (MULTILEADER 90/91/92/93 codes).
 fn color_from_i32(v: i32) -> Color {
     // AutoCAD-produced DXF encodes a color in the high "method" byte:
     //   0xC0 ByLayer, 0xC1 ByBlock, 0xC2 true-color RGB, 0xC3 ACI index.
@@ -16688,6 +17148,7 @@ fn color_from_i32(v: i32) -> Color {
             }
         }
         0xC3 => return Color::from_index((u & 0xFF) as i16),
+        0xC8 => return Color::None,
         _ => {}
     }
     match v {

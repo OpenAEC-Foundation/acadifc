@@ -290,6 +290,9 @@ pub struct EntityCommon {
     pub linetype_scale: f64,
     /// Transparency
     pub transparency: Transparency,
+    /// DXF named/color-book color name (group code 430).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub color_name: Option<String>,
     /// Visibility flag
     pub invisible: bool,
     /// Extended data (XDATA)
@@ -355,6 +358,7 @@ impl EntityCommon {
             linetype_handle: None,
             linetype_scale: 1.0,
             transparency: Transparency::OPAQUE,
+            color_name: None,
             invisible: false,
             extended_data: crate::xdata::ExtendedData::new(),
             graphic_data: None,

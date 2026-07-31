@@ -409,6 +409,16 @@ impl Default for StartEndPointPair {
     }
 }
 
+/// Break data attached to one leader-line segment.
+#[derive(Debug, Clone, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct LeaderLineBreakInfo {
+    /// Segment index this break data belongs to.
+    pub segment_index: i32,
+    /// Start/end pairs cut out of the segment.
+    pub break_points: Vec<StartEndPointPair>,
+}
+
 /// A single leader line with vertices.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -423,6 +433,10 @@ pub struct LeaderLine {
     pub break_points: Vec<StartEndPointPair>,
     /// Number of break info entries.
     pub break_info_count: i32,
+    /// Complete per-segment break data. The legacy `segment_index` and
+    /// `break_points` fields mirror the first entry for source compatibility.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub break_infos: Vec<LeaderLineBreakInfo>,
     /// Path type (straight, spline, invisible).
     pub path_type: MultiLeaderPathType,
     /// Line color override.
@@ -448,6 +462,7 @@ impl LeaderLine {
             points: Vec::new(),
             break_points: Vec::new(),
             break_info_count: 0,
+            break_infos: Vec::new(),
             path_type: MultiLeaderPathType::StraightLineSegments,
             line_color: Color::ByBlock,
             line_type_handle: None,
@@ -604,6 +619,8 @@ impl Default for BlockAttribute {
 #[derive(Debug, Clone, PartialEq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MultiLeaderArrowheadOverride {
+    /// Leader index this override applies to.
+    pub index: i32,
     pub is_default: bool,
     pub arrowhead_handle: Option<Handle>,
 }
@@ -967,21 +984,6 @@ pub struct MultiLeader {
     pub enable_annotation_scale: bool,
     /// Extend leader to text.
     pub extend_leader_to_text: bool,
-    /// Raw DXF group codes, preserved verbatim for exact-version round-trips.
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub raw_dxf_codes: Option<Vec<(i32, String)>>,
-    /// DXF version that produced `raw_dxf_codes`.
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub raw_dxf_version: Option<crate::types::DxfVersion>,
-    /// Original DWG record retained for diagnostics; native writer does not
-    /// depend on raw passthrough.
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub raw_dwg_data: Option<Vec<u8>>,
-    /// Handle-stream bit count captured alongside `raw_dwg_data`.
-    pub dwg_handle_bits: i64,
-    /// DWG version `raw_dwg_data` was read from (drop on incompatible save).
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub dwg_source_version: Option<crate::types::DxfVersion>,
 }
 
 impl MultiLeader {
@@ -1031,11 +1033,6 @@ impl MultiLeader {
             // or a reader that missed the flag would over-scale every instance.
             enable_annotation_scale: false,
             extend_leader_to_text: false,
-            raw_dxf_codes: None,
-            raw_dxf_version: None,
-            raw_dwg_data: None,
-            dwg_handle_bits: 0,
-            dwg_source_version: None,
         }
     }
 

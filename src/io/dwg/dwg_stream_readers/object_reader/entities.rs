@@ -3515,7 +3515,7 @@ fn read_table_cell_content(reader: &mut DwgMergedReader, version: DwgVersion) ->
 
 fn read_table_cell(reader: &mut DwgMergedReader, version: DwgVersion) -> TableCell {
     let mut cell = TableCell::new();
-    cell.state = CellStateFlags::from_bits_truncate(reader.read_bit_long() as u32);
+    cell.state = CellStateFlags::from_bits_retain(reader.read_bit_long() as u32);
     cell.tooltip = reader.read_variable_text();
     cell.custom_data = reader.read_bit_long();
     let ndata = safe_count(reader.read_bit_long());
@@ -4491,10 +4491,11 @@ pub fn read_multileader(
     if !version.r2007_plus() {
         let ah_count = safe_count(reader.read_bit_long());
         arrowhead_overrides.reserve(ah_count as usize);
-        for _ in 0..ah_count {
+        for index in 0..ah_count {
             let is_default = reader.read_bit();
             let handle = reader.read_handle();
             arrowhead_overrides.push(MultiLeaderArrowheadOverride {
+                index: index as i32,
                 is_default,
                 arrowhead_handle: (handle != 0).then(|| Handle::from(handle)),
             });
@@ -4861,13 +4862,12 @@ fn read_leader_line(reader: &mut DwgMergedReader, version: DwgVersion) -> Leader
         points.push(reader.read_3bit_double());
     }
 
-    let break_info_count = reader.read_bit_long();
-    let mut segment_index = 0;
-    let mut break_points = Vec::new();
-    if break_info_count > 0 {
-        segment_index = reader.read_bit_long();
+    let break_info_count = safe_count(reader.read_bit_long());
+    let mut break_infos = Vec::with_capacity(break_info_count as usize);
+    for _ in 0..break_info_count {
+        let segment_index = reader.read_bit_long();
         let sep_count = safe_count(reader.read_bit_long());
-        break_points = Vec::with_capacity(sep_count as usize);
+        let mut break_points = Vec::with_capacity(sep_count as usize);
         for _ in 0..sep_count {
             let start_point = reader.read_3bit_double();
             let end_point = reader.read_3bit_double();
@@ -4876,7 +4876,15 @@ fn read_leader_line(reader: &mut DwgMergedReader, version: DwgVersion) -> Leader
                 end_point,
             });
         }
+        break_infos.push(LeaderLineBreakInfo {
+            segment_index,
+            break_points,
+        });
     }
+    let (segment_index, break_points) = break_infos.first().map_or_else(
+        || (0, Vec::new()),
+        |info| (info.segment_index, info.break_points.clone()),
+    );
 
     let index = reader.read_bit_long();
 
@@ -4913,7 +4921,7 @@ fn read_leader_line(reader: &mut DwgMergedReader, version: DwgVersion) -> Leader
             None
         };
         override_flags =
-            LeaderLinePropertyOverrideFlags::from_bits_truncate(reader.read_bit_long() as u32);
+            LeaderLinePropertyOverrideFlags::from_bits_retain(reader.read_bit_long() as u32);
     }
 
     LeaderLine {
@@ -4921,6 +4929,7 @@ fn read_leader_line(reader: &mut DwgMergedReader, version: DwgVersion) -> Leader
         break_info_count,
         segment_index,
         break_points,
+        break_infos,
         index,
         path_type,
         line_color,

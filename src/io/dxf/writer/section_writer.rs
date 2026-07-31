@@ -21,10 +21,10 @@ use crate::objects::{
     DynamicBlockData, DynamicBlockObject,
 };
 use crate::tables::*;
-use crate::types::{Color, DxfVersion, Handle, Vector3};
+use crate::types::{Color, DxfVersion, Handle, LineWeight, Vector3};
 use crate::xdata::{ExtendedData, XDataValue};
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use super::stream_writer::{DxfStreamWriter, DxfStreamWriterExt};
 
 /// Sanitize a symbol table record name: strip control characters and
@@ -60,6 +60,11 @@ pub struct SectionWriter<'a, W: DxfStreamWriter> {
     /// Handle of the root named-objects dictionary — owner fallback for
     /// dictionaries whose owner was dropped.
     root_dict_handle: Handle,
+    /// Text-style names needed by legacy TABLE records, which store names
+    /// while the DWG model stores handles.
+    text_style_names: HashMap<Handle, String>,
+    /// Block-record names needed by legacy TABLE INSERT data.
+    block_record_names: HashMap<Handle, String>,
 }
 
 impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
@@ -77,6 +82,8 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             byblock_linetype_handle: Handle::NULL,
             model_space_handle: Handle::NULL,
             root_dict_handle: Handle::NULL,
+            text_style_names: HashMap::new(),
+            block_record_names: HashMap::new(),
         }
     }
 
@@ -98,8 +105,10 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             set.insert(*h);
         }
         // Entity handles (from all block records); capture *Model_Space.
+        self.block_record_names.clear();
         for br in document.block_records.iter() {
             set.insert(br.handle());
+            self.block_record_names.insert(br.handle(), br.name.clone());
             if br.name.eq_ignore_ascii_case("*Model_Space") {
                 self.model_space_handle = br.handle();
             }
@@ -123,7 +132,11 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // Table record handles
         for r in document.layers.iter() { set.insert(r.handle()); }
         for r in document.line_types.iter() { set.insert(r.handle()); }
-        for r in document.text_styles.iter() { set.insert(r.handle()); }
+        self.text_style_names.clear();
+        for r in document.text_styles.iter() {
+            set.insert(r.handle());
+            self.text_style_names.insert(r.handle(), r.name.clone());
+        }
         for r in document.dim_styles.iter() { set.insert(r.handle()); }
         for r in document.app_ids.iter() { set.insert(r.handle()); }
         for r in document.views.iter() { set.insert(r.handle()); }
@@ -1345,19 +1358,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     /// captured bytes verbatim, so they are skipped.
     fn write_entity_with_owner(&mut self, entity: &EntityType, owner: Handle) -> Result<()> {
         self.write_entity_body(entity, owner)?;
-        let raw_table = matches!(
-            entity,
-            EntityType::Table(table)
-                if table.raw_dxf_codes.is_some()
-                    && table.raw_dxf_version == Some(self.dxf_version)
-        );
-        let raw_multileader = matches!(
-            entity,
-            EntityType::MultiLeader(multileader)
-                if multileader.raw_dxf_codes.is_some()
-                    && multileader.raw_dxf_version == Some(self.dxf_version)
-        );
-        if !raw_table && !raw_multileader && !matches!(
+        if !matches!(
             entity,
             EntityType::Polyline(_)
                 | EntityType::Polyline2D(_)
@@ -1445,7 +1446,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         if let ExtendedEntityData::RegisteredClass(data) = &e.data {
             if data.payload.bit_count != 0 {
                 self.writer.write_entity_type("ACAD_PROXY_ENTITY")?;
-                self.write_common_entity_data(&e.common, owner)?;
+                let mut common = e.common.clone();
+                common.graphic_data.get_or_insert_with(Vec::new);
+                self.write_common_entity_data(&common, owner)?;
                 self.writer.write_subclass("AcDbProxyEntity")?;
                 self.writer.write_i32(90, 499)?;
                 if self.dxf_version < DxfVersion::AC1032 {
@@ -1453,15 +1456,6 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 }
                 self.writer.write_i32(95, 0)?;
                 self.writer.write_bool(70, false)?;
-                let graphics = e
-                    .common
-                    .graphic_data
-                    .as_deref()
-                    .unwrap_or_default();
-                self.writer.write_i32(92, graphics.len() as i32)?;
-                for chunk in graphics.chunks(127) {
-                    self.writer.write_binary(310, chunk)?;
-                }
                 let payload =
                     crate::objects::semantic_property::encode_registered_class_envelope(
                         &data.dxf_name,
@@ -2939,6 +2933,17 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
         self.writer.write_string(8, &common.layer)?;
 
+        if let Some(graphics) = common.graphic_data.as_deref() {
+            if self.dxf_version >= DxfVersion::AC1024 {
+                self.writer.write_i64(160, graphics.len() as i64)?;
+            } else {
+                self.writer.write_i32(92, graphics.len() as i32)?;
+            }
+            for chunk in graphics.chunks(127) {
+                self.writer.write_binary(310, chunk)?;
+            }
+        }
+
         // Write linetype if not default (ByLayer)
         if common.has_linetype() {
             self.writer.write_string(6, &common.linetype)?;
@@ -2953,6 +2958,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         if self.dxf_version >= DxfVersion::AC1018 {
             if let Some(tc) = common.color.to_true_color_value() {
                 self.writer.write_i32(420, tc)?;
+            }
+            if let Some(name) = &common.color_name {
+                self.writer.write_string(430, name)?;
             }
         }
 
@@ -3530,6 +3538,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         if self.dxf_version >= DxfVersion::AC1018 {
             if let Some(tc) = base.common.color.to_true_color_value() {
                 self.writer.write_i32(420, tc)?;
+            }
+            if let Some(name) = &base.common.color_name {
+                self.writer.write_string(430, name)?;
             }
         }
         // Transparency (code 440) — only for AC1018+ and non-opaque
@@ -8236,18 +8247,18 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         Ok(())
     }
 
-    /// Helper to write color as i32 (true color format)
+    /// Write the CMC long used by MULTILEADER and MULTILEADERSTYLE.
     fn write_color_i32(&mut self, code: i32, color: Color) -> Result<()> {
-        match color {
-            Color::ByLayer => self.writer.write_i32(code, 256)?,
-            Color::None => self.writer.write_i32(code, 257)?,
-            Color::ByBlock => self.writer.write_i32(code, 0)?,
-            Color::Index(i) => self.writer.write_i32(code, i as i32)?,
+        let value = match color {
+            Color::ByLayer => 0xC000_0000_u32,
+            Color::ByBlock => 0xC100_0000_u32,
             Color::Rgb { r, g, b } => {
-                let rgb = ((r as i32) << 16) | ((g as i32) << 8) | (b as i32);
-                self.writer.write_i32(code, rgb)?;
+                0xC200_0000_u32 | ((r as u32) << 16) | ((g as u32) << 8) | b as u32
             }
-        }
+            Color::Index(index) => 0xC300_0000_u32 | index as u32,
+            Color::None => 0xC800_0000_u32,
+        };
+        self.writer.write_i32(code, value as i32)?;
         Ok(())
     }
 
@@ -8332,6 +8343,30 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         Ok(())
     }
 
+    fn write_mleader_line_breaks(
+        &mut self,
+        line: &crate::entities::multileader::LeaderLine,
+    ) -> Result<()> {
+        if line.break_infos.is_empty() {
+            if !line.break_points.is_empty() {
+                self.writer.write_i32(90, line.segment_index)?;
+                for points in &line.break_points {
+                    self.writer.write_point3d(11, points.start_point)?;
+                    self.writer.write_point3d(12, points.end_point)?;
+                }
+            }
+        } else {
+            for info in &line.break_infos {
+                self.writer.write_i32(90, info.segment_index)?;
+                for points in &info.break_points {
+                    self.writer.write_point3d(11, points.start_point)?;
+                    self.writer.write_point3d(12, points.end_point)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn write_mleader_context_data(
         &mut self,
         ctx: &crate::entities::multileader::MultiLeaderAnnotContext,
@@ -8384,7 +8419,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             for size in &ctx.column_sizes {
                 self.writer.write_double(144, *size)?;
             }
-            self.writer.write_bool(295, ctx.word_break)?;
+            if self.dxf_version >= DxfVersion::AC1027 {
+                self.writer.write_bool(295, ctx.word_break)?;
+            }
         }
 
         self.writer.write_bool(296, ctx.has_block_contents)?;
@@ -8427,6 +8464,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 for point in &line.points {
                     self.writer.write_point3d(10, *point)?;
                 }
+                self.write_mleader_line_breaks(line)?;
                 self.writer.write_i32(91, line.index)?;
                 self.writer.write_i16(170, line.path_type as i16)?;
                 self.write_color_i32(92, line.line_color)?;
@@ -8440,21 +8478,23 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 }
                 self.writer
                     .write_i32(93, line.override_flags.bits() as i32)?;
-                self.writer
-                    .write_i32(271, line.break_info_count)?;
                 self.writer.write_string(305, "}")?;
             }
-            self.writer.write_i16(
-                271,
-                root.text_attachment_direction as i16,
-            )?;
+            if self.dxf_version >= DxfVersion::AC1024 {
+                self.writer.write_i16(
+                    271,
+                    root.text_attachment_direction as i16,
+                )?;
+            }
             self.writer.write_string(303, "}")?;
         }
 
-        self.writer
-            .write_i16(272, ctx.text_bottom_attachment as i16)?;
-        self.writer
-            .write_i16(273, ctx.text_top_attachment as i16)?;
+        if self.dxf_version >= DxfVersion::AC1024 {
+            self.writer
+                .write_i16(272, ctx.text_bottom_attachment as i16)?;
+            self.writer
+                .write_i16(273, ctx.text_top_attachment as i16)?;
+        }
         self.writer.write_string(301, "}")?;
         Ok(())
     }
@@ -8462,19 +8502,10 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     /// Write MULTILEADER entity
     fn write_multileader(&mut self, mleader: &crate::entities::MultiLeader, owner: Handle) -> Result<()> {
         self.writer.write_entity_type("MULTILEADER")?;
-        if mleader.raw_dxf_version == Some(self.dxf_version) {
-            if let Some(raw_dxf_codes) = &mleader.raw_dxf_codes {
-                for (code, value) in raw_dxf_codes {
-                    self.writer.write_string(*code, value)?;
-                }
-                return Ok(());
-            }
-        }
         self.write_common_entity_data(&mleader.common, owner)?;
         self.writer.write_subclass("AcDbMLeader")?;
 
-        // Class version (hardcoded to 2 for R2010+)
-        self.writer.write_i16(270, 2)?;
+        self.writer.write_i16(270, mleader.dwg_version)?;
 
         // Context data - write the annotation context
         let ctx = &mleader.context;
@@ -8532,7 +8563,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             for size in &ctx.column_sizes {
                 self.writer.write_double(144, *size)?;
             }
-            self.writer.write_bool(295, ctx.word_break)?;
+            if self.dxf_version >= DxfVersion::AC1027 {
+                self.writer.write_bool(295, ctx.word_break)?;
+            }
         }
 
         // Has block contents
@@ -8581,6 +8614,8 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                     self.writer.write_point3d(10, *pt)?;
                 }
 
+                self.write_mleader_line_breaks(line)?;
+
                 // Per-line properties
                 self.writer.write_i32(91, line.index)?;
                 self.writer.write_i16(170, line.path_type as i16)?;
@@ -8590,21 +8625,23 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 self.writer.write_double(40, line.arrowhead_size)?;
                 self.writer.write_handle(341, line.arrowhead_handle.unwrap_or(Handle::NULL))?;
                 self.writer.write_i32(93, line.override_flags.bits() as i32)?;
-                self.writer.write_i16(271, line.break_info_count as i16)?;
-
                 self.writer.write_string(305, "}")?;
             }
 
-            self.writer.write_i16(
-                271,
-                root.text_attachment_direction as i16,
-            )?;
+            if self.dxf_version >= DxfVersion::AC1024 {
+                self.writer.write_i16(
+                    271,
+                    root.text_attachment_direction as i16,
+                )?;
+            }
             self.writer.write_string(303, "}")?;
         }
 
         // Post-leader attachments
-        self.writer.write_i16(272, ctx.text_bottom_attachment as i16)?;
-        self.writer.write_i16(273, ctx.text_top_attachment as i16)?;
+        if self.dxf_version >= DxfVersion::AC1024 {
+            self.writer.write_i16(272, ctx.text_bottom_attachment as i16)?;
+            self.writer.write_i16(273, ctx.text_top_attachment as i16)?;
+        }
 
         self.writer.write_string(301, "}")?; // End CONTEXT_DATA
 
@@ -8698,21 +8735,54 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // Block content rotation
         self.writer.write_double(43, mleader.block_rotation)?;
 
+        // Overall scale
+        self.writer.write_double(45, mleader.scale_factor)?;
+
         // Block content connection type
         self.writer.write_i16(176, mleader.block_connection_type as i16)?;
 
         // Enable annotation scale
         self.writer.write_bool(293, mleader.enable_annotation_scale)?;
 
-        // Text align in IPE
-        self.writer.write_i16(271, mleader.text_align_in_ipe)?;
+        for override_value in &mleader.arrowhead_overrides {
+            self.writer.write_i32(94, override_value.index)?;
+            self.writer.write_handle(
+                345,
+                override_value.arrowhead_handle.unwrap_or(Handle::NULL),
+            )?;
+        }
 
-        // Text bottom / top attachment types
-        self.writer.write_i16(272, mleader.text_bottom_attachment as i16)?;
-        self.writer.write_i16(273, mleader.text_top_attachment as i16)?;
+        for attribute in &mleader.block_attributes {
+            self.writer.write_handle(
+                330,
+                attribute
+                    .attribute_definition_handle
+                    .unwrap_or(Handle::NULL),
+            )?;
+            self.writer.write_i16(177, attribute.index)?;
+            self.writer.write_double(44, attribute.width)?;
+            self.writer.write_string(302, &attribute.text)?;
+        }
+
+        self.writer.write_bool(294, mleader.text_direction_negative)?;
+        self.writer.write_i16(178, mleader.text_align_in_ipe)?;
+        self.writer
+            .write_i16(179, mleader.text_attachment_point as i16)?;
+        if self.dxf_version >= DxfVersion::AC1024 {
+            self.writer.write_i16(
+                271,
+                mleader.text_attachment_direction as i16,
+            )?;
+
+            // Text bottom / top attachment types
+            self.writer.write_i16(272, mleader.text_bottom_attachment as i16)?;
+            self.writer.write_i16(273, mleader.text_top_attachment as i16)?;
+        }
 
         // Extend leader to text
-        self.writer.write_bool(295, mleader.extend_leader_to_text)?;
+        if self.dxf_version >= DxfVersion::AC1027 {
+            self.writer.write_bool(295, mleader.extend_leader_to_text)?;
+        }
 
         Ok(())
     }
@@ -9450,19 +9520,318 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         Ok(())
     }
 
+    fn write_table_custom_data_dxf(
+        &mut self,
+        values: &[table::TableCustomData],
+    ) -> Result<()> {
+        self.writer.write_string(301, "CUSTOMDATA")?;
+        self.writer.write_string(1, "DATAMAP_BEGIN")?;
+        self.writer.write_i32(90, values.len() as i32)?;
+        for value in values {
+            self.writer.write_string(300, &value.name)?;
+            self.writer.write_string(301, "DATAMAP_VALUE")?;
+            self.write_field_cell_value_dxf(&value.value)?;
+            self.writer.write_string(304, "ACVALUE_END")?;
+        }
+        self.writer.write_string(309, "DATAMAP_END")?;
+        Ok(())
+    }
+
+    fn write_table_content_format_dxf(
+        &mut self,
+        content: &table::CellContent,
+    ) -> Result<()> {
+        self.writer.write_string(300, "CONTENTFORMAT")?;
+        self.writer.write_string(1, "CONTENTFORMAT_BEGIN")?;
+        self.writer.write_i32(90, content.format_override_flags)?;
+        self.writer.write_i32(91, content.format_property_flags)?;
+        self.writer.write_i32(92, content.format_value_data_type)?;
+        self.writer.write_i32(93, content.format_value_unit_type)?;
+        self.writer.write_string(300, &content.value_format)?;
+        self.writer.write_double(40, content.rotation)?;
+        self.writer.write_double(140, content.scale)?;
+        self.writer.write_i32(94, content.alignment)?;
+        self.writer.write_color(62, content.color)?;
+        if let Some(handle) = content.text_style_handle {
+            self.writer.write_handle(340, handle)?;
+        } else if !content.text_style_name.is_empty() {
+            self.writer.write_string(7, &content.text_style_name)?;
+        } else {
+            self.writer.write_handle(340, Handle::NULL)?;
+        }
+        self.writer.write_double(144, content.text_height)?;
+        self.writer.write_string(309, "CONTENTFORMAT_END")?;
+        Ok(())
+    }
+
+    fn write_table_style_content_format_dxf(
+        &mut self,
+        style: &table::CellStyle,
+    ) -> Result<()> {
+        self.writer.write_string(300, "CONTENTFORMAT")?;
+        self.writer.write_string(1, "CONTENTFORMAT_BEGIN")?;
+        self.writer
+            .write_i32(90, style.content_format_override_flags)?;
+        self.writer.write_i32(91, style.content_property_flags)?;
+        self.writer.write_i32(92, style.value_data_type)?;
+        self.writer.write_i32(93, style.value_unit_type)?;
+        self.writer.write_string(300, &style.value_format)?;
+        self.writer.write_double(40, style.rotation)?;
+        self.writer.write_double(140, style.scale)?;
+        self.writer.write_i32(94, style.alignment)?;
+        self.writer.write_color(62, style.content_color)?;
+        if let Some(handle) = style.text_style_handle {
+            self.writer.write_handle(340, handle)?;
+        } else if !style.text_style_name.is_empty() {
+            self.writer.write_string(7, &style.text_style_name)?;
+        } else {
+            self.writer.write_handle(340, Handle::NULL)?;
+        }
+        self.writer.write_double(144, style.text_height)?;
+        self.writer.write_string(309, "CONTENTFORMAT_END")?;
+        Ok(())
+    }
+
+    fn write_table_grid_format_dxf(
+        &mut self,
+        edge: u32,
+        border: &table::CellBorder,
+    ) -> Result<()> {
+        self.writer.write_i32(95, edge as i32)?;
+        self.writer.write_string(302, "GRIDFORMAT")?;
+        self.writer.write_string(1, "GRIDFORMAT_BEGIN")?;
+        self.writer
+            .write_i32(90, border.override_flags.bits() as i32)?;
+        self.writer.write_i32(91, border.border_type as i32)?;
+        self.writer.write_color(62, border.color)?;
+        self.writer
+            .write_i32(92, border.line_weight.value() as i32)?;
+        self.writer.write_handle(
+            340,
+            border.line_type_handle.unwrap_or(Handle::NULL),
+        )?;
+        self.writer.write_bool(93, border.invisible)?;
+        self.writer.write_double(40, border.double_spacing)?;
+        self.writer.write_string(309, "GRIDFORMAT_END")?;
+        Ok(())
+    }
+
+    fn write_table_cell_style_override_dxf(
+        &mut self,
+        style: Option<&table::CellStyle>,
+        fallback_type: table::CellStyleType,
+    ) -> Result<()> {
+        self.writer.write_string(1, "TABLEFORMAT_BEGIN")?;
+        let Some(style) = style else {
+            self.writer.write_i32(90, fallback_type as i32)?;
+            self.writer.write_i16(170, 0)?;
+            self.writer.write_string(309, "TABLEFORMAT_END")?;
+            return Ok(());
+        };
+
+        self.writer.write_i32(90, style.style_type as i32)?;
+        self.writer.write_i16(170, 1)?;
+        self.writer.write_i32(91, style.override_flags)?;
+        self.writer
+            .write_i32(92, style.property_flags.bits() as i32)?;
+        self.writer.write_color(62, style.background_color)?;
+        self.writer
+            .write_i32(93, style.layout_flags.bits() as i32)?;
+        self.write_table_style_content_format_dxf(style)?;
+        self.writer
+            .write_i16(171, style.margin_override_flags)?;
+        if style.margin_override_flags != 0 {
+            self.writer.write_string(301, "MARGIN")?;
+            self.writer.write_string(1, "CELLMARGIN_BEGIN")?;
+            for value in [
+                style.margin_top,
+                style.margin_left,
+                style.margin_bottom,
+                style.margin_right,
+                style.horizontal_spacing,
+                style.vertical_spacing,
+            ] {
+                self.writer.write_double(40, value)?;
+            }
+            self.writer.write_string(309, "CELLMARGIN_END")?;
+        }
+
+        let mut borders: Vec<(u32, &table::CellBorder)> = Vec::new();
+        for (edge, border) in [
+            (table::CellEdgeFlags::TOP, &style.top_border),
+            (table::CellEdgeFlags::RIGHT, &style.right_border),
+            (table::CellEdgeFlags::BOTTOM, &style.bottom_border),
+            (table::CellEdgeFlags::LEFT, &style.left_border),
+        ] {
+            if style.applied_border_edges.contains(edge) {
+                borders.push((edge.bits(), border));
+            }
+        }
+        borders.extend(
+            style
+                .additional_borders
+                .iter()
+                .map(|(edge, border)| (*edge, border)),
+        );
+        self.writer.write_i32(94, borders.len() as i32)?;
+        for (edge, border) in borders {
+            self.write_table_grid_format_dxf(edge, border)?;
+        }
+        self.writer.write_string(309, "TABLEFORMAT_END")?;
+        Ok(())
+    }
+
+    fn table_content_has_format(content: &table::CellContent) -> bool {
+        content.format_override_flags != 0
+            || content.format_property_flags != 0
+            || content.format_value_data_type != 0
+            || content.format_value_unit_type != 0
+            || !content.value_format.is_empty()
+            || content.rotation != 0.0
+            || content.scale != 1.0
+            || content.alignment != 0
+            || content.color != Color::ByBlock
+            || content.text_style_handle.is_some()
+            || !content.text_style_name.is_empty()
+            || content.text_height != 0.18
+    }
+
+    fn write_table_modern_content_dxf(
+        &mut self,
+        content: &table::CellContent,
+    ) -> Result<()> {
+        self.writer.write_string(302, "CONTENT")?;
+        self.writer.write_string(1, "CELLCONTENT_BEGIN")?;
+        self.writer.write_i32(90, content.content_type as i32)?;
+        match content.content_type {
+            TableCellContentType::Value => {
+                self.writer.write_string(300, "VALUE")?;
+                self.write_field_cell_value_dxf(&content.value)?;
+                self.writer.write_string(304, "ACVALUE_END")?;
+            }
+            TableCellContentType::Field => {
+                self.writer.write_handle(
+                    340,
+                    content.field_handle.unwrap_or(Handle::NULL),
+                )?;
+            }
+            TableCellContentType::Block => {
+                self.writer.write_handle(
+                    340,
+                    content.block_handle.unwrap_or(Handle::NULL),
+                )?;
+            }
+            TableCellContentType::Unknown => {}
+        }
+        self.writer
+            .write_i32(91, content.attributes.len() as i32)?;
+        for attribute in &content.attributes {
+            self.writer
+                .write_handle(330, attribute.definition_handle)?;
+            self.writer.write_string(301, &attribute.value)?;
+            self.writer.write_i32(92, attribute.index)?;
+        }
+        self.writer.write_string(309, "CELLCONTENT_END")?;
+        self.writer
+            .write_string(1, "FORMATTEDCELLCONTENT_BEGIN")?;
+        let has_format = Self::table_content_has_format(content);
+        self.writer.write_i16(170, has_format as i16)?;
+        if has_format {
+            self.write_table_content_format_dxf(content)?;
+        }
+        self.writer
+            .write_string(309, "FORMATTEDCELLCONTENT_END")?;
+        Ok(())
+    }
+
+    fn write_table_modern_cell_dxf(
+        &mut self,
+        cell: &table::TableCell,
+    ) -> Result<()> {
+        self.writer.write_string(300, "CELL")?;
+        self.writer
+            .write_string(1, "LINKEDTABLEDATACELL_BEGIN")?;
+        self.writer.write_i32(90, cell.state.bits() as i32)?;
+        self.writer.write_string(300, &cell.tooltip)?;
+        self.writer.write_i32(91, cell.custom_data)?;
+        self.write_table_custom_data_dxf(&cell.custom_data_items)?;
+        self.writer.write_i32(92, cell.has_linked_data as i32)?;
+        if cell.has_linked_data {
+            self.writer.write_handle(
+                340,
+                cell.data_link_handle.unwrap_or(Handle::NULL),
+            )?;
+            self.writer.write_i32(93, cell.data_link_rows)?;
+            self.writer.write_i32(94, cell.data_link_columns)?;
+            self.writer.write_i32(96, cell.data_link_unknown)?;
+        }
+        self.writer.write_i32(95, cell.contents.len() as i32)?;
+        for content in &cell.contents {
+            self.write_table_modern_content_dxf(content)?;
+        }
+        self.writer
+            .write_string(309, "LINKEDTABLEDATACELL_END")?;
+
+        self.writer
+            .write_string(1, "FORMATTEDTABLEDATACELL_BEGIN")?;
+        self.writer.write_string(300, "CELLTABLEFORMAT")?;
+        self.write_table_cell_style_override_dxf(
+            cell.style.as_ref(),
+            table::CellStyleType::Cell,
+        )?;
+        self.writer
+            .write_string(309, "FORMATTEDTABLEDATACELL_END")?;
+
+        self.writer.write_string(1, "TABLECELL_BEGIN")?;
+        self.writer.write_i32(90, cell.style_id)?;
+        let geometries: Vec<_> = if !cell.geometries.is_empty() {
+            cell.geometries.iter().collect()
+        } else if let Some(geometry) = cell.geometry.as_ref() {
+            vec![geometry]
+        } else {
+            cell.contents
+                .iter()
+                .filter_map(|content| content.geometry.as_ref())
+                .collect()
+        };
+        let has_geometry = !geometries.is_empty()
+            || cell.geometry_handle.is_some()
+            || cell.geometry_data_flag != 0
+            || cell.geometry_width_with_gap != 0.0
+            || cell.geometry_height_with_gap != 0.0;
+        self.writer.write_i32(91, has_geometry as i32)?;
+        if has_geometry {
+            self.writer.write_i32(91, cell.geometry_data_flag)?;
+            self.writer
+                .write_double(40, cell.geometry_width_with_gap)?;
+            self.writer
+                .write_double(41, cell.geometry_height_with_gap)?;
+            self.writer.write_handle(
+                330,
+                cell.geometry_handle.unwrap_or(Handle::NULL),
+            )?;
+            self.writer.write_i32(92, geometries.len() as i32)?;
+            for geometry in geometries {
+                self.writer
+                    .write_point3d(10, geometry.distance_to_top_left)?;
+                self.writer
+                    .write_point3d(11, geometry.distance_to_center)?;
+                self.writer.write_double(43, geometry.width)?;
+                self.writer.write_double(44, geometry.height)?;
+                self.writer.write_double(45, geometry.outer_width)?;
+                self.writer.write_double(46, geometry.outer_height)?;
+                self.writer.write_i32(95, geometry.flags)?;
+            }
+        }
+        self.writer.write_string(309, "TABLECELL_END")?;
+        Ok(())
+    }
+
     fn write_table_content_object_dxf(
         &mut self,
         table: &table::Table,
     ) -> Result<()> {
         self.writer.write_string(0, "TABLECONTENT")?;
-        if table.raw_dxf_version == Some(self.dxf_version) {
-            if let Some(raw_dxf_codes) = &table.raw_dxf_codes {
-                for (code, value) in raw_dxf_codes {
-                    self.writer.write_string(*code, value)?;
-                }
-                return Ok(());
-            }
-        }
         self.writer.write_handle(5, table.common.handle)?;
         if !table.common.reactors.is_empty() {
             self.writer.write_string(102, "{ACAD_REACTORS")?;
@@ -9489,7 +9858,17 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 .write_string(1, "LINKEDTABLEDATACOLUMN_BEGIN")?;
             self.writer.write_string(300, &column.name)?;
             self.writer.write_i32(91, column.custom_data)?;
+            self.write_table_custom_data_dxf(&column.custom_data_items)?;
             self.writer.write_string(309, "LINKEDTABLEDATACOLUMN_END")?;
+            self.writer
+                .write_string(1, "FORMATTEDTABLEDATACOLUMN_BEGIN")?;
+            self.writer.write_string(300, "COLUMNTABLEFORMAT")?;
+            self.write_table_cell_style_override_dxf(
+                column.style.as_ref(),
+                table::CellStyleType::Column,
+            )?;
+            self.writer
+                .write_string(309, "FORMATTEDTABLEDATACOLUMN_END")?;
             self.writer.write_string(1, "TABLECOLUMN_BEGIN")?;
             self.writer.write_i32(90, column.style_id)?;
             self.writer.write_double(40, column.width)?;
@@ -9501,19 +9880,36 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             self.writer.write_string(1, "LINKEDTABLEDATAROW_BEGIN")?;
             self.writer.write_i32(90, row.cells.len() as i32)?;
             for cell in &row.cells {
-                self.write_table_cell(cell)?;
+                self.write_table_modern_cell_dxf(cell)?;
             }
+            self.writer.write_i32(91, row.custom_data)?;
+            self.write_table_custom_data_dxf(&row.custom_data_items)?;
             self.writer.write_string(309, "LINKEDTABLEDATAROW_END")?;
+            self.writer
+                .write_string(1, "FORMATTEDTABLEDATAROW_BEGIN")?;
+            self.writer.write_string(300, "ROWTABLEFORMAT")?;
+            self.write_table_cell_style_override_dxf(
+                row.style.as_ref(),
+                table::CellStyleType::Row,
+            )?;
+            self.writer
+                .write_string(309, "FORMATTEDTABLEDATAROW_END")?;
             self.writer.write_string(1, "TABLEROW_BEGIN")?;
             self.writer.write_i32(90, row.style_id)?;
             self.writer.write_double(40, row.height)?;
             self.writer.write_string(309, "TABLEROW_END")?;
         }
         self.writer
-            .write_i32(90, table.field_handles.len() as i32)?;
+            .write_i32(92, table.field_handles.len() as i32)?;
         for field in &table.field_handles {
-            self.writer.write_handle(330, *field)?;
+            self.writer.write_handle(340, *field)?;
         }
+        self.writer.write_subclass("AcDbFormattedTableData")?;
+        self.writer.write_string(300, "TABLEFORMAT")?;
+        self.write_table_cell_style_override_dxf(
+            table.base_style.as_ref(),
+            table::CellStyleType::FormattedTableData,
+        )?;
         self.writer.write_i32(90, table.merged_ranges.len() as i32)?;
         for range in &table.merged_ranges {
             self.writer.write_i32(91, range.top_row as i32)?;
@@ -9521,8 +9917,209 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             self.writer.write_i32(93, range.bottom_row as i32)?;
             self.writer.write_i32(94, range.right_col as i32)?;
         }
-        if let Some(style) = table.table_style_handle {
-            self.writer.write_handle(340, style)?;
+        self.writer.write_subclass("AcDbTableContent")?;
+        self.writer.write_handle(
+            340,
+            table.table_style_handle.unwrap_or(Handle::NULL),
+        )?;
+        Ok(())
+    }
+
+    fn legacy_table_override_flags(table: &table::Table) -> (i32, i32, i32, i32) {
+        (
+            table
+                .legacy_style_override
+                .as_ref()
+                .map(|value| value.flags)
+                .unwrap_or(table.override_flag as i32),
+            table
+                .legacy_border_colors
+                .as_ref()
+                .map(|value| value.flags)
+                .unwrap_or(table.override_border_color as i32),
+            table
+                .legacy_border_line_weights
+                .as_ref()
+                .map(|value| value.flags)
+                .unwrap_or(table.override_border_line_weight as i32),
+            table
+                .legacy_border_visibility
+                .as_ref()
+                .map(|value| value.flags)
+                .unwrap_or(table.override_border_visibility as i32),
+        )
+    }
+
+    fn write_legacy_table_override_values_dxf(
+        &mut self,
+        table: &table::Table,
+        flags: (i32, i32, i32, i32),
+    ) -> Result<()> {
+        let default_style = table::LegacyTableStyleOverride::default();
+        let style = table
+            .legacy_style_override
+            .as_ref()
+            .unwrap_or(&default_style);
+        let style_flags = flags.0;
+        if style_flags & 0x0001 != 0 {
+            self.writer
+                .write_bool(280, style.title_suppressed.unwrap_or(false))?;
+        }
+        if style_flags & 0x0002 != 0 {
+            self.writer
+                .write_bool(281, style.header_suppressed.unwrap_or(false))?;
+        }
+        if style_flags & 0x0004 != 0 {
+            self.writer
+                .write_i16(70, style.flow_direction.unwrap_or(0))?;
+        }
+        if style_flags & 0x0008 != 0 {
+            self.writer.write_double(
+                40,
+                style.horizontal_cell_margin.unwrap_or(0.0),
+            )?;
+        }
+        if style_flags & 0x0010 != 0 {
+            self.writer.write_double(
+                41,
+                style.vertical_cell_margin.unwrap_or(0.0),
+            )?;
+        }
+
+        let mut index = 0usize;
+        for bit in [0x0020, 0x0040, 0x0080] {
+            if style_flags & bit != 0 {
+                self.writer.write_color(
+                    64,
+                    style
+                        .row_colors
+                        .get(index)
+                        .cloned()
+                        .unwrap_or(Color::ByBlock),
+                )?;
+                index += 1;
+            }
+        }
+        index = 0;
+        for bit in [0x0100, 0x0200, 0x0400] {
+            if style_flags & bit != 0 {
+                self.writer.write_bool(
+                    283,
+                    style.row_fill_none.get(index).copied().unwrap_or(false),
+                )?;
+                index += 1;
+            }
+        }
+        index = 0;
+        for bit in [0x0800, 0x1000, 0x2000] {
+            if style_flags & bit != 0 {
+                self.writer.write_color(
+                    63,
+                    style
+                        .row_fill_colors
+                        .get(index)
+                        .cloned()
+                        .unwrap_or(Color::ByBlock),
+                )?;
+                index += 1;
+            }
+        }
+        index = 0;
+        for bit in [0x4000, 0x8000, 0x10000] {
+            if style_flags & bit != 0 {
+                self.writer.write_i16(
+                    170,
+                    style.row_alignments.get(index).copied().unwrap_or(0),
+                )?;
+                index += 1;
+            }
+        }
+        index = 0;
+        for bit in [0x20000, 0x40000, 0x80000] {
+            if style_flags & bit != 0 {
+                let name = style
+                    .text_style_names
+                    .get(index)
+                    .cloned()
+                    .or_else(|| {
+                        style.text_style_handles.get(index).and_then(|handle| {
+                            self.text_style_names.get(handle).cloned()
+                        })
+                    })
+                    .unwrap_or_else(|| "Standard".to_string());
+                self.writer.write_string(7, &name)?;
+                index += 1;
+            }
+        }
+        index = 0;
+        for bit in [0x100000, 0x200000, 0x400000] {
+            if style_flags & bit != 0 {
+                self.writer.write_double(
+                    140,
+                    style.row_heights.get(index).copied().unwrap_or(0.0),
+                )?;
+                index += 1;
+            }
+        }
+
+        let color_codes = [64, 65, 66, 63, 68, 69];
+        let default_colors = table::LegacyBorderOverrides::<Color>::default();
+        let colors = table
+            .legacy_border_colors
+            .as_ref()
+            .unwrap_or(&default_colors);
+        index = 0;
+        for bit in 0..18 {
+            if flags.1 & (1 << bit) != 0 {
+                self.writer.write_color(
+                    color_codes[bit % 6],
+                    colors
+                        .values
+                        .get(index)
+                        .cloned()
+                        .unwrap_or(Color::ByBlock),
+                )?;
+                index += 1;
+            }
+        }
+
+        let default_weights =
+            table::LegacyBorderOverrides::<LineWeight>::default();
+        let weights = table
+            .legacy_border_line_weights
+            .as_ref()
+            .unwrap_or(&default_weights);
+        index = 0;
+        for bit in 0..18 {
+            if flags.2 & (1 << bit) != 0 {
+                self.writer.write_i16(
+                    274 + (bit % 6) as i32,
+                    weights
+                        .values
+                        .get(index)
+                        .copied()
+                        .unwrap_or(LineWeight::ByLayer)
+                        .value(),
+                )?;
+                index += 1;
+            }
+        }
+
+        let default_visibility =
+            table::LegacyBorderOverrides::<bool>::default();
+        let visibility = table
+            .legacy_border_visibility
+            .as_ref()
+            .unwrap_or(&default_visibility);
+        index = 0;
+        for bit in 0..18 {
+            if flags.3 & (1 << bit) != 0 {
+                self.writer.write_bool(
+                    284 + (bit % 6) as i32,
+                    visibility.values.get(index).copied().unwrap_or(true),
+                )?;
+                index += 1;
+            }
         }
         Ok(())
     }
@@ -9530,30 +10127,32 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     /// Write ACAD_TABLE entity
     fn write_acad_table(&mut self, table: &table::Table, owner: Handle) -> Result<()> {
         self.writer.write_entity_type("ACAD_TABLE")?;
-        if table.raw_dxf_version == Some(self.dxf_version) {
-            if let Some(raw_dxf_codes) = &table.raw_dxf_codes {
-                for (code, value) in raw_dxf_codes {
-                    self.writer.write_string(*code, value)?;
-                }
-                return Ok(());
-            }
-        }
         self.write_common_entity_data(&table.common, owner)?;
         self.writer.write_subclass("AcDbBlockReference")?;
 
-        // Block record handle
-        if let Some(h) = table.block_record_handle {
-            self.writer.write_handle(2, h)?;
+        let block_name = if !table.block_name.is_empty() {
+            Some(table.block_name.as_str())
+        } else {
+            table.block_record_handle.and_then(|handle| {
+                self.block_record_names.get(&handle).map(String::as_str)
+            })
+        };
+        if let Some(name) = block_name {
+            self.writer.write_string(2, name)?;
         }
 
         // Insertion point
         self.writer.write_point3d(10, table.insertion_point)?;
+        self.writer.write_point3d(210, table.normal)?;
 
         self.writer.write_subclass("AcDbTable")?;
 
         // Table style handle
         if let Some(h) = table.table_style_handle {
             self.writer.write_handle(342, h)?;
+        }
+        if let Some(h) = table.block_record_handle {
+            self.writer.write_handle(343, h)?;
         }
 
         // Data version
@@ -9562,19 +10161,20 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // Horizontal direction
         self.writer.write_point3d(11, table.horizontal_direction)?;
 
+        self.writer.write_i32(90, table.value_flags)?;
+
         // Number of rows
         self.writer.write_i32(91, table.rows.len() as i32)?;
 
         // Number of columns
         self.writer.write_i32(92, table.columns.len() as i32)?;
 
-        // Override flags
-        let mut override_flags = 0i32;
-        if table.override_flag { override_flags |= 1; }
-        if table.override_border_color { override_flags |= 2; }
-        if table.override_border_line_weight { override_flags |= 4; }
-        if table.override_border_visibility { override_flags |= 8; }
-        self.writer.write_i32(93, override_flags)?;
+        let override_flags = Self::legacy_table_override_flags(table);
+        self.writer.write_i32(93, override_flags.0)?;
+        self.writer.write_i32(94, override_flags.1)?;
+        self.writer.write_i32(95, override_flags.2)?;
+        self.writer.write_i32(96, override_flags.3)?;
+        self.write_legacy_table_override_values_dxf(table, override_flags)?;
 
         // Row heights
         for row in &table.rows {
@@ -9593,11 +10193,6 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             }
         }
 
-        // Break options
-        self.writer.write_i32(94, table.break_options.bits() as i32)?;
-        self.writer.write_i32(95, table.break_flow_direction as i32)?;
-        self.writer.write_double(143, table.break_spacing)?;
-
         Ok(())
     }
 
@@ -9606,48 +10201,100 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // Cell type
         self.writer.write_i16(171, cell.cell_type as i16)?;
 
-        // Cell state flags
-        self.writer.write_i16(172, cell.state.bits() as i16)?;
+        // Legacy cell-edge flags. State is stored separately in the R2007+
+        // extended cell flags (group 92).
+        self.writer.write_i16(172, cell.edge_flags as i16)?;
 
-        // Cell flags
-        self.writer.write_i16(173, cell.flag as i16)?;
-
-        // Merged dimensions
-        self.writer.write_i16(174, cell.merged as i16)?;
+        self.writer.write_i16(173, cell.merged as i16)?;
+        self.writer.write_i16(174, cell.auto_fit as i16)?;
         self.writer.write_i16(175, cell.merge_width as i16)?;
         self.writer.write_i16(176, cell.merge_height as i16)?;
+        if self.dxf_version >= DxfVersion::AC1021 {
+            self.writer.write_i32(91, cell.flag)?;
+            self.writer.write_i32(92, cell.state.bits() as i32)?;
+        } else {
+            self.writer.write_i16(177, cell.flag as i16)?;
+        }
 
         // Virtual edge flag
-        self.writer.write_i16(177, cell.virtual_edge)?;
+        self.writer.write_i16(178, cell.virtual_edge)?;
 
         // Rotation
-        self.writer.write_double(144, cell.rotation)?;
+        self.writer.write_double(145, cell.rotation)?;
+        if cell.cell_type == crate::entities::table::CellType::Block {
+            self.writer.write_double(144, cell.block_scale)?;
+        }
 
-        // Contents count
-        self.writer.write_i16(179, cell.contents.len() as i16)?;
+        // ACAD_TABLE stores one effective content item per legacy cell.
+        if let Some(content) = cell.contents.first() {
+            if cell.cell_type == crate::entities::table::CellType::Text {
+                if let Some(handle) = content.field_handle {
+                    self.writer.write_handle(344, handle)?;
+                } else if self.dxf_version < DxfVersion::AC1021
+                    || content.content_type != TableCellContentType::Value
+                {
+                    let text = if !content.value.text.is_empty() {
+                        content.value.text.as_str()
+                    } else {
+                        content.value.formatted_value.as_str()
+                    };
+                    let mut remaining = text;
+                    while remaining.len() > 250 {
+                        let mut split = 250;
+                        while split > 0 && !remaining.is_char_boundary(split) {
+                            split -= 1;
+                        }
+                        let (chunk, rest) = remaining.split_at(split);
+                        self.writer.write_string(2, chunk)?;
+                        remaining = rest;
+                    }
+                    self.writer.write_string(1, remaining)?;
+                }
+            } else if let Some(handle) = content.block_handle {
+                self.writer.write_handle(340, handle)?;
+            }
 
-        // Write cell contents
-        for content in &cell.contents {
-            self.writer.write_i16(170, content.content_type as i16)?;
-
-            if content.content_type == TableCellContentType::Value {
+            if self.dxf_version >= DxfVersion::AC1021
+                && content.content_type == TableCellContentType::Value
+            {
                 self.writer.write_string(301, "CELL_VALUE")?;
                 self.write_field_cell_value_dxf(&content.value)?;
                 self.writer.write_string(304, "ACVALUE_END")?;
             }
 
-            // Block handle
-            if let Some(h) = content.block_handle {
-                self.writer.write_handle(340, h)?;
+            if !content.attributes.is_empty() {
+                self.writer
+                    .write_i16(179, content.attributes.len() as i16)?;
+                for attribute in &content.attributes {
+                    self.writer
+                        .write_handle(331, attribute.definition_handle)?;
+                    self.writer.write_string(300, &attribute.value)?;
+                }
             }
         }
 
         // Cell style
         if let Some(ref style) = cell.style {
-            self.writer.write_color(62, style.content_color)?;
+            if !style.text_style_name.is_empty() {
+                self.writer.write_string(7, &style.text_style_name)?;
+            }
             self.writer.write_double(140, style.text_height)?;
-            self.writer.write_double(144, style.rotation)?;
             self.writer.write_i16(170, style.alignment as i16)?;
+            self.writer.write_color(64, style.content_color)?;
+            self.writer.write_color(63, style.background_color)?;
+            self.writer.write_bool(283, style.fill_enabled)?;
+
+            for (color_code, weight_code, visibility_code, border) in [
+                (69, 279, 289, &style.top_border),
+                (65, 275, 285, &style.right_border),
+                (66, 276, 286, &style.bottom_border),
+                (68, 278, 288, &style.left_border),
+            ] {
+                self.writer.write_color(color_code, border.color)?;
+                self.writer
+                    .write_i16(weight_code, border.line_weight.value())?;
+                self.writer.write_bool(visibility_code, !border.invisible)?;
+            }
         }
 
         Ok(())

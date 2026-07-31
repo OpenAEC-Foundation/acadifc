@@ -617,6 +617,9 @@ pub struct CellContent {
     pub block_handle: Option<Handle>,
     /// Text style handle.
     pub text_style_handle: Option<Handle>,
+    /// Text style name used by legacy DXF table cells.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub text_style_name: String,
     /// Content color.
     pub color: Color,
     /// Rotation angle in radians.
@@ -648,6 +651,7 @@ impl CellContent {
             value: CellValue::new(),
             block_handle: None,
             text_style_handle: None,
+            text_style_name: String::new(),
             color: Color::ByBlock,
             rotation: 0.0,
             scale: 1.0,
@@ -671,6 +675,7 @@ impl CellContent {
             value: CellValue::text(s),
             block_handle: None,
             text_style_handle: None,
+            text_style_name: String::new(),
             color: Color::ByBlock,
             rotation: 0.0,
             scale: 1.0,
@@ -694,6 +699,7 @@ impl CellContent {
             value: CellValue::new(),
             block_handle: Some(block_handle),
             text_style_handle: None,
+            text_style_name: String::new(),
             color: Color::ByBlock,
             rotation: 0.0,
             scale: 1.0,
@@ -773,6 +779,9 @@ pub struct CellStyle {
     pub content_color: Color,
     /// Text style handle.
     pub text_style_handle: Option<Handle>,
+    /// Text style name used by legacy DXF table cells.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub text_style_name: String,
     /// Text height.
     pub text_height: f64,
     /// Rotation angle.
@@ -824,6 +833,7 @@ impl CellStyle {
             background_color: Color::ByBlock,
             content_color: Color::ByBlock,
             text_style_handle: None,
+            text_style_name: String::new(),
             text_height: 0.18,
             rotation: 0.0,
             scale: 1.0,
@@ -1260,6 +1270,9 @@ pub struct TableBreakRange {
 pub struct LegacyTableStyleOverride {
     pub flags: i32,
     pub title_suppressed: Option<bool>,
+    /// Header suppression retained from legacy DXF.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub header_suppressed: Option<bool>,
     pub flow_direction: Option<i16>,
     pub horizontal_cell_margin: Option<f64>,
     pub vertical_cell_margin: Option<f64>,
@@ -1267,6 +1280,9 @@ pub struct LegacyTableStyleOverride {
     pub row_fill_none: Vec<bool>,
     pub row_fill_colors: Vec<Color>,
     pub row_alignments: Vec<i16>,
+    /// Text-style names retained from legacy DXF.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub text_style_names: Vec<String>,
     pub text_style_handles: Vec<Handle>,
     pub row_heights: Vec<f64>,
 }
@@ -1332,6 +1348,9 @@ pub struct Table {
     pub table_style_handle: Option<Handle>,
     /// Block record handle (table is based on block).
     pub block_record_handle: Option<Handle>,
+    /// Anonymous block name stored by the legacy DXF INSERT base.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub block_name: String,
     /// Table data version.
     pub data_version: i16,
     /// Table value flags.
@@ -1374,20 +1393,6 @@ pub struct Table {
     pub dwg_unknown_long1: i32,
     pub dwg_unknown_long2: i32,
     pub dwg_unknown_short: i16,
-    /// Original DXF group codes for exact-version round-trips.
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub raw_dxf_codes: Option<Vec<(i32, String)>>,
-    /// DXF version that produced `raw_dxf_codes`.
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub raw_dxf_version: Option<crate::types::DxfVersion>,
-    /// Original merged DWG record for exact-version round-trips.
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub raw_dwg_data: Option<Vec<u8>>,
-    /// Handle-stream bit count stored alongside `raw_dwg_data`.
-    pub raw_dwg_handle_bits: i64,
-    /// DWG version that produced `raw_dwg_data`.
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub raw_dwg_version: Option<crate::types::DxfVersion>,
 }
 
 fn visit_table_value_handles(
@@ -1555,6 +1560,7 @@ impl Table {
             normal: Vector3::new(0.0, 0.0, 1.0),
             table_style_handle: None,
             block_record_handle: None,
+            block_name: String::new(),
             data_version: 0,
             value_flags: 0,
             override_flag: false,
@@ -1582,11 +1588,6 @@ impl Table {
             dwg_unknown_long1: 0,
             dwg_unknown_long2: 0,
             dwg_unknown_short: 38,
-            raw_dxf_codes: None,
-            raw_dxf_version: None,
-            raw_dwg_data: None,
-            raw_dwg_handle_bits: 0,
-            raw_dwg_version: None,
         }
     }
 

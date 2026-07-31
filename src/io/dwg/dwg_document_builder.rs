@@ -2702,7 +2702,6 @@ impl DwgDocumentBuilder {
                     e.shadow_map_softness = data.shadow_map_softness;
                     e.photometric_mode = data.photometric_mode;
                     e.photometric_data = data.photometric_data;
-                    e.dwg_type_code = type_code;
                     let _ = document.add_entity(EntityType::Light(e));
                 }
                 OBJ_CAMERA
@@ -5421,10 +5420,6 @@ impl DwgDocumentBuilder {
                                             block,
                                         },
                                     ),
-                                raw_dxf_codes: None,
-                                raw_dwg_data: None,
-                                raw_dwg_handle_bits: 0,
-                                raw_dwg_version: None,
                             },
                         ),
                     );
@@ -5576,10 +5571,6 @@ impl DwgDocumentBuilder {
                                         dxf_name: dxf_name.to_string(),
                                         cpp_class_name,
                                         data,
-                                        raw_dxf_codes: None,
-                                        raw_dwg_data: None,
-                                        raw_dwg_handle_bits: 0,
-                                        raw_dwg_version: None,
                                     },
                                 ),
                             );
@@ -5621,10 +5612,6 @@ impl DwgDocumentBuilder {
                                             dxf_name: dxf_name.to_string(),
                                             cpp_class_name,
                                             data,
-                                            raw_dxf_codes: None,
-                                            raw_dwg_data: None,
-                                            raw_dwg_handle_bits: 0,
-                                            raw_dwg_version: None,
                                         },
                                     ),
                                 );

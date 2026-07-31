@@ -4,7 +4,7 @@
 
 use super::{Entity, EntityCommon};
 use crate::types::{
-    BoundingBox3D, Color, DxfVersion, Handle, LineWeight, Transform, Transparency, Vector3,
+    BoundingBox3D, Color, Handle, LineWeight, Transform, Transparency, Vector3,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -90,16 +90,6 @@ pub struct Light {
     pub photometric_mode: bool,
     /// Present when the photometric tail's has-data bit is set.
     pub photometric_data: Option<LightPhotometricData>,
-    /// DWG object type code (round-trip).
-    pub dwg_type_code: i16,
-    /// Handle-stream bit count for R2010+ records (round-trip framing).
-    pub dwg_handle_bits: i64,
-    /// Raw DWG record bytes, re-emitted verbatim on write-back.
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub raw_dwg_data: Option<Vec<u8>>,
-    /// Source DWG version — dropped on an incompatible cross-version save.
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub dwg_source_version: Option<DxfVersion>,
 }
 
 impl Light {
@@ -128,10 +118,6 @@ impl Light {
             shadow_map_softness: 0,
             photometric_mode: false,
             photometric_data: None,
-            dwg_type_code: 0,
-            dwg_handle_bits: 0,
-            raw_dwg_data: None,
-            dwg_source_version: None,
         }
     }
 

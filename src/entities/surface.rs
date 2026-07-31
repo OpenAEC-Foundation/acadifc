@@ -3,8 +3,7 @@
 //! Lofted / swept / extruded / revolved / plane / NURB surfaces share the
 //! `AcDbSurface` base, which stores its geometry in ACIS format just like
 //! [`Body`](super::solid3d::Body). They are kept as a distinct entity type so
-//! the original surface kind survives a DWG round-trip; the raw object bytes
-//! are preserved verbatim for write-back.
+//! the original surface kind survives a DWG round-trip.
 
 use crate::entities::solid3d::{AcisData, Silhouette, Wire};
 use crate::entities::{Entity, EntityCommon};
@@ -211,12 +210,6 @@ pub struct Surface {
     pub wires: Vec<Wire>,
     /// Silhouette data for viewports.
     pub silhouettes: Vec<Silhouette>,
-    /// Raw DWG object bytes, preserved verbatim for round-trip write-back.
-    pub raw_dwg_data: Option<Vec<u8>>,
-    /// Handle-stream bit length captured alongside `raw_dwg_data`.
-    pub dwg_handle_bits: i64,
-    /// DWG version `raw_dwg_data` was read from (drop on incompatible cross-version save).
-    pub dwg_source_version: Option<crate::types::DxfVersion>,
 }
 
 impl Surface {
@@ -297,9 +290,6 @@ impl Surface {
             history_handle: None,
             wires: Vec::new(),
             silhouettes: Vec::new(),
-            raw_dwg_data: None,
-            dwg_handle_bits: 0,
-            dwg_source_version: None,
         }
     }
 

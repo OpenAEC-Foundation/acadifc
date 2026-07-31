@@ -2,12 +2,10 @@
 //! evaluation/history records.
 //!
 //! The types in this module mirror the inheritance layers used by the DWG
-//! object stream.  They intentionally contain no reader/writer policy; raw
-//! records may be retained beside the semantic payload until every class has a
-//! native encoder.
+//! object stream. They intentionally contain no reader/writer policy.
 
 use crate::entities::AcisData;
-use crate::types::{Color, DxfVersion, Handle, Vector2, Vector3};
+use crate::types::{Color, Handle, Vector2, Vector3};
 
 use super::BlockEvalValue;
 use super::BlockVisibilityParameter;
@@ -22,13 +20,6 @@ pub struct DynamicBlockObject {
     pub dxf_name: String,
     pub cpp_class_name: String,
     pub data: DynamicBlockData,
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub raw_dxf_codes: Option<Vec<(i32, String)>>,
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub raw_dwg_data: Option<Vec<u8>>,
-    pub raw_dwg_handle_bits: i64,
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub raw_dwg_version: Option<DxfVersion>,
 }
 
 impl DynamicBlockObject {

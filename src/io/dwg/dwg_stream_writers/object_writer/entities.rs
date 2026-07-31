@@ -8,6 +8,7 @@
 //! Ported from ACadSharp `DwgObjectWriter.Entities.cs`.
 
 use crate::entities::*;
+use crate::entities::multileader::LeaderLineBreakInfo;
 use crate::entities::raster_image::{ClipBoundary, ClipType};
 use crate::io::dwg::dwg_reference_type::DwgReferenceType;
 use crate::types::{Color, Handle, LineWeight, Vector2, Vector3};
@@ -3125,6 +3126,23 @@ impl<'a> DwgObjectWriter<'a> {
         self.write_table_cad_value_with_schema(&data.value, true);
     }
 
+    fn table_text_style_handle(
+        &self,
+        handle: Option<Handle>,
+        name: &str,
+    ) -> u64 {
+        handle
+            .filter(|value| !value.is_null())
+            .or_else(|| {
+                (!name.is_empty())
+                    .then(|| self.document.text_styles.get(name))
+                    .flatten()
+                    .map(|style| style.handle)
+            })
+            .unwrap_or(Handle::NULL)
+            .value()
+    }
+
     fn write_table_content_format(&mut self, content: &CellContent) {
         self.writer.write_bit_long(content.format_override_flags);
         self.writer.write_bit_long(content.format_property_flags);
@@ -3137,7 +3155,10 @@ impl<'a> DwgObjectWriter<'a> {
         self.writer.write_cm_true_color(&content.color);
         self.writer.write_handle(
             DwgReferenceType::HardPointer,
-            content.text_style_handle.map(|h| h.value()).unwrap_or(0),
+            self.table_text_style_handle(
+                content.text_style_handle,
+                &content.text_style_name,
+            ),
         );
         self.writer.write_bit_double(content.text_height);
     }
@@ -3155,7 +3176,10 @@ impl<'a> DwgObjectWriter<'a> {
         self.writer.write_cm_true_color(&style.content_color);
         self.writer.write_handle(
             DwgReferenceType::HardPointer,
-            style.text_style_handle.map(|h| h.value()).unwrap_or(0),
+            self.table_text_style_handle(
+                style.text_style_handle,
+                &style.text_style_name,
+            ),
         );
         self.writer.write_bit_double(style.text_height);
     }
@@ -3463,7 +3487,10 @@ impl<'a> DwgObjectWriter<'a> {
             if flags & 0x10 != 0 {
                 self.writer.write_handle(
                     DwgReferenceType::HardPointer,
-                    style.text_style_handle.map(|h| h.value()).unwrap_or(0),
+                    self.table_text_style_handle(
+                        style.text_style_handle,
+                        &style.text_style_name,
+                    ),
                 );
             }
             if flags & 0x20 != 0 {
@@ -3566,14 +3593,20 @@ impl<'a> DwgObjectWriter<'a> {
         index = 0;
         for bit in [0x20000, 0x40000, 0x80000] {
             if flags & bit != 0 {
+                let handle = value
+                    .text_style_handles
+                    .get(index)
+                    .copied()
+                    .filter(|handle| !handle.is_null())
+                    .or_else(|| {
+                        value.text_style_names.get(index).and_then(|name| {
+                            self.document.text_styles.get(name).map(|style| style.handle)
+                        })
+                    })
+                    .unwrap_or(Handle::NULL);
                 self.writer.write_handle(
                     DwgReferenceType::HardPointer,
-                    value
-                        .text_style_handles
-                        .get(index)
-                        .copied()
-                        .unwrap_or(Handle::NULL)
-                        .value(),
+                    handle.value(),
                 );
                 index += 1;
             }
@@ -3661,9 +3694,19 @@ impl<'a> DwgObjectWriter<'a> {
         self.writer.write_bit_double(0.0); // rotation
         self.writer.write_3bit_double(e.normal);
         self.writer.write_bit(false); // has attributes
+        let block_record_handle = e
+            .block_record_handle
+            .filter(|handle| !handle.is_null())
+            .or_else(|| {
+                (!e.block_name.is_empty())
+                    .then(|| self.document.block_records.get(&e.block_name))
+                    .flatten()
+                    .map(|record| record.handle)
+            })
+            .unwrap_or(Handle::NULL);
         self.writer.write_handle(
             DwgReferenceType::HardPointer,
-            e.block_record_handle.map(|h| h.value()).unwrap_or(0),
+            block_record_handle.value(),
         );
 
         if self.version.r2010_plus() {
@@ -4342,13 +4385,27 @@ impl<'a> DwgObjectWriter<'a> {
         }
 
         // Break info
-        self.writer.write_bit_long(line.break_info_count);
-        if line.break_info_count > 0 {
+        let legacy_break_info;
+        let break_infos = if line.break_infos.is_empty() {
+            legacy_break_info = [LeaderLineBreakInfo {
+                segment_index: line.segment_index,
+                break_points: line.break_points.clone(),
+            }];
+            if line.break_info_count > 0 || !line.break_points.is_empty() {
+                &legacy_break_info[..]
+            } else {
+                &[]
+            }
+        } else {
+            line.break_infos.as_slice()
+        };
+        self.writer.write_bit_long(break_infos.len() as i32);
+        for info in break_infos {
             // BL 90 Segment index
-            self.writer.write_bit_long(line.segment_index);
+            self.writer.write_bit_long(info.segment_index);
             // Start/end point pairs
-            self.writer.write_bit_long(line.break_points.len() as i32);
-            for sep in &line.break_points {
+            self.writer.write_bit_long(info.break_points.len() as i32);
+            for sep in &info.break_points {
                 self.writer.write_3bit_double(sep.start_point);
                 self.writer.write_3bit_double(sep.end_point);
             }
