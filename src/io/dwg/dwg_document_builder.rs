@@ -6469,9 +6469,6 @@ impl DwgDocumentBuilder {
                                     is_default,
                                     scale: Handle::from(scale),
                                     kind,
-                                    source_raw: None,
-                                    source_handle_bits: 0,
-                                    source_version: None,
                                 },
                             ),
                         );

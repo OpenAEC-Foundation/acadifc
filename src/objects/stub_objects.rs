@@ -73,9 +73,6 @@ pub struct VisualStyle {
     /// complete raw object record, makes visual styles editable and portable
     /// across DWG versions without silently resetting the unexposed fields.
     pub properties: Vec<VisualStyleProperty>,
-    /// Original DXF group-code payload for lossless DXF round-trips.
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub raw_dxf_codes: Option<Vec<(i32, String)>>,
 }
 
 impl VisualStyle {
@@ -97,7 +94,6 @@ impl VisualStyle {
             internal_use_only: false,
             extended_lighting_model: 2,
             properties: Vec::new(),
-            raw_dxf_codes: None,
         }
     }
 
@@ -404,9 +400,6 @@ pub struct Material {
     pub color_bleed_scale: f64,
     /// Whether the optional advanced-material tail existed in the source.
     pub advanced_data_present: bool,
-    /// Original DXF group-code payload for lossless DXF round-trips.
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub raw_dxf_codes: Option<Vec<(i32, String)>>,
 }
 
 impl Material {
@@ -451,7 +444,6 @@ impl Material {
             final_gather: 0,
             color_bleed_scale: 1.0,
             advanced_data_present: false,
-            raw_dxf_codes: None,
         }
     }
 

@@ -414,12 +414,6 @@ pub struct XRecord {
     pub entries_complete: bool,
     /// Raw DWG data bytes (for roundtripping when entries are not parsed)
     pub raw_data: Vec<u8>,
-    /// Original DXF group codes for exact-version round-trips.
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub raw_dxf_codes: Option<Vec<(i32, String)>>,
-    /// DXF version that produced `raw_dxf_codes`.
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub raw_dxf_version: Option<crate::types::DxfVersion>,
     /// Original merged DWG object record for exact-version round-trips.
     #[cfg_attr(feature = "serde", serde(skip))]
     pub raw_dwg_data: Option<Vec<u8>>,
@@ -448,8 +442,6 @@ impl XRecord {
             preserve_object_reference_stream: false,
             entries_complete: true,
             raw_data: Vec::new(),
-            raw_dxf_codes: None,
-            raw_dxf_version: None,
             raw_dwg_data: None,
             raw_dwg_handle_bits: 0,
             raw_dwg_version: None,

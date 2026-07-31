@@ -209,8 +209,6 @@ impl CadDocument {
         xrecord.cloning_flags = DictionaryCloningFlags::KeepExisting;
         xrecord.entries = entries;
         xrecord.raw_data.clear();
-        xrecord.raw_dxf_codes = None;
-        xrecord.raw_dxf_version = None;
         xrecord.raw_dwg_data = None;
         xrecord.raw_dwg_handle_bits = 0;
         xrecord.raw_dwg_version = None;

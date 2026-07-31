@@ -15,7 +15,7 @@
 //! Recognised context classes are decoded and encoded from the semantic fields
 //! below, including cross-version saves.
 
-use crate::types::{DxfVersion, Handle, Vector2, Vector3};
+use crate::types::{Handle, Vector2, Vector3};
 
 /// A per-scale annotative representation (`AcDb*ObjectContextData` leaf).
 #[derive(Debug, Clone, PartialEq)]
@@ -42,18 +42,6 @@ pub struct ObjectContextData {
     /// Type-specific placement payload.
     pub kind: ObjectContextKind,
 
-    /// Legacy verbatim source record storage. Recognised context classes no
-    /// longer populate or consume this field.
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub source_raw: Option<Vec<u8>>,
-    /// Handle-stream bit count that accompanies [`source_raw`](Self::source_raw)
-    /// (needed to reproduce the data/handle split on verbatim re-emit).
-    pub source_handle_bits: i64,
-    /// DWG version [`source_raw`](Self::source_raw) was read from. Verbatim
-    /// re-emit is only valid within the same encoding family; on an incompatible
-    /// cross-version save the writer drops the object (parity with `Unknown`).
-    /// `None` for synthesized objects, which are always encoded from fields.
-    pub source_version: Option<DxfVersion>,
 }
 
 /// The type-specific placement payload of an annotative context leaf. Field
@@ -136,10 +124,8 @@ pub enum ObjectContextKind {
     /// payload with the target view and its projection parameters.
     HatchView(HatchViewContext),
 
-    /// A context leaf whose type is recognised as annotation-context (so its
-    /// scale handle is captured) but whose placement payload is not yet modeled.
-    /// Always carries [`source_raw`](ObjectContextData::source_raw) and is
-    /// re-emitted verbatim; it is never synthesized.
+    /// A context leaf whose type is recognised as annotation-context but whose
+    /// placement payload is not yet modeled.
     Opaque,
 }
 

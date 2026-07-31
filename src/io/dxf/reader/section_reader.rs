@@ -3880,9 +3880,6 @@ impl<'a> SectionReader<'a> {
             is_default,
             scale,
             kind,
-            source_raw: None,
-            source_handle_bits: 0,
-            source_version: None,
         })
     }
 
@@ -5202,7 +5199,7 @@ impl<'a> SectionReader<'a> {
                         }
                     }
                     "XRECORD" => {
-                        if let Some(obj) = self.read_xrecord(document.version)? {
+                        if let Some(obj) = self.read_xrecord()? {
                             document.objects.insert(obj.handle, ObjectType::XRecord(obj));
                         }
                     }
@@ -5791,7 +5788,6 @@ impl<'a> SectionReader<'a> {
     /// Read a VISUALSTYLE object
     fn read_visualstyle(&mut self) -> Result<Option<VisualStyle>> {
         let mut obj = VisualStyle::new();
-        let mut raw_dxf_codes = Vec::new();
         let mut style_type_seen = false;
         let mut extended_seen = false;
         let mut property_count = None;
@@ -5799,7 +5795,6 @@ impl<'a> SectionReader<'a> {
         let mut legacy_properties = Vec::new();
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 { self.reader.push_back(pair); break; }
-            raw_dxf_codes.push((pair.code, pair.value_string.clone()));
             if property_count.is_some() {
                 match pair.code {
                     90 => {
@@ -6122,13 +6117,11 @@ impl<'a> SectionReader<'a> {
                 obj.edge_style = *value;
             }
         }
-        obj.raw_dxf_codes = Some(raw_dxf_codes);
         Ok(Some(obj))
     }
 
     fn read_material_dxf_texture_color(
         &mut self,
-        raw_dxf_codes: &mut Vec<(i32, String)>,
         flag_code: i32,
         factor_code: i32,
         rgb_code: i32,
@@ -6141,7 +6134,6 @@ impl<'a> SectionReader<'a> {
             self.reader.push_back(flag);
             return Ok(value);
         }
-        raw_dxf_codes.push((flag.code, flag.value_string.clone()));
         value.flag = flag.as_i16().unwrap_or_default() as u8;
 
         let Some(factor) = self.reader.read_pair()? else {
@@ -6151,7 +6143,6 @@ impl<'a> SectionReader<'a> {
             self.reader.push_back(factor);
             return Ok(value);
         }
-        raw_dxf_codes.push((factor.code, factor.value_string.clone()));
         value.factor = factor.as_double().unwrap_or_default();
 
         if value.flag == 1 {
@@ -6159,7 +6150,6 @@ impl<'a> SectionReader<'a> {
                 return Ok(value);
             };
             if rgb.code == rgb_code {
-                raw_dxf_codes.push((rgb.code, rgb.value_string.clone()));
                 value.rgb = rgb.as_i32();
             } else {
                 self.reader.push_back(rgb);
@@ -6170,7 +6160,6 @@ impl<'a> SectionReader<'a> {
 
     fn read_material_dxf_texture(
         &mut self,
-        raw_dxf_codes: &mut Vec<(i32, String)>,
         depth: usize,
     ) -> Result<Option<MaterialTexture>> {
         if depth > 32 {
@@ -6183,27 +6172,25 @@ impl<'a> SectionReader<'a> {
             self.reader.push_back(mode_pair);
             return Ok(None);
         }
-        raw_dxf_codes.push((mode_pair.code, mode_pair.value_string.clone()));
         let mut value = MaterialTexture::default();
         value.mode = mode_pair.as_i16().unwrap_or_default();
         match value.mode {
             0 => {
                 value.color1 =
-                    self.read_material_dxf_texture_color(raw_dxf_codes, 278, 460, 95)?;
+                    self.read_material_dxf_texture_color(278, 460, 95)?;
                 value.color2 =
-                    self.read_material_dxf_texture_color(raw_dxf_codes, 279, 461, 96)?;
+                    self.read_material_dxf_texture_color(279, 461, 96)?;
             }
             1 => {
                 value.color1 =
-                    self.read_material_dxf_texture_color(raw_dxf_codes, 280, 465, 97)?;
+                    self.read_material_dxf_texture_color(280, 465, 97)?;
                 value.color2 =
-                    self.read_material_dxf_texture_color(raw_dxf_codes, 281, 466, 98)?;
+                    self.read_material_dxf_texture_color(281, 466, 98)?;
             }
             2 => {
                 let Some(kind) = self.reader.read_pair()? else {
                     return Ok(Some(value));
                 };
-                raw_dxf_codes.push((kind.code, kind.value_string.clone()));
                 value.procedural = match kind.code {
                     291 => Some(MaterialProceduralValue::Bool(
                         kind.as_bool().unwrap_or(false),
@@ -6219,10 +6206,6 @@ impl<'a> SectionReader<'a> {
                             Color::from_index(kind.as_i16().unwrap_or(256));
                         if let Some(true_color) = self.reader.read_pair()? {
                             if true_color.code == 420 {
-                                raw_dxf_codes.push((
-                                    true_color.code,
-                                    true_color.value_string.clone(),
-                                ));
                                 color = Color::from_true_color_value(
                                     true_color.as_i32().unwrap_or_default(),
                                 );
@@ -6241,7 +6224,7 @@ impl<'a> SectionReader<'a> {
                         let mut name = kind.value_string;
                         loop {
                             if let Some(texture) =
-                                self.read_material_dxf_texture(raw_dxf_codes, depth + 1)?
+                                self.read_material_dxf_texture(depth + 1)?
                             {
                                 items.push((name, texture));
                             } else {
@@ -6250,7 +6233,6 @@ impl<'a> SectionReader<'a> {
                             let Some(next) = self.reader.read_pair()? else {
                                 break;
                             };
-                            raw_dxf_codes.push((next.code, next.value_string.clone()));
                             match next.code {
                                 300 => name = next.value_string,
                                 292 => {
@@ -6260,7 +6242,6 @@ impl<'a> SectionReader<'a> {
                                 }
                                 _ => {
                                     self.reader.push_back(next);
-                                    raw_dxf_codes.pop();
                                     break;
                                 }
                             }
@@ -6269,7 +6250,6 @@ impl<'a> SectionReader<'a> {
                     }
                     _ => {
                         self.reader.push_back(kind);
-                        raw_dxf_codes.pop();
                         None
                     }
                 };
@@ -6282,7 +6262,6 @@ impl<'a> SectionReader<'a> {
     /// Read a MATERIAL object
     fn read_material(&mut self) -> Result<Option<Material>> {
         let mut obj = Material::new();
-        let mut raw_dxf_codes = Vec::new();
         let mut diffuse_matrix = 0usize;
         let mut specular_matrix = 0usize;
         let mut reflection_matrix = 0usize;
@@ -6294,7 +6273,6 @@ impl<'a> SectionReader<'a> {
         let mut ambient_rgb_seen = false;
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 { self.reader.push_back(pair); break; }
-            raw_dxf_codes.push((pair.code, pair.value_string.clone()));
             match pair.code {
                 5 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { obj.handle = Handle::new(h); } }
                 102 if pair.value_string.trim() == "{ACAD_REACTORS" => {
@@ -6322,14 +6300,14 @@ impl<'a> SectionReader<'a> {
                     obj.normal_map.source = pair.as_i16().unwrap_or_default() as u8;
                     if obj.normal_map.source == 2 {
                         obj.normal_map.texture =
-                            self.read_material_dxf_texture(&mut raw_dxf_codes, 0)?;
+                            self.read_material_dxf_texture(0)?;
                     }
                 }
                 72 => {
                     obj.diffuse_map.source = pair.as_i16().unwrap_or_default() as u8;
                     if obj.diffuse_map.source == 2 {
                         obj.diffuse_map.texture =
-                            self.read_material_dxf_texture(&mut raw_dxf_codes, 0)?;
+                            self.read_material_dxf_texture(0)?;
                     }
                 }
                 3 if advanced => obj.normal_map.file_name = pair.value_string.clone(),
@@ -6361,7 +6339,7 @@ impl<'a> SectionReader<'a> {
                     obj.specular_map.source = pair.as_i16().unwrap_or_default() as u8;
                     if obj.specular_map.source == 2 {
                         obj.specular_map.texture =
-                            self.read_material_dxf_texture(&mut raw_dxf_codes, 0)?;
+                            self.read_material_dxf_texture(0)?;
                     }
                 }
                 4 => obj.specular_map.file_name = pair.value_string.clone(),
@@ -6379,7 +6357,7 @@ impl<'a> SectionReader<'a> {
                     obj.reflection_map.source = pair.as_i16().unwrap_or_default() as u8;
                     if obj.reflection_map.source == 2 {
                         obj.reflection_map.texture =
-                            self.read_material_dxf_texture(&mut raw_dxf_codes, 0)?;
+                            self.read_material_dxf_texture(0)?;
                     }
                 }
                 6 => obj.reflection_map.file_name = pair.value_string.clone(),
@@ -6398,7 +6376,7 @@ impl<'a> SectionReader<'a> {
                     obj.opacity_map.source = pair.as_i16().unwrap_or_default() as u8;
                     if obj.opacity_map.source == 2 {
                         obj.opacity_map.texture =
-                            self.read_material_dxf_texture(&mut raw_dxf_codes, 0)?;
+                            self.read_material_dxf_texture(0)?;
                     }
                 }
                 7 => obj.opacity_map.file_name = pair.value_string.clone(),
@@ -6416,7 +6394,7 @@ impl<'a> SectionReader<'a> {
                     obj.bump_map.source = pair.as_i16().unwrap_or_default() as u8;
                     if obj.bump_map.source == 2 {
                         obj.bump_map.texture =
-                            self.read_material_dxf_texture(&mut raw_dxf_codes, 0)?;
+                            self.read_material_dxf_texture(0)?;
                     }
                 }
                 8 => obj.bump_map.file_name = pair.value_string.clone(),
@@ -6439,7 +6417,7 @@ impl<'a> SectionReader<'a> {
                     obj.refraction_map.source = pair.as_i16().unwrap_or_default() as u8;
                     if obj.refraction_map.source == 2 {
                         obj.refraction_map.texture =
-                            self.read_material_dxf_texture(&mut raw_dxf_codes, 0)?;
+                            self.read_material_dxf_texture(0)?;
                     }
                 }
                 9 => obj.refraction_map.file_name = pair.value_string.clone(),
@@ -6497,7 +6475,6 @@ impl<'a> SectionReader<'a> {
                 _ => {}
             }
         }
-        obj.raw_dxf_codes = Some(raw_dxf_codes);
         Ok(Some(obj))
     }
 
@@ -16442,18 +16419,13 @@ impl<'a> SectionReader<'a> {
     // ===== New Object Readers =====
 
     /// Read an XRECORD object
-    fn read_xrecord(
-        &mut self,
-        version: crate::types::DxfVersion,
-    ) -> Result<Option<XRecord>> {
+    fn read_xrecord(&mut self) -> Result<Option<XRecord>> {
         let mut xr = XRecord::new();
-        let mut raw_dxf_codes = Vec::new();
         let mut group = String::new();
         let mut owner_seen = false;
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 { self.reader.push_back(pair); break; }
-            raw_dxf_codes.push((pair.code, pair.value_string.clone()));
             match pair.code {
                 5 => { if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) { xr.handle = Handle::new(h); } }
                 100 if pair.value_string == "AcDbXrecord" => {}
@@ -16496,10 +16468,6 @@ impl<'a> SectionReader<'a> {
                             let mut z = 0.0;
                             if let Some(next) = self.reader.read_pair()? {
                                 if next.code == pair.code + 10 {
-                                    raw_dxf_codes.push((
-                                        next.code,
-                                        next.value_string.clone(),
-                                    ));
                                     y = next
                                         .value_string
                                         .trim()
@@ -16507,10 +16475,6 @@ impl<'a> SectionReader<'a> {
                                         .unwrap_or(0.0);
                                     if let Some(next_z) = self.reader.read_pair()? {
                                         if next_z.code == pair.code + 20 {
-                                            raw_dxf_codes.push((
-                                                next_z.code,
-                                                next_z.value_string.clone(),
-                                            ));
                                             z = next_z
                                                 .value_string
                                                 .trim()
@@ -16623,8 +16587,6 @@ impl<'a> SectionReader<'a> {
             }
         }
 
-        xr.raw_dxf_codes = Some(raw_dxf_codes);
-        xr.raw_dxf_version = Some(version);
         Ok(Some(xr))
     }
 
