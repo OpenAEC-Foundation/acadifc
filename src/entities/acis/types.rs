@@ -1663,13 +1663,22 @@ fn decode_bspline_surface(tokens: &[SatToken]) -> Option<SatBSplineSurface> {
             .and_then(SatToken::as_ident)
             .map(str::to_owned)
     };
-    let u_closure = string_at(start + 3);
-    let v_closure = string_at(start + 4);
-    let u_singularity = string_at(start + 5);
-    let v_singularity = string_at(start + 6);
-    let u_knot_count = usize::try_from(tokens.get(start + 7)?.as_integer()?).ok()?;
-    let v_knot_count = usize::try_from(tokens.get(start + 8)?.as_integer()?).ok()?;
-    let mut position = start + 9;
+    let mut form_start = start + 3;
+    if rational
+        && matches!(
+            tokens.get(form_start).and_then(SatToken::as_ident),
+            Some("u" | "v" | "both" | "none")
+        )
+    {
+        form_start += 1;
+    }
+    let u_closure = string_at(form_start);
+    let v_closure = string_at(form_start + 1);
+    let u_singularity = string_at(form_start + 2);
+    let v_singularity = string_at(form_start + 3);
+    let u_knot_count = usize::try_from(tokens.get(form_start + 4)?.as_integer()?).ok()?;
+    let v_knot_count = usize::try_from(tokens.get(form_start + 5)?.as_integer()?).ok()?;
+    let mut position = form_start + 6;
 
     let mut u_knots = Vec::new();
     for _ in 0..u_knot_count {

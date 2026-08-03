@@ -26,7 +26,7 @@
 //! }
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom, Cursor};
 use std::fs::File;
 use std::path::Path;
@@ -309,7 +309,10 @@ fn find_acds_end(buf: &[u8], from: usize, to: usize) -> Option<(usize, usize)> {
 /// `off[r+1]`). Records with an empty range carry no geometry and are skipped.
 /// Empty when there is no such table (the caller then falls back to order-based
 /// attachment).
-fn extract_acds_record_blobs(buf: &[u8]) -> Vec<(u64, Vec<u8>)> {
+fn extract_acds_record_blobs(
+    buf: &[u8],
+    modeler_handles: &HashSet<u64>,
+) -> Vec<(u64, Vec<u8>)> {
     let rd = |p: usize| -> Option<u32> {
         buf.get(p..p + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()))
     };
@@ -357,7 +360,9 @@ fn extract_acds_record_blobs(buf: &[u8]) -> Vec<(u64, Vec<u8>)> {
             let region_start = base + off;
             let region_end = recs.get(k + 1).map_or(seg_end, |&(_, o)| base + o);
             if region_start >= seg_end || region_end <= region_start {
-                orphan_handles.push(handle); // blob lives in the pre-table pool
+                if modeler_handles.contains(&handle) {
+                    orphan_handles.push(handle); // blob lives in the pre-table pool
+                }
                 continue;
             }
             let region = &buf[region_start..region_end.min(seg_end)];
@@ -366,7 +371,9 @@ fn extract_acds_record_blobs(buf: &[u8]) -> Vec<(u64, Vec<u8>)> {
                 .position(|w| w == b"ASM BinaryFile")
                 .or_else(|| region.windows(15).position(|w| w == b"ACIS BinaryFile"))
             else {
-                orphan_handles.push(handle); // blob lives in the pre-table pool
+                if modeler_handles.contains(&handle) {
+                    orphan_handles.push(handle); // blob lives in the pre-table pool
+                }
                 continue;
             };
             let start = region_start + mp;
@@ -1024,7 +1031,20 @@ impl<R: Read + Seek> DwgReader<R> {
             // Authoritative: the `_data_` record table(s) bind each blob to its
             // owning handle. When present, attach by handle — the only mapping
             // that survives BIM exports whose blob/record/handle orders diverge.
-            let record_blobs = extract_acds_record_blobs(&acds_buf);
+            let modeler_handles: HashSet<u64> = document
+                .entities()
+                .filter(|entity| {
+                    matches!(
+                        entity,
+                        crate::entities::EntityType::Solid3D(_)
+                            | crate::entities::EntityType::Region(_)
+                            | crate::entities::EntityType::Body(_)
+                            | crate::entities::EntityType::Surface(_)
+                    ) && entity.common().has_ds_data
+                })
+                .map(|entity| entity.common().handle.value())
+                .collect();
+            let record_blobs = extract_acds_record_blobs(&acds_buf, &modeler_handles);
             let attached = if !record_blobs.is_empty() {
                 attach_acds_record_blobs(&mut document, record_blobs)
             } else {
