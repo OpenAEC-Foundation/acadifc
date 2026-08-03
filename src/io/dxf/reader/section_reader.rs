@@ -1249,12 +1249,20 @@ enum MeshReadState {
 /// Section reader for parsing DXF sections
 pub struct SectionReader<'a> {
     reader: &'a mut Box<dyn DxfStreamReader>,
+    decoded_records: usize,
 }
 
 impl<'a> SectionReader<'a> {
     /// Create a new section reader
     pub fn new(reader: &'a mut Box<dyn DxfStreamReader>) -> Self {
-        Self { reader }
+        Self {
+            reader,
+            decoded_records: 0,
+        }
+    }
+
+    pub fn decoded_records(&self) -> usize {
+        self.decoded_records
     }
 
     /// Read the HEADER section
@@ -1719,7 +1727,9 @@ impl<'a> SectionReader<'a> {
 
             // Blocks start with code 0 = "BLOCK"
             if pair.code == 0 && pair.value_string == "BLOCK" {
-                self.read_block(document)?;
+                if self.read_block(document)? {
+                    self.decoded_records = self.decoded_records.saturating_add(1);
+                }
             }
         }
 
@@ -1727,7 +1737,7 @@ impl<'a> SectionReader<'a> {
     }
 
     /// Read a single BLOCK...ENDBLK definition
-    fn read_block(&mut self, document: &mut CadDocument) -> Result<()> {
+    fn read_block(&mut self, document: &mut CadDocument) -> Result<bool> {
         use crate::entities::Block;
         use crate::types::Vector3;
 
@@ -1800,6 +1810,7 @@ impl<'a> SectionReader<'a> {
 
         // Find the corresponding BlockRecord and add entities to it
         let mut block_entities: Vec<EntityType> = Vec::new();
+        let mut committed = false;
 
         // Read entities until ENDBLK
         while let Some(pair) = self.reader.read_pair()? {
@@ -1854,6 +1865,7 @@ impl<'a> SectionReader<'a> {
                         // They are not added to the document's main entity list.
                         // The block content is stored in the BlockRecord.
 
+                        committed = true;
                         break;
                     }
                     "POINT" => {
@@ -2051,13 +2063,11 @@ impl<'a> SectionReader<'a> {
                     }
                     "SECTIONLINE" => {
                         let entity = self.read_section_symbol_dxf()?;
-                        let _ = document
-                            .add_entity(EntityType::SectionSymbol(entity));
+                        block_entities.push(EntityType::SectionSymbol(entity));
                     }
                     "DRAWINGVIEW" => {
                         let entity = self.read_view_border_dxf()?;
-                        let _ =
-                            document.add_entity(EntityType::ViewBorder(entity));
+                        block_entities.push(EntityType::ViewBorder(entity));
                     }
                     "CAMERA"
                     | "SECTIONOBJECT"
@@ -2114,7 +2124,7 @@ impl<'a> SectionReader<'a> {
             }
         }
 
-        Ok(())
+        Ok(committed)
     }
 
     /// Read ENDBLK entity
@@ -2163,6 +2173,7 @@ impl<'a> SectionReader<'a> {
             // Entities start with code 0
             if pair.code == 0 {
                 let entity_type = pair.value_string.clone();
+                let before = document.entities().count();
                 
                 match entity_type.as_str() {
                     "POINT" => {
@@ -2430,6 +2441,9 @@ impl<'a> SectionReader<'a> {
                         let _ = document.add_entity(EntityType::Unknown(entity));
                     }
                 }
+                self.decoded_records = self
+                    .decoded_records
+                    .saturating_add(document.entities().count().saturating_sub(before));
             }
         }
         
@@ -5187,6 +5201,7 @@ impl<'a> SectionReader<'a> {
             }
 
             if pair.code == 0 {
+                let before = document.objects.len();
                 match pair.value_string.as_str() {
                     "DICTIONARY" => {
                         if let Some(obj) = self.read_dictionary()? {
@@ -5494,6 +5509,9 @@ impl<'a> SectionReader<'a> {
                         });
                     }
                 }
+                self.decoded_records = self
+                    .decoded_records
+                    .saturating_add(document.objects.len().saturating_sub(before));
             }
         }
 
@@ -7744,6 +7762,7 @@ impl<'a> SectionReader<'a> {
                             .insert(layer.handle, xdictionary);
                     }
                     document.layers.add_or_replace(layer);
+                    self.decoded_records = self.decoded_records.saturating_add(1);
                 }
             } else if pair.code == 5 {
                 if let Ok(handle) = u64::from_str_radix(pair.value_string.trim(), 16) {
@@ -7859,6 +7878,7 @@ impl<'a> SectionReader<'a> {
             if pair.code == 0 && pair.value_string == "LTYPE" {
                 if let Some(linetype) = self.read_linetype_entry()? {
                     document.line_types.add_or_replace(linetype);
+                    self.decoded_records = self.decoded_records.saturating_add(1);
                 }
             }
         }
@@ -7986,6 +8006,7 @@ impl<'a> SectionReader<'a> {
             if pair.code == 0 && pair.value_string == "STYLE" {
                 if let Some(style) = self.read_textstyle_entry()? {
                     document.text_styles.add_or_replace(style);
+                    self.decoded_records = self.decoded_records.saturating_add(1);
                 }
             }
         }
@@ -8080,6 +8101,7 @@ impl<'a> SectionReader<'a> {
                             existing.flags = block_record.flags;
                         }
                     }
+                    self.decoded_records = self.decoded_records.saturating_add(1);
                 }
             }
         }
@@ -8178,6 +8200,7 @@ impl<'a> SectionReader<'a> {
             if pair.code == 0 && pair.value_string == "DIMSTYLE" {
                 if let Some(dimstyle) = self.read_dimstyle_entry()? {
                     document.dim_styles.add_or_replace(dimstyle);
+                    self.decoded_records = self.decoded_records.saturating_add(1);
                 }
             }
         }
@@ -8309,6 +8332,7 @@ impl<'a> SectionReader<'a> {
             if pair.code == 0 && pair.value_string == "APPID" {
                 if let Some(appid) = self.read_appid_entry()? {
                     document.app_ids.add_or_replace(appid);
+                    self.decoded_records = self.decoded_records.saturating_add(1);
                 }
             }
         }
@@ -8345,6 +8369,7 @@ impl<'a> SectionReader<'a> {
             if pair.code == 0 && pair.value_string == "VIEW" {
                 if let Some(view) = self.read_view_entry()? {
                     document.views.add_or_replace(view);
+                    self.decoded_records = self.decoded_records.saturating_add(1);
                 }
             }
         }
@@ -8460,6 +8485,7 @@ impl<'a> SectionReader<'a> {
             if pair.code == 0 && pair.value_string == "VPORT" {
                 if let Some(vport) = self.read_vport_entry()? {
                     document.vports.add_allow_duplicate(vport);
+                    self.decoded_records = self.decoded_records.saturating_add(1);
                 }
             }
         }
@@ -8575,6 +8601,7 @@ impl<'a> SectionReader<'a> {
             if pair.code == 0 && pair.value_string == "UCS" {
                 if let Some(ucs) = self.read_ucs_entry()? {
                     document.ucss.add_or_replace(ucs);
+                    self.decoded_records = self.decoded_records.saturating_add(1);
                 }
             }
         }

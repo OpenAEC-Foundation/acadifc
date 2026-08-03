@@ -24,6 +24,7 @@ use crate::io::dwg::dwg_stream_readers::object_reader::{DwgObjectReader, EntityC
 use crate::io::dwg::parallel::{
     filter_map_slice, for_each_mut, map_chunks, map_mut, worker_count,
 };
+use crate::io::read::{push_read_diagnostic, ReadDiagnostic, ReadStage};
 use crate::notification::{NotificationCollection, NotificationType};
 use crate::types::Handle;
 use crate::types::LineWeight;
@@ -117,7 +118,15 @@ struct Pass2Chunk {
     output: Pass2Output,
     pending: PendingPolylines,
     pending_attributes: HashMap<u64, Vec<AttributeEntity>>,
-    failures: Vec<(u64, i16)>,
+    failures: Vec<RecordFailure>,
+}
+
+struct RecordFailure {
+    code: &'static str,
+    handle: u64,
+    offset: usize,
+    type_code: i16,
+    message: String,
 }
 
 impl Pass2Chunk {
@@ -139,6 +148,13 @@ impl Pass2Chunk {
             failures: Vec::new(),
         }
     }
+}
+
+pub struct DwgBuildOutcome {
+    pub notifications: NotificationCollection,
+    pub decoded_records: usize,
+    pub skipped_records: usize,
+    pub diagnostics: Vec<ReadDiagnostic>,
 }
 
 /// Handle-to-name resolution maps built from table entries.
@@ -308,7 +324,11 @@ impl DwgDocumentBuilder {
     /// 2. Read entities and objects → resolve handle references
     ///
     /// Returns collected notifications (skipped records, warnings).
-    pub fn build(mut self, document: &mut CadDocument) -> NotificationCollection {
+    pub fn build(self, document: &mut CadDocument) -> NotificationCollection {
+        self.build_with_stats(document).notifications
+    }
+
+    pub fn build_with_stats(mut self, document: &mut CadDocument) -> DwgBuildOutcome {
         let perf = std::env::var_os("PERF").is_some();
         let build_started = web_time::Instant::now();
         document
@@ -324,6 +344,8 @@ impl DwgDocumentBuilder {
         handles.sort_unstable();
         let mut skipped_pass1 = 0u32;
         let mut skipped_pass2 = 0u32;
+        let mut decoded_pass2 = 0usize;
+        let mut diagnostics = Vec::new();
         let total_handles = handles.len();
         self.report_progress(55);
 
@@ -388,20 +410,80 @@ impl DwgDocumentBuilder {
         }
         let mut parsed_entries: Vec<ParsedEntry> = Vec::new();
         let catalog_started = web_time::Instant::now();
-        let record_catalog: Vec<(u64, usize, i16, i16)> =
+        enum CatalogFailure {
+            MissingOffset,
+            NegativeOffset(i64),
+            RecordType,
+        }
+        type CatalogResult =
+            std::result::Result<(u64, usize, i16, i16), (u64, Option<u64>, CatalogFailure)>;
+        let catalog_results: Vec<CatalogResult> =
             filter_map_slice(&handles, |&handle| {
-                let offset = self.obj_reader.offset_for(handle)?;
+                let Some(offset) = self.obj_reader.offset_for(handle) else {
+                    return Some(Err((
+                        handle,
+                        None,
+                        CatalogFailure::MissingOffset,
+                    )));
+                };
                 if offset < 0 {
-                    return None;
+                    return Some(Err((
+                        handle,
+                        None,
+                        CatalogFailure::NegativeOffset(offset),
+                    )));
                 }
-                let raw = self.obj_reader.type_code_at(offset as usize).ok()?;
-                Some((
+                let source_offset = offset as usize;
+                let raw = match self.obj_reader.type_code_at(source_offset) {
+                    Ok(raw) => raw,
+                    Err(_error) => {
+                        return Some(Err((
+                            handle,
+                            Some(source_offset as u64),
+                            CatalogFailure::RecordType,
+                        )));
+                    }
+                };
+                Some(Ok((
                     handle,
-                    offset as usize,
+                    source_offset,
                     raw,
                     Self::resolve_type_code(raw, &class_map),
-                ))
+                )))
             });
+        let mut record_catalog = Vec::with_capacity(catalog_results.len());
+        let mut skipped_catalog = 0usize;
+        for result in catalog_results {
+            match result {
+                Ok(record) => record_catalog.push(record),
+                Err((handle, source_offset, failure)) => {
+                    skipped_catalog = skipped_catalog.saturating_add(1);
+                    let message = match failure {
+                        CatalogFailure::MissingOffset => {
+                            format!("No source offset for handle {handle:#X}")
+                        }
+                        CatalogFailure::NegativeOffset(offset) => {
+                            format!("Negative source offset {offset} for handle {handle:#X}")
+                        }
+                        CatalogFailure::RecordType => {
+                            format!("Could not read record type at handle {handle:#X}")
+                        }
+                    };
+                    self.notifications
+                        .notify(NotificationType::Error, message.clone());
+                    let mut diagnostic = ReadDiagnostic::new(
+                        "record-catalog-failed",
+                        ReadStage::RecordStream,
+                        message,
+                    );
+                    diagnostic.source_offset = source_offset;
+                    diagnostic.source_offset_basis = Some("object-section-byte".to_string());
+                    diagnostic.section = Some("AcDb:AcDbObjects".to_string());
+                    diagnostic.record_handle = Some(handle);
+                    push_read_diagnostic(&mut diagnostics, diagnostic);
+                }
+            }
+        }
         self.report_progress(75);
         if perf {
             eprintln!(
@@ -417,7 +499,27 @@ impl DwgDocumentBuilder {
             if is_table_type(type_code) {
                 let (_, mut reader) = match self.obj_reader.read_record_at(offset) {
                     Ok(record) => record,
-                    Err(_) => continue,
+                    Err(error) => {
+                        skipped_pass1 += 1;
+                        let message = format!(
+                            "Could not read table record at handle {:#X}: {}",
+                            handle, error
+                        );
+                        self.notifications
+                            .notify(NotificationType::Error, message.clone());
+                        let mut diagnostic = ReadDiagnostic::new(
+                            "record-read-failed",
+                            ReadStage::RecordStream,
+                            message,
+                        );
+                        diagnostic.source_offset = Some(offset as u64);
+                        diagnostic.source_offset_basis = Some("object-section-byte".to_string());
+                        diagnostic.section = Some("AcDb:AcDbObjects".to_string());
+                        diagnostic.record_handle = Some(handle);
+                        diagnostic.record_type = Some(type_code.to_string());
+                        push_read_diagnostic(&mut diagnostics, diagnostic);
+                        continue;
+                    }
                 };
                 // Wrap in catch_unwind to survive corrupt/misaligned records
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -435,13 +537,23 @@ impl DwgDocumentBuilder {
                         Ok(v) => v,
                         Err(_) => {
                             skipped_pass1 += 1;
-                            self.notifications.notify(
-                            NotificationType::Error,
-                            format!(
+                            let message = format!(
                                 "Skipped corrupt table record at handle {:#X} (panic in common data)",
                                 handle
-                            ),
-                        );
+                            );
+                            self.notifications
+                                .notify(NotificationType::Error, message.clone());
+                            let mut diagnostic = ReadDiagnostic::new(
+                                "record-decode-panicked",
+                                ReadStage::RecordStream,
+                                message,
+                            );
+                            diagnostic.source_offset = Some(offset as u64);
+                            diagnostic.source_offset_basis = Some("object-section-byte".to_string());
+                            diagnostic.section = Some("AcDb:AcDbObjects".to_string());
+                            diagnostic.record_handle = Some(handle);
+                            diagnostic.record_type = Some(type_code.to_string());
+                            push_read_diagnostic(&mut diagnostics, diagnostic);
                             continue;
                         }
                     };
@@ -649,13 +761,23 @@ impl DwgDocumentBuilder {
                     Ok(None) => {}
                     Err(_) => {
                         skipped_pass1 += 1;
-                        self.notifications.notify(
-                            NotificationType::Error,
-                            format!(
+                        let message = format!(
                                 "Skipped corrupt table record at handle {:#X}, type_code={}",
                                 handle, type_code
-                            ),
+                            );
+                        self.notifications
+                            .notify(NotificationType::Error, message.clone());
+                        let mut diagnostic = ReadDiagnostic::new(
+                            "record-decode-failed",
+                            ReadStage::RecordStream,
+                            message,
                         );
+                        diagnostic.source_offset = Some(offset as u64);
+                        diagnostic.source_offset_basis = Some("object-section-byte".to_string());
+                        diagnostic.section = Some("AcDb:AcDbObjects".to_string());
+                        diagnostic.record_handle = Some(handle);
+                        diagnostic.record_type = Some(type_code.to_string());
+                        push_read_diagnostic(&mut diagnostics, diagnostic);
                     }
                 }
             }
@@ -1326,7 +1448,18 @@ impl DwgDocumentBuilder {
                     for &(handle, offset, raw_type_code, type_code) in records {
                         let (_, reader) = match self.obj_reader.read_record_at(offset) {
                             Ok(record) => record,
-                            Err(_) => continue,
+                            Err(error) => {
+                                chunk.failures.push(RecordFailure {
+                                    code: "record-read-failed",
+                                    handle,
+                                    offset,
+                                    type_code,
+                                    message: format!(
+                                        "Could not read record at handle {handle:#X}, type_code={type_code}: {error}"
+                                    ),
+                                });
+                                continue;
+                            }
                         };
                         let result =
                             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1345,7 +1478,15 @@ impl DwgDocumentBuilder {
                                 );
                             }));
                         if result.is_err() {
-                            chunk.failures.push((handle, type_code));
+                            chunk.failures.push(RecordFailure {
+                                code: "record-decode-panicked",
+                                handle,
+                                offset,
+                                type_code,
+                                message: format!(
+                                    "Skipped corrupt record at handle {handle:#X}, type_code={type_code} (panic recovered)"
+                                ),
+                            });
                         }
                     }
                     chunk
@@ -1354,6 +1495,9 @@ impl DwgDocumentBuilder {
 
             let commit_started = web_time::Instant::now();
             for mut chunk in chunks {
+                decoded_pass2 = decoded_pass2
+                    .saturating_add(chunk.output.entities.len())
+                    .saturating_add(chunk.output.objects.len());
                 document
                     .eed_by_handle
                     .extend(chunk.output.eed_by_handle.drain());
@@ -1407,15 +1551,21 @@ impl DwgDocumentBuilder {
                         .or_default()
                         .append(&mut attributes);
                 }
-                for (handle, type_code) in chunk.failures {
+                for failure in chunk.failures {
                     skipped_pass2 += 1;
-                    self.notifications.notify(
-                        NotificationType::Error,
-                        format!(
-                            "Skipped corrupt record at handle {:#X}, type_code={} (panic recovered)",
-                            handle, type_code
-                        ),
+                    self.notifications
+                        .notify(NotificationType::Error, failure.message.clone());
+                    let mut diagnostic = ReadDiagnostic::new(
+                        failure.code,
+                        ReadStage::RecordStream,
+                        failure.message,
                     );
+                    diagnostic.source_offset = Some(failure.offset as u64);
+                    diagnostic.source_offset_basis = Some("object-section-byte".to_string());
+                    diagnostic.section = Some("AcDb:AcDbObjects".to_string());
+                    diagnostic.record_handle = Some(failure.handle);
+                    diagnostic.record_type = Some(failure.type_code.to_string());
+                    push_read_diagnostic(&mut diagnostics, diagnostic);
                 }
             }
             commit_seconds += commit_started.elapsed().as_secs_f64();
@@ -1534,6 +1684,7 @@ impl DwgDocumentBuilder {
                     _ => {}
                 }
             }
+            decoded_pass2 = decoded_pass2.saturating_add(1);
             document.add_loaded_entity(entity);
         }
 
@@ -2007,13 +2158,15 @@ impl DwgDocumentBuilder {
         }
 
         // Summary notification
-        let total_skipped = skipped_pass1 + skipped_pass2;
+        let total_skipped = skipped_catalog
+            .saturating_add(skipped_pass1 as usize)
+            .saturating_add(skipped_pass2 as usize);
         if total_skipped > 0 {
             self.notifications.notify(
                 NotificationType::Warning,
                 format!(
                     "DWG build summary: {} of {} handles processed, {} records skipped ({} table, {} entity/object)",
-                    total_handles as u32 - total_skipped,
+                    total_handles.saturating_sub(total_skipped),
                     total_handles,
                     total_skipped,
                     skipped_pass1,
@@ -2495,7 +2648,14 @@ impl DwgDocumentBuilder {
             );
         }
 
-        self.notifications
+        DwgBuildOutcome {
+            notifications: self.notifications,
+            decoded_records: parsed_entries.len().saturating_add(decoded_pass2),
+            skipped_records: skipped_catalog
+                .saturating_add(skipped_pass1 as usize)
+                .saturating_add(skipped_pass2 as usize),
+            diagnostics,
+        }
     }
 
     /// Populate the header's current annotation scale (CANNOSCALE) from the

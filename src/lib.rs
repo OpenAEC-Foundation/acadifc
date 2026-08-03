@@ -168,6 +168,10 @@ pub use layer_state::{LayerState, LayerStateLayer, LayerStateMask};
 // Re-export I/O types
 pub use io::dxf::{DxfReader, DxfReaderConfiguration, DxfWriter};
 pub use io::dwg::{DwgReader, DwgReadOptions, DwgWriter};
+pub use io::read::{
+    push_read_diagnostic, ReadDiagnostic, ReadOutcome, ReadStage, ReadStats, SourceFormat,
+    MAX_READ_DIAGNOSTICS,
+};
 
 // Re-export ACIS types
 pub use entities::acis::{SatDocument, SatHeader, SatVersion, SatRecord, SatPointer, SatToken};

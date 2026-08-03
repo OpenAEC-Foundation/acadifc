@@ -42,6 +42,21 @@ use crate::io::dwg::decompressor_ac18::decompress_ac18;
 use crate::io::dwg::decompressor_ac21::decompress_ac21;
 use crate::io::dwg::checksum::{apply_mask, apply_magic_sequence};
 use crate::io::dwg::parallel::{map_ordered, worker_count};
+use crate::io::read::{push_read_diagnostic, ReadDiagnostic, ReadStage, SourceFormat};
+
+fn report_read_error(
+    notifications: &mut NotificationCollection,
+    diagnostics: &mut Vec<ReadDiagnostic>,
+    code: &str,
+    stage: ReadStage,
+    section: Option<&str>,
+    message: String,
+) {
+    notifications.notify(NotificationType::Error, message.clone());
+    let mut diagnostic = ReadDiagnostic::new(code, stage, message);
+    diagnostic.section = section.map(str::to_owned);
+    push_read_diagnostic(diagnostics, diagnostic);
+}
 
 /// AC1021 file header offset (data pages start after this)
 const AC21_FILE_HEADER_SIZE: u64 = 0x480;
@@ -775,9 +790,17 @@ impl<R: Read + Seek> DwgReader<R> {
     /// In failsafe mode, file-header errors are caught and a partial
     /// document is returned instead of propagating the error.
     pub fn read(&mut self) -> std::result::Result<crate::document::CadDocument, DxfError> {
+        self.read_with_stats().map(|outcome| outcome.document)
+    }
+
+    /// Read the file and return the document with source/decode statistics.
+    pub fn read_with_stats(
+        &mut self,
+    ) -> std::result::Result<crate::io::read::ReadOutcome, DxfError> {
         let failsafe = self.options.failsafe;
         let perf = std::env::var_os("PERF").is_some();
         let total_started = web_time::Instant::now();
+        let mut diagnostics = Vec::new();
         self.report_progress(0);
 
         // 1. Read the DWG file header and section map
@@ -785,13 +808,29 @@ impl<R: Read + Seek> DwgReader<R> {
         let info = match self.read_file_header() {
             Ok(info) => info,
             Err(e) if failsafe => {
-                self.notifications.notify(
-                    NotificationType::Error,
+                report_read_error(
+                    &mut self.notifications,
+                    &mut diagnostics,
+                    "file-header-read-failed",
+                    ReadStage::FileHeader,
+                    None,
                     format!("Failsafe: file header read failed, returning partial document: {}", e),
                 );
                 let mut doc = crate::document::CadDocument::default();
                 doc.notifications.extend(std::mem::take(&mut self.notifications));
-                return Ok(doc);
+                let stats = crate::io::read::ReadStats::from_document(
+                    &doc,
+                    SourceFormat::Dwg,
+                    0,
+                    0,
+                    0,
+                    0,
+                    false,
+                    true,
+                    false,
+                    diagnostics,
+                );
+                return Ok(crate::io::read::ReadOutcome::new(doc, stats));
             }
             Err(e) => return Err(e),
         };
@@ -811,44 +850,71 @@ impl<R: Read + Seek> DwgReader<R> {
         document.dwg_source_version = Some(dxf_version);
 
         // 2. Read Classes (AcDb:Classes)
-        if let Ok(classes_buf) = self.get_section_buffer("AcDb:Classes", &info) {
-            match crate::io::dwg::dwg_stream_readers::classes_reader::read_classes_with_encoding(
+        match self.get_section_buffer("AcDb:Classes", &info) {
+            Ok(classes_buf) => match crate::io::dwg::dwg_stream_readers::classes_reader::read_classes_with_encoding(
                 &classes_buf,
                 dxf_version,
                 info.acad_maintenance_version,
                 crate::io::dxf::code_page::encoding_from_dwg_code_page(info.code_page),
             ) {
                 Ok(classes) => document.classes = classes,
-                Err(e) => self.notifications.notify(
-                    NotificationType::Warning,
+                Err(e) => report_read_error(
+                    &mut self.notifications,
+                    &mut diagnostics,
+                    "classes-decode-failed",
+                    ReadStage::Classes,
+                    Some("AcDb:Classes"),
                     format!("Failed to read classes: {}", e),
                 ),
-            }
+            },
+            Err(e) => report_read_error(
+                &mut self.notifications,
+                &mut diagnostics,
+                "classes-extract-failed",
+                ReadStage::Classes,
+                Some("AcDb:Classes"),
+                format!("Failed to extract classes section: {}", e),
+            ),
         }
         self.report_progress(30);
 
         // 3. Read Header Variables (AcDb:Header)
-        if let Ok(header_buf) = self.get_section_buffer("AcDb:Header", &info) {
-            match crate::io::dwg::dwg_stream_readers::header_reader::read_header_with_encoding(
+        match self.get_section_buffer("AcDb:Header", &info) {
+            Ok(header_buf) => match crate::io::dwg::dwg_stream_readers::header_reader::read_header_with_encoding(
                 &header_buf,
                 dxf_version,
                 info.acad_maintenance_version,
                 crate::io::dxf::code_page::encoding_from_dwg_code_page(info.code_page),
             ) {
                 Ok(header_vars) => document.header = header_vars,
-                Err(e) => self.notifications.notify(
-                    NotificationType::Warning,
+                Err(e) => report_read_error(
+                    &mut self.notifications,
+                    &mut diagnostics,
+                    "header-decode-failed",
+                    ReadStage::Header,
+                    Some("AcDb:Header"),
                     format!("Failed to read header: {}", e),
                 ),
-            }
+            },
+            Err(e) => report_read_error(
+                &mut self.notifications,
+                &mut diagnostics,
+                "header-extract-failed",
+                ReadStage::Header,
+                Some("AcDb:Header"),
+                format!("Failed to extract header section: {}", e),
+            ),
         }
         document.header.code_page =
             crate::io::dxf::code_page::dwg_code_page_name(info.code_page).to_string();
         self.report_progress(40);
 
         // 4. Read Handle Map (AcDb:Handles)
-        let handle_map = if let Ok(handle_buf) = self.get_section_buffer("AcDb:Handles", &info) {
-            match crate::io::dwg::dwg_stream_readers::handle_reader::read_handles(&handle_buf) {
+        let mut handles_section_read = false;
+        let handle_map = match self.get_section_buffer("AcDb:Handles", &info) {
+            Ok(handle_buf) => {
+                handles_section_read = true;
+                match crate::io::dwg::dwg_stream_readers::handle_reader::read_handles(&handle_buf) {
                 Ok(mut hm) => {
                     // AC15: Handle offsets are absolute file positions.
                     // Convert to buffer-relative by subtracting the objects
@@ -862,43 +928,80 @@ impl<R: Read + Seek> DwgReader<R> {
                     hm
                 },
                 Err(e) => {
-                    self.notifications.notify(
-                        NotificationType::Warning,
+                    report_read_error(
+                        &mut self.notifications,
+                        &mut diagnostics,
+                        "handles-decode-failed",
+                        ReadStage::Handles,
+                        Some("AcDb:Handles"),
                         format!("Failed to read handles: {}", e),
                     );
                     std::collections::HashMap::new()
                 }
+                }
             }
-        } else {
-            std::collections::HashMap::new()
+            Err(e) => {
+                report_read_error(
+                    &mut self.notifications,
+                    &mut diagnostics,
+                    "handles-extract-failed",
+                    ReadStage::Handles,
+                    Some("AcDb:Handles"),
+                    format!("Failed to extract handles section: {}", e),
+                );
+                std::collections::HashMap::new()
+            }
         };
         self.report_progress(50);
 
         // 5. Read Objects (AcDb:AcDbObjects) and build document
         let handle_count = handle_map.len();
+        let mut objects_section_read = false;
+        let mut record_stream_read = false;
+        let mut decoded_source_records = 0usize;
+        let mut skipped_source_records = 0usize;
         let objects_started = web_time::Instant::now();
         if !handle_map.is_empty() {
-            if let Ok(objects_buf) = self.get_section_buffer("AcDb:AcDbObjects", &info) {
-                match crate::io::dwg::dwg_stream_readers::object_reader::DwgObjectReader::with_encoding(
+            match self.get_section_buffer("AcDb:AcDbObjects", &info) {
+                Ok(objects_buf) => {
+                    objects_section_read = true;
+                    match crate::io::dwg::dwg_stream_readers::object_reader::DwgObjectReader::with_encoding(
                     objects_buf,
                     dxf_version,
                     handle_map,
                     crate::io::dxf::code_page::encoding_from_dwg_code_page(info.code_page),
                 ) {
                     Ok(obj_reader) => {
+                        record_stream_read = true;
                         let mut builder = crate::io::dwg::dwg_document_builder::DwgDocumentBuilder::new(obj_reader);
                         builder.set_failsafe(failsafe);
                         if let Some(progress) = &self.progress {
                             builder.set_progress_callback(progress.clone());
                         }
-                        let build_notifications = builder.build(&mut document);
-                        self.notifications.extend(build_notifications);
+                        let build_outcome = builder.build_with_stats(&mut document);
+                        decoded_source_records = build_outcome.decoded_records;
+                        skipped_source_records = build_outcome.skipped_records;
+                        diagnostics.extend(build_outcome.diagnostics);
+                        self.notifications.extend(build_outcome.notifications);
                     },
-                    Err(e) => self.notifications.notify(
-                        NotificationType::Warning,
+                    Err(e) => report_read_error(
+                        &mut self.notifications,
+                        &mut diagnostics,
+                        "objects-init-failed",
+                        ReadStage::Objects,
+                        Some("AcDb:AcDbObjects"),
                         format!("Failed to init object reader: {}", e),
                     ),
+                    }
                 }
+                Err(e) => report_read_error(
+                    &mut self.notifications,
+                    &mut diagnostics,
+                    "objects-extract-failed",
+                    ReadStage::Objects,
+                    Some("AcDb:AcDbObjects"),
+                    format!("Failed to extract objects section: {}", e),
+                ),
             }
         }
         self.report_progress(930);
@@ -1035,7 +1138,21 @@ impl<R: Read + Seek> DwgReader<R> {
             );
         }
         self.report_progress(1000);
-        Ok(document)
+        let source_sections = usize::from(handles_section_read)
+            .saturating_add(usize::from(objects_section_read));
+        let stats = crate::io::read::ReadStats::from_document(
+            &document,
+            SourceFormat::Dwg,
+            source_sections,
+            handle_count,
+            decoded_source_records,
+            skipped_source_records,
+            record_stream_read,
+            failsafe,
+            true,
+            diagnostics,
+        );
+        Ok(crate::io::read::ReadOutcome::new(document, stats))
     }
 
     /// Read the file header and extract all CRC values.

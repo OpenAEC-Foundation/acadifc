@@ -14,7 +14,8 @@ use section_reader::SectionReader;
 use crate::document::CadDocument;
 use crate::entities::solid3d::AcisVersion;
 use crate::entities::EntityType;
-use crate::error::Result;
+use crate::error::{DxfError, Result};
+use crate::io::read::{push_read_diagnostic, ReadDiagnostic, ReadStage, SourceFormat};
 use crate::types::Handle;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek};
@@ -137,8 +138,29 @@ impl DxfReader {
         self
     }
 
+    fn read_diagnostic(
+        &self,
+        code: impl Into<String>,
+        stage: ReadStage,
+        message: impl Into<String>,
+    ) -> ReadDiagnostic {
+        let context = self.reader.diagnostic_context();
+        let mut diagnostic = ReadDiagnostic::new(code, stage, message);
+        diagnostic.source_offset = context.source_offset;
+        diagnostic.source_offset_basis = Some("file-byte".to_string());
+        diagnostic.source_line = context.source_line;
+        diagnostic.record_handle = context.record_handle;
+        diagnostic.record_type = context.record_type;
+        diagnostic
+    }
+
     /// Read a DXF file and return a CadDocument
-    pub fn read(mut self) -> Result<CadDocument> {
+    pub fn read(self) -> Result<CadDocument> {
+        self.read_with_stats().map(|outcome| outcome.document)
+    }
+
+    /// Read a DXF file and return the document with source/decode statistics.
+    pub fn read_with_stats(mut self) -> Result<crate::io::read::ReadOutcome> {
         // Set default encoding if provided
         if let Some(ref encoding_name) = self.config.default_encoding {
             if let Some(enc) = crate::io::dxf::code_page::encoding_from_code_page(encoding_name) {
@@ -153,20 +175,114 @@ impl DxfReader {
         
         // Read all sections
         let failsafe = self.config.failsafe;
+        let mut source_sections = 0usize;
+        let mut source_records = 0usize;
+        let mut decoded_source_records = 0usize;
+        let mut skipped_source_records = 0usize;
+        let mut record_stream_read = false;
+        let mut stream_completed = false;
+        let mut diagnostics = Vec::new();
 
-        while let Some(pair) = self.reader.read_pair()? {
+        loop {
+            let pair = match self.reader.read_pair() {
+                Ok(Some(pair)) => pair,
+                Ok(None) if failsafe && decoded_source_records > 0 => {
+                    let message = "Drawing stream ended before the EOF marker".to_string();
+                    document.notifications.notify(
+                        crate::notification::NotificationType::Error,
+                        message.clone(),
+                    );
+                    push_read_diagnostic(&mut diagnostics, self.read_diagnostic(
+                        "stream-ended-early",
+                        ReadStage::RecordStream,
+                        message,
+                    ));
+                    break;
+                }
+                Ok(None) => {
+                    return Err(DxfError::Parse(
+                        "drawing stream ended before the EOF marker".to_string(),
+                    ));
+                }
+                Err(error) if failsafe && decoded_source_records > 0 => {
+                    let message = format!("Error reading drawing stream: {}", error);
+                    document.notifications.notify(
+                        crate::notification::NotificationType::Error,
+                        message.clone(),
+                    );
+                    push_read_diagnostic(&mut diagnostics, self.read_diagnostic(
+                        "stream-read-failed",
+                        ReadStage::RecordStream,
+                        message,
+                    ));
+                    break;
+                }
+                Err(error) => return Err(error),
+            };
             if pair.code == 0 && pair.value_string == "SECTION" {
                 // Read section name
-                if let Some(section_pair) = self.reader.read_pair()? {
+                let section_pair = match self.reader.read_pair() {
+                    Ok(Some(section_pair)) => Some(section_pair),
+                    Ok(None) if failsafe && decoded_source_records > 0 => {
+                        let message = "Drawing stream ended before the section name".to_string();
+                        document.notifications.notify(
+                            crate::notification::NotificationType::Error,
+                            message.clone(),
+                        );
+                        push_read_diagnostic(&mut diagnostics, self.read_diagnostic(
+                            "section-name-missing",
+                            ReadStage::Section,
+                            message,
+                        ));
+                        break;
+                    }
+                    Ok(None) => {
+                        return Err(DxfError::Parse(
+                            "drawing stream ended before the section name".to_string(),
+                        ));
+                    }
+                    Err(error) if failsafe && decoded_source_records > 0 => {
+                        let message = format!("Error reading section name: {}", error);
+                        document.notifications.notify(
+                            crate::notification::NotificationType::Error,
+                            message.clone(),
+                        );
+                        push_read_diagnostic(&mut diagnostics, self.read_diagnostic(
+                            "section-name-read-failed",
+                            ReadStage::Section,
+                            message,
+                        ));
+                        break;
+                    }
+                    Err(error) => return Err(error),
+                };
+                if let Some(section_pair) = section_pair {
                     if section_pair.code == 2 {
                         let section_name = section_pair.value_string.clone();
+                        let carries_records = matches!(
+                            section_name.as_str(),
+                            "TABLES" | "BLOCKS" | "ENTITIES" | "OBJECTS" | "ACDSDATA"
+                        );
+                        let decoded_before = decoded_source_records;
                         let result = match section_name.as_str() {
                             "HEADER" => self.read_header_section(&mut document),
                             "CLASSES" => self.read_classes_section(&mut document),
-                            "TABLES" => self.read_tables_section(&mut document),
-                            "BLOCKS" => self.read_blocks_section(&mut document),
-                            "ENTITIES" => self.read_entities_section(&mut document),
-                            "OBJECTS" => self.read_objects_section(&mut document),
+                            "TABLES" => self.read_tables_section(
+                                &mut document,
+                                &mut decoded_source_records,
+                            ),
+                            "BLOCKS" => self.read_blocks_section(
+                                &mut document,
+                                &mut decoded_source_records,
+                            ),
+                            "ENTITIES" => self.read_entities_section(
+                                &mut document,
+                                &mut decoded_source_records,
+                            ),
+                            "OBJECTS" => self.read_objects_section(
+                                &mut document,
+                                &mut decoded_source_records,
+                            ),
                             "ACDSDATA" => self.read_acdsdata_section(&mut document),
                             "THUMBNAILIMAGE" => {
                                 document.notifications.notify(
@@ -181,13 +297,31 @@ impl DxfReader {
                             }
                         };
 
+                        if carries_records {
+                            source_sections = source_sections.saturating_add(1);
+                            record_stream_read = true;
+                            let decoded =
+                                decoded_source_records.saturating_sub(decoded_before);
+                            source_records = source_records.saturating_add(decoded);
+                        }
+
                         // In failsafe mode, catch errors and continue
                         if let Err(e) = result {
                             if failsafe {
+                                let message = format!("Error reading {} section: {}", section_name, e);
                                 document.notifications.notify(
                                     crate::notification::NotificationType::Error,
-                                    format!("Error reading {} section: {}", section_name, e),
+                                    message.clone(),
                                 );
+                                let mut diagnostic = self.read_diagnostic(
+                                    "section-read-failed",
+                                    ReadStage::Section,
+                                    message,
+                                );
+                                diagnostic.section = Some(section_name.clone());
+                                push_read_diagnostic(&mut diagnostics, diagnostic);
+                                skipped_source_records =
+                                    skipped_source_records.saturating_add(1);
                                 // Try to skip to the end of the section
                                 let _ = self.skip_section();
                             } else {
@@ -197,6 +331,7 @@ impl DxfReader {
                     }
                 }
             } else if pair.code == 0 && pair.value_string == "EOF" {
+                stream_completed = true;
                 break;
             }
         }
@@ -217,7 +352,20 @@ impl DxfReader {
             crate::io::dwg::dwg_reader::recover_mtext_bg_roundtrip(&mut document);
         }
 
-        Ok(document)
+        source_records = source_records.saturating_add(skipped_source_records);
+        let stats = crate::io::read::ReadStats::from_document(
+            &document,
+            SourceFormat::Dxf,
+            source_sections,
+            source_records,
+            decoded_source_records,
+            skipped_source_records,
+            record_stream_read,
+            failsafe,
+            stream_completed,
+            diagnostics,
+        );
+        Ok(crate::io::read::ReadOutcome::new(document, stats))
     }
     
     /// Read the HEADER section
@@ -233,27 +381,51 @@ impl DxfReader {
     }
 
     /// Read the TABLES section
-    fn read_tables_section(&mut self, document: &mut CadDocument) -> Result<()> {
+    fn read_tables_section(
+        &mut self,
+        document: &mut CadDocument,
+        decoded_records: &mut usize,
+    ) -> Result<()> {
         let mut section_reader = SectionReader::new(&mut self.reader);
-        section_reader.read_tables(document)
+        let result = section_reader.read_tables(document);
+        *decoded_records = decoded_records.saturating_add(section_reader.decoded_records());
+        result
     }
 
     /// Read the BLOCKS section
-    fn read_blocks_section(&mut self, document: &mut CadDocument) -> Result<()> {
+    fn read_blocks_section(
+        &mut self,
+        document: &mut CadDocument,
+        decoded_records: &mut usize,
+    ) -> Result<()> {
         let mut section_reader = SectionReader::new(&mut self.reader);
-        section_reader.read_blocks(document)
+        let result = section_reader.read_blocks(document);
+        *decoded_records = decoded_records.saturating_add(section_reader.decoded_records());
+        result
     }
 
     /// Read the ENTITIES section
-    fn read_entities_section(&mut self, document: &mut CadDocument) -> Result<()> {
+    fn read_entities_section(
+        &mut self,
+        document: &mut CadDocument,
+        decoded_records: &mut usize,
+    ) -> Result<()> {
         let mut section_reader = SectionReader::new(&mut self.reader);
-        section_reader.read_entities(document)
+        let result = section_reader.read_entities(document);
+        *decoded_records = decoded_records.saturating_add(section_reader.decoded_records());
+        result
     }
 
     /// Read the OBJECTS section
-    fn read_objects_section(&mut self, document: &mut CadDocument) -> Result<()> {
+    fn read_objects_section(
+        &mut self,
+        document: &mut CadDocument,
+        decoded_records: &mut usize,
+    ) -> Result<()> {
         let mut section_reader = SectionReader::new(&mut self.reader);
-        section_reader.read_objects(document)
+        let result = section_reader.read_objects(document);
+        *decoded_records = decoded_records.saturating_add(section_reader.decoded_records());
+        result
     }
     
     /// Read the ACDSDATA section (the AcDb data store).
