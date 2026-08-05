@@ -1,5 +1,6 @@
 use super::{CanonicalizationError, CanonicalizationErrorCode};
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 
 /// A value in the language-neutral IFCCAD canonicalization domain.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -9,6 +10,8 @@ pub enum CanonicalValue {
     Integer(String),
     Float(String),
     String(String),
+    Sequence(Vec<CanonicalValue>),
+    Mapping(BTreeMap<String, CanonicalValue>),
 }
 
 pub fn canonicalize(value: &CanonicalValue) -> Result<Vec<u8>, CanonicalizationError> {
@@ -39,6 +42,27 @@ fn normalize(value: &CanonicalValue) -> Result<Value, CanonicalizationError> {
             Ok(object("float", Some(Value::String(value.clone()))))
         }
         CanonicalValue::String(value) => Ok(object("string", Some(Value::String(value.clone())))),
+        CanonicalValue::Sequence(values) => Ok(object(
+            "sequence",
+            Some(Value::Array(
+                values
+                    .iter()
+                    .map(normalize)
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
+        )),
+        CanonicalValue::Mapping(values) => {
+            let entries = values
+                .iter()
+                .map(|(key, value)| {
+                    Ok(Value::Array(vec![
+                        Value::String(key.clone()),
+                        normalize(value)?,
+                    ]))
+                })
+                .collect::<Result<Vec<_>, CanonicalizationError>>()?;
+            Ok(object("mapping", Some(Value::Array(entries))))
+        }
     }
 }
 
