@@ -1,6 +1,7 @@
 #![cfg(feature = "ifccad")]
 
 use acadrust::ifccad::canonicalization::{canonicalize, canonicalize_typed_value, CanonicalValue};
+use acadrust::ifccad::conformance::{bundled_conformance_root, verify_canonicalization_vectors};
 use serde_json::json;
 
 #[test]
@@ -168,4 +169,14 @@ fn rejects_malformed_typed_values_with_stable_codes() {
         let error = canonicalize_typed_value(&value).expect_err("malformed typed value");
         assert_eq!(error.code().as_str(), expected_code);
     }
+}
+
+#[test]
+fn verifies_every_bundled_canonicalization_vector() {
+    let path = bundled_conformance_root()
+        .join("vectors")
+        .join("canonicalization.json");
+    let verified = verify_canonicalization_vectors(path).expect("canonicalization vectors");
+
+    assert_eq!(verified, 23);
 }

@@ -1,10 +1,12 @@
 //! Language-neutral IFCCAD conformance support.
 
+mod canonicalization;
 mod error;
 mod manifest;
 
 use std::path::PathBuf;
 
+pub use canonicalization::verify_canonicalization_vectors;
 pub use error::ConformanceError;
 pub use manifest::{
     load_conformance_manifest, parse_conformance_manifest, ConformanceCase, ConformanceCategory,
