@@ -141,6 +141,9 @@ pub mod xdata;
 pub mod objects;
 pub mod fields;
 
+#[cfg(feature = "ifccad")]
+pub mod ifccad;
+
 // Re-export commonly used types
 pub use error::{DxfError, Result};
 pub use types::{
