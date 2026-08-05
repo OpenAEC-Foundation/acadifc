@@ -2,6 +2,7 @@ use super::{ConformanceError, BUNDLED_CONFORMANCE_VERSION};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,6 +145,44 @@ pub fn parse_conformance_manifest(
         suite_version: raw.suite_version,
         cases,
     })
+}
+
+pub fn load_conformance_manifest(
+    root: impl AsRef<Path>,
+) -> Result<ConformanceManifest, ConformanceError> {
+    let root = root.as_ref();
+    let manifest_path = root.join("manifest.json");
+    let source = fs::read_to_string(&manifest_path).map_err(|source| ConformanceError::Io {
+        path: manifest_path.clone(),
+        source,
+    })?;
+    let manifest = parse_conformance_manifest(&source, &manifest_path)?;
+    let canonical_root = fs::canonicalize(root).map_err(|source| ConformanceError::Io {
+        path: root.to_path_buf(),
+        source,
+    })?;
+
+    for case in &manifest.cases {
+        let target = root.join(&case.entrypoint);
+        if !target.is_file() {
+            return Err(ConformanceError::MissingEntrypoint {
+                case_id: case.case_id.clone(),
+                path: target,
+            });
+        }
+        let canonical_target =
+            fs::canonicalize(&target).map_err(|source| ConformanceError::Io {
+                path: target.clone(),
+                source,
+            })?;
+        if !canonical_target.starts_with(&canonical_root) {
+            return Err(ConformanceError::UnsafeEntrypoint {
+                case_id: case.case_id.clone(),
+                entrypoint: case.entrypoint.clone(),
+            });
+        }
+    }
+    Ok(manifest)
 }
 
 fn valid_case_id(value: &str) -> bool {

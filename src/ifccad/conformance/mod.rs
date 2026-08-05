@@ -7,8 +7,8 @@ use std::path::PathBuf;
 
 pub use error::ConformanceError;
 pub use manifest::{
-    parse_conformance_manifest, ConformanceCase, ConformanceCategory, ConformanceManifest,
-    ConformanceOperation, ConformanceOperationName, ExpectedOutcome,
+    load_conformance_manifest, parse_conformance_manifest, ConformanceCase, ConformanceCategory,
+    ConformanceManifest, ConformanceOperation, ConformanceOperationName, ExpectedOutcome,
 };
 
 /// Version of the conformance test collection bundled with this crate.
