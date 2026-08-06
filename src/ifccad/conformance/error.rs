@@ -32,4 +32,6 @@ pub enum ConformanceError {
     UnsafeEntrypoint { case_id: String, entrypoint: String },
     #[error("case {case_id} entrypoint is missing: {path}")]
     MissingEntrypoint { case_id: String, path: PathBuf },
+    #[error("canonicalization vector {vector_id} does not match: {message}")]
+    VectorMismatch { vector_id: String, message: String },
 }
