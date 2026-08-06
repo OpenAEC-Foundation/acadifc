@@ -393,8 +393,8 @@ mod tests {
             .is_none());
         let report = loader.into_report();
 
-        assert_eq!(report.diagnostics.len(), 1);
-        let diagnostic = &report.diagnostics[0];
+        assert_eq!(report.len(), 1);
+        let diagnostic = &report.diagnostics()[0];
         assert_eq!(diagnostic.code, IFCCAD_PACKAGE_ENTRYPOINT_MISSING);
         assert_eq!(diagnostic.severity, PackageDiagnosticSeverity::Error);
         assert_eq!(diagnostic.resource_uri.as_deref(), Some(PACKAGE_ENTRYPOINT));
@@ -420,8 +420,8 @@ mod tests {
             .is_none());
         let report = loader.into_report();
 
-        assert_eq!(report.diagnostics.len(), 1);
-        let diagnostic = &report.diagnostics[0];
+        assert_eq!(report.len(), 1);
+        let diagnostic = &report.diagnostics()[0];
         assert_eq!(diagnostic.code, IFCCAD_PACKAGE_JSON_INVALID);
         assert_eq!(diagnostic.severity, PackageDiagnosticSeverity::Error);
         assert_eq!(diagnostic.resource_uri.as_deref(), Some(PACKAGE_ENTRYPOINT));
@@ -449,8 +449,8 @@ mod tests {
             .is_none());
         let report = loader.into_report();
 
-        assert_eq!(report.diagnostics.len(), 1);
-        let diagnostic = &report.diagnostics[0];
+        assert_eq!(report.len(), 1);
+        let diagnostic = &report.diagnostics()[0];
         assert_eq!(diagnostic.code, IFCCAD_PACKAGE_PATH_INVALID);
         assert_eq!(diagnostic.resource_uri, None);
         assert_eq!(diagnostic.location.as_deref(), Some(location));
@@ -475,8 +475,8 @@ mod tests {
             .is_none());
         let report = loader.into_report();
 
-        assert_eq!(report.diagnostics.len(), 1);
-        let diagnostic = &report.diagnostics[0];
+        assert_eq!(report.len(), 1);
+        let diagnostic = &report.diagnostics()[0];
         assert_eq!(diagnostic.code, IFCCAD_PACKAGE_RESOURCE_MISSING);
         assert_eq!(diagnostic.resource_uri.as_deref(), Some("missing.json"));
         assert_eq!(diagnostic.location.as_deref(), Some(location));
@@ -501,8 +501,11 @@ mod tests {
             .is_none());
         let report = loader.into_report();
 
-        assert_eq!(report.diagnostics.len(), 1);
-        assert_eq!(report.diagnostics[0].code, IFCCAD_PACKAGE_RESOURCE_MISSING);
+        assert_eq!(report.len(), 1);
+        assert_eq!(
+            report.diagnostics()[0].code,
+            IFCCAD_PACKAGE_RESOURCE_MISSING
+        );
     }
 
     #[test]
@@ -523,8 +526,8 @@ mod tests {
             .is_none());
         let report = loader.into_report();
 
-        assert_eq!(report.diagnostics.len(), 1);
-        let diagnostic = &report.diagnostics[0];
+        assert_eq!(report.len(), 1);
+        let diagnostic = &report.diagnostics()[0];
         assert_eq!(diagnostic.code, IFCCAD_PACKAGE_RESOURCE_LIMIT_EXCEEDED);
         assert_eq!(
             diagnostic.context.get("limit"),
@@ -554,8 +557,8 @@ mod tests {
             .is_none());
         let report = loader.into_report();
 
-        assert_eq!(report.diagnostics.len(), 1);
-        let diagnostic = &report.diagnostics[0];
+        assert_eq!(report.len(), 1);
+        let diagnostic = &report.diagnostics()[0];
         assert_eq!(diagnostic.code, IFCCAD_PACKAGE_TOTAL_LIMIT_EXCEEDED);
         assert_eq!(
             diagnostic.context.get("limit"),

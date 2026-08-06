@@ -50,7 +50,7 @@ pub struct PackageDiagnostic {
 #[serde(rename_all = "camelCase")]
 pub struct PackageValidationReport {
     /// Diagnostics ordered by resource, location, severity, code, and context.
-    pub diagnostics: Vec<PackageDiagnostic>,
+    diagnostics: Vec<PackageDiagnostic>,
 }
 
 impl PackageValidationReport {
@@ -66,6 +66,31 @@ impl PackageValidationReport {
             .diagnostics
             .iter()
             .any(|item| item.severity == PackageDiagnosticSeverity::Error)
+    }
+
+    /// Returns the deterministically ordered diagnostics.
+    pub fn diagnostics(&self) -> &[PackageDiagnostic] {
+        &self.diagnostics
+    }
+
+    /// Returns an iterator over the deterministically ordered diagnostics.
+    pub fn iter(&self) -> std::slice::Iter<'_, PackageDiagnostic> {
+        self.diagnostics.iter()
+    }
+
+    /// Returns the number of diagnostics in the report.
+    pub fn len(&self) -> usize {
+        self.diagnostics.len()
+    }
+
+    /// Returns `true` when the report contains no diagnostics.
+    pub fn is_empty(&self) -> bool {
+        self.diagnostics.is_empty()
+    }
+
+    /// Consumes the report and returns its deterministically ordered diagnostics.
+    pub fn into_diagnostics(self) -> Vec<PackageDiagnostic> {
+        self.diagnostics
     }
 }
 
@@ -148,6 +173,39 @@ mod tests {
     }
 
     #[test]
+    fn report_exposes_read_only_collection_access() {
+        let report = PackageValidationReport::from_diagnostics(vec![diagnostic(
+            "TEST_WARNING",
+            PackageDiagnosticSeverity::Warning,
+            None,
+            None,
+        )]);
+
+        assert_eq!(report.len(), 1);
+        assert!(!report.is_empty());
+        assert_eq!(report.diagnostics()[0].code, "TEST_WARNING");
+        assert_eq!(
+            report.iter().next().map(|item| item.code.as_str()),
+            Some("TEST_WARNING")
+        );
+    }
+
+    #[test]
+    fn report_can_be_consumed_into_diagnostics() {
+        let report = PackageValidationReport::from_diagnostics(vec![diagnostic(
+            "TEST_WARNING",
+            PackageDiagnosticSeverity::Warning,
+            None,
+            None,
+        )]);
+
+        let diagnostics = report.into_diagnostics();
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, "TEST_WARNING");
+    }
+
+    #[test]
     fn diagnostics_are_sorted_by_the_language_neutral_contract() {
         let report = PackageValidationReport::from_diagnostics(vec![
             diagnostic(
@@ -170,11 +228,7 @@ mod tests {
             ),
         ]);
 
-        let codes: Vec<_> = report
-            .diagnostics
-            .iter()
-            .map(|item| item.code.as_str())
-            .collect();
+        let codes: Vec<_> = report.iter().map(|item| item.code.as_str()).collect();
         assert_eq!(codes, ["A", "B", "Z"]);
     }
 
@@ -195,7 +249,7 @@ mod tests {
             ),
         ]);
 
-        assert_eq!(report.diagnostics[0].code, "Z");
+        assert_eq!(report.diagnostics()[0].code, "Z");
     }
 
     #[test]
@@ -215,7 +269,7 @@ mod tests {
             ),
         ]);
 
-        assert_eq!(report.diagnostics[0].code, "Z");
+        assert_eq!(report.diagnostics()[0].code, "Z");
     }
 
     #[test]
@@ -235,7 +289,7 @@ mod tests {
             ),
         ]);
 
-        assert_eq!(report.diagnostics[0].code, "Z");
+        assert_eq!(report.diagnostics()[0].code, "Z");
     }
 
     #[test]
@@ -255,7 +309,7 @@ mod tests {
             ),
         ]);
 
-        assert_eq!(report.diagnostics[0].code, "A");
+        assert_eq!(report.diagnostics()[0].code, "A");
     }
 
     #[test]
@@ -284,6 +338,6 @@ mod tests {
             diagnostic_with_context("SAME", earlier_context.clone()),
         ]);
 
-        assert_eq!(report.diagnostics[0].context, earlier_context);
+        assert_eq!(report.diagnostics()[0].context, earlier_context);
     }
 }
