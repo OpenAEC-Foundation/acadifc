@@ -29,6 +29,24 @@ fn files_below(root: &Path) -> Vec<PathBuf> {
     values
 }
 
+fn repository_git_dir(repository: &Path) -> Option<PathBuf> {
+    let dot_git = repository.join(".git");
+    if dot_git.is_dir() {
+        return Some(dot_git);
+    }
+    let pointer = fs::read_to_string(dot_git).ok()?;
+    resolve_git_dir_pointer(repository, &pointer)
+}
+
+fn resolve_git_dir_pointer(repository: &Path, pointer: &str) -> Option<PathBuf> {
+    let path = PathBuf::from(pointer.strip_prefix("gitdir:")?.trim());
+    Some(if path.is_absolute() {
+        path
+    } else {
+        repository.join(path)
+    })
+}
+
 #[test]
 fn bundled_reference_files_are_complete_and_valid_json() {
     let files = files_below(&bundled_conformance_root());
@@ -75,20 +93,29 @@ fn bundled_reference_includes_contract_schemas_and_provenance() {
 #[test]
 fn git_attributes_preserve_reference_bytes() {
     let repository = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let Some(git_dir) = repository_git_dir(repository) else {
+        eprintln!("Skipping git attribute check: source is not a Git work tree");
+        return;
+    };
     let output = Command::new("git")
         .args([
-            format!("--git-dir={}", repository.join(".git").display()),
+            format!("--git-dir={}", git_dir.display()),
             format!("--work-tree={}", repository.display()),
-            "check-attr".to_owned(),
-            "text".to_owned(),
-            "eol".to_owned(),
-            "binary".to_owned(),
-            "--".to_owned(),
-            "conformance/ifccad/1.0.0/manifest.json".to_owned(),
-            "conformance/ifccad/1.0.0/packages/valid/source-archive/blobs/fb357f76fddbb1178d0ebb2a6497d9c4929e7b04088729548c03ec578567f044".to_owned(),
         ])
-        .output()
-        .expect("run git check-attr");
+        .args([
+            "check-attr",
+            "text",
+            "eol",
+            "binary",
+            "--",
+            "conformance/ifccad/1.0.0/manifest.json",
+            "conformance/ifccad/1.0.0/packages/valid/source-archive/blobs/fb357f76fddbb1178d0ebb2a6497d9c4929e7b04088729548c03ec578567f044",
+        ])
+        .output();
+    let Ok(output) = output else {
+        eprintln!("Skipping git attribute check: git is not available");
+        return;
+    };
 
     assert!(output.status.success(), "git check-attr failed");
     let attributes = String::from_utf8(output.stdout).expect("Git attribute output is UTF-8");
@@ -98,4 +125,20 @@ fn git_attributes_preserve_reference_bytes() {
         .contains("fb357f76fddbb1178d0ebb2a6497d9c4929e7b04088729548c03ec578567f044: binary: set"));
     assert!(attributes
         .contains("fb357f76fddbb1178d0ebb2a6497d9c4929e7b04088729548c03ec578567f044: text: unset"));
+}
+
+#[test]
+fn resolves_linked_worktree_git_directory_pointer() {
+    let repository = Path::new("C:/workspace/acadifc");
+    let actual = resolve_git_dir_pointer(
+        repository,
+        "gitdir: C:/workspace/acadifc-meta/worktrees/fingerprints\n",
+    );
+
+    assert_eq!(
+        actual,
+        Some(PathBuf::from(
+            "C:/workspace/acadifc-meta/worktrees/fingerprints"
+        ))
+    );
 }
