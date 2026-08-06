@@ -2,12 +2,14 @@
 
 mod canonicalization;
 mod error;
+mod fingerprints;
 mod manifest;
 
 use std::path::PathBuf;
 
 pub use canonicalization::verify_canonicalization_vectors;
 pub use error::ConformanceError;
+pub use fingerprints::verify_fingerprint_vectors;
 pub use manifest::{
     load_conformance_manifest, parse_conformance_manifest, ConformanceCase, ConformanceCategory,
     ConformanceManifest, ConformanceOperation, ConformanceOperationName, ExpectedOutcome,
