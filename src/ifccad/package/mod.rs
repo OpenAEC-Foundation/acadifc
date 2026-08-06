@@ -1,6 +1,9 @@
 mod codes;
 mod diagnostic;
 mod error;
+// Composed by the public validator in the follow-up package-validation change.
+#[allow(dead_code)]
+mod loader;
 mod path;
 
 pub use diagnostic::{
