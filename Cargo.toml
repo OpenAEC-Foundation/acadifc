@@ -16,6 +16,7 @@ categories = ["parser-implementations", "encoding"]
 default = []
 serde = ["dep:serde", "bitflags/serde", "indexmap/serde"]
 import = ["dep:quick-xml"]
+ifccad = ["dep:serde", "dep:serde_json"]
 
 [dependencies]
 # Error handling
@@ -41,6 +42,7 @@ encoding_rs = "0.8"
 
 # Serialization (optional)
 serde = { version = "1", features = ["derive", "rc"], optional = true }
+serde_json = { version = "1", optional = true }
 
 # XML parsing (optional, for COLLADA import)
 quick-xml = { version = "0.36", optional = true }
