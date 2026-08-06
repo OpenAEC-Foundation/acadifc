@@ -194,8 +194,26 @@ impl SatParser {
         // purely DXF line-boundary artifacts and can be safely removed.
         let remaining = remaining.replace('\n', "").replace('\r', "");
 
-        // Split by '#' to get individual records
-        let record_texts: Vec<&str> = remaining.split('#').collect();
+        // Split by '#' to get individual records, then heal splits that landed
+        // inside a string.
+        //
+        // Only 7.0+ delimits strings with `@`; before that they are written as
+        // `<len> <chars>`, so the text may legally contain the record
+        // terminator. ODA's builder emits exactly that: `dxid-attrib $-1 $-1 $1
+        // $0 8 STEP Id# 99 <guid> #`. Cutting at the inner `#` invents a record,
+        // which shifts every later record's implied index, so faces end up
+        // pointing at whatever record now sits at their number and the body
+        // meshes to nothing.
+        let mut record_texts: Vec<String> = Vec::new();
+        for piece in remaining.split('#') {
+            if starts_record(piece) || record_texts.is_empty() {
+                record_texts.push(piece.to_string());
+            } else {
+                let previous = record_texts.last_mut().expect("non-empty");
+                previous.push('#');
+                previous.push_str(piece);
+            }
+        }
 
         for record_text in record_texts {
             let trimmed = record_text.trim();
@@ -563,6 +581,45 @@ impl<'a> SatTokenizer<'a> {
 // ============================================================================
 // Helper functions
 // ============================================================================
+
+/// Whether a `#`-delimited fragment opens a new entity record.
+///
+/// Used to tell a real record boundary from a `#` that occurred inside a
+/// pre-7.0 counted string. A record opens with its save identifier — always
+/// alphabetic, e.g. `body`, `plane-surface`, `rgb_color-st-attrib` — optionally
+/// behind a `-<n>` sequence number in 7.0+ files, and the identifier is
+/// followed by the entity's attribute slot, written either as a `$` pointer or
+/// as a bare integer. A string tail matches none of that.
+fn starts_record(fragment: &str) -> bool {
+    let head = fragment.trim_start();
+    // Nothing to glue onto, and the end marker carries no attribute slot.
+    if head.is_empty() || head.starts_with("End-of-") {
+        return true;
+    }
+    let mut rest = head;
+    if let Some(after_sign) = head.strip_prefix('-') {
+        let tail = after_sign.trim_start_matches(|c: char| c.is_ascii_digit());
+        if tail.len() == after_sign.len() || !tail.starts_with(char::is_whitespace) {
+            return false;
+        }
+        rest = tail.trim_start();
+    }
+    let mut tokens = rest.split_whitespace();
+    let Some(identifier) = tokens.next() else {
+        return false;
+    };
+    if !identifier.starts_with(|c: char| c.is_ascii_alphabetic())
+        || !identifier
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return false;
+    }
+    match tokens.next() {
+        Some(slot) => slot.starts_with('$') || slot.parse::<i64>().is_ok(),
+        None => false,
+    }
+}
 
 /// Check if a token looks like a negative index (e.g. "-0", "-1", "-42").
 fn looks_like_negative_index(s: &str) -> bool {
