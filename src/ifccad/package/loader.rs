@@ -310,6 +310,7 @@ fn context<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ifccad::conformance::bundled_conformance_root;
     use crate::ifccad::package::codes::{
         IFCCAD_PACKAGE_ENTRYPOINT_MISSING, IFCCAD_PACKAGE_JSON_INVALID,
         IFCCAD_PACKAGE_PATH_INVALID, IFCCAD_PACKAGE_RESOURCE_LIMIT_EXCEEDED,
@@ -564,5 +565,78 @@ mod tests {
             diagnostic.context.get("observedBytes"),
             Some(&PackageDiagnosticContextValue::Number(4.into()))
         );
+    }
+
+    #[test]
+    fn opens_every_committed_valid_ifcx_entrypoint() {
+        for case in [
+            "minimal-no-preservation",
+            "unrepresented-packed",
+            "source-archive",
+            "generated-snapshot",
+            "multi-drawing-projections",
+        ] {
+            let root = bundled_conformance_root()
+                .join("packages")
+                .join("valid")
+                .join(case);
+            let mut loader = DirectoryPackageLoader::open(root, PackageLoadLimits::default())
+                .expect("open package root");
+
+            let entrypoint = loader
+                .load_entrypoint()
+                .expect("read package entrypoint")
+                .expect("valid package entrypoint");
+
+            assert!(entrypoint.value.get("data").is_some(), "case {case}");
+            assert!(loader.into_report().is_valid(), "case {case}");
+        }
+    }
+
+    #[test]
+    fn loads_known_json_resources_from_committed_packages() {
+        let cases: [(&str, &[&str]); 5] = [
+            ("minimal-no-preservation", &["drawing.ifcdr.json"]),
+            (
+                "unrepresented-packed",
+                &["drawing.ifcdr.json", "preservation.ifcpr.json"],
+            ),
+            (
+                "source-archive",
+                &["drawing.ifcdr.json", "preservation.ifcpr.json"],
+            ),
+            (
+                "generated-snapshot",
+                &["drawing.ifcdr.json", "preservation.ifcpr.json"],
+            ),
+            (
+                "multi-drawing-projections",
+                &[
+                    "drawing.ifcdr.json",
+                    "drawing-b.ifcdr.json",
+                    "preservation.ifcpr.json",
+                ],
+            ),
+        ];
+
+        for (case, resource_uris) in cases {
+            let root = bundled_conformance_root()
+                .join("packages")
+                .join("valid")
+                .join(case);
+            let mut loader = DirectoryPackageLoader::open(root, PackageLoadLimits::default())
+                .expect("open package root");
+
+            for &uri in resource_uris {
+                let resource = loader
+                    .load_json_resource(uri, None)
+                    .expect("read known package resource")
+                    .expect("known package resource");
+                assert_eq!(resource.uri, uri, "case {case}");
+                assert!(resource.value.is_object(), "case {case}, URI {uri}");
+            }
+
+            assert!(loader.into_report().is_valid(), "case {case}");
+        }
     }
 }
