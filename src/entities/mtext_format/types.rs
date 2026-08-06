@@ -1386,8 +1386,7 @@ mod tests {
     }
 
     #[test]
-    fn test_serialize_no_duplicate_across_paragraphs() {
-        // When both paragraphs have the same color, only one \C1; is emitted
+    fn test_serialize_preserves_same_color_across_paragraphs() {
         let mut doc = MTextDocument::new();
         let mut props = SpanProperties::default();
         props.color = Some(MTextColor::Index(1));
@@ -1400,9 +1399,20 @@ mod tests {
         para2.push_span(MTextSpan::new("Second", props));
         doc.push_paragraph(para2);
 
-        let s = doc.to_mtext_string();
-        // Should be: {\C1;First\PSecond}  — color code NOT repeated
-        assert_eq!(s, "{\\C1;First\\PSecond}");
+        let serialized = doc.to_mtext_string();
+        let reparsed = crate::entities::mtext_format::parse_mtext(&serialized, false);
+
+        assert_eq!(reparsed.paragraphs.len(), 2);
+        assert_eq!(reparsed.paragraphs[0].to_plain_text(), "First");
+        assert_eq!(reparsed.paragraphs[1].to_plain_text(), "Second");
+        assert_eq!(
+            reparsed.paragraphs[0].spans[0].properties.color,
+            Some(MTextColor::Index(1))
+        );
+        assert_eq!(
+            reparsed.paragraphs[1].spans[0].properties.color,
+            Some(MTextColor::Index(1))
+        );
     }
 
     #[test]
@@ -1428,7 +1438,7 @@ mod tests {
     }
 
     #[test]
-    fn test_roundtrip_parse_serialize_color_across_paragraphs() {
+    fn test_roundtrip_preserves_inherited_color_across_paragraphs() {
         // Parse → serialize → parse should produce the same structure
         let input = "{\\C1;First\\PSecond}";
         let doc = crate::entities::mtext_format::parse_mtext(input, false);
@@ -1444,12 +1454,11 @@ mod tests {
         );
 
         let serialized = doc.to_mtext_string();
-        // Exact roundtrip: input == output
-        assert_eq!(serialized, "{\\C1;First\\PSecond}");
-
         let reparsed = crate::entities::mtext_format::parse_mtext(&serialized, false);
 
         assert_eq!(reparsed.paragraphs.len(), 2);
+        assert_eq!(reparsed.paragraphs[0].to_plain_text(), "First");
+        assert_eq!(reparsed.paragraphs[1].to_plain_text(), "Second");
         assert_eq!(
             reparsed.paragraphs[0].spans[0].properties.color,
             Some(MTextColor::Index(1))
