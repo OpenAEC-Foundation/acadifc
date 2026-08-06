@@ -1,3 +1,8 @@
+//! Directory-based IFCCAD package foundations.
+//!
+//! Complete package validation is added separately; this module currently
+//! exposes its stable diagnostic vocabulary and entrypoint name.
+
 mod codes;
 mod diagnostic;
 mod error;
