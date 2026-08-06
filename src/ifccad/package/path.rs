@@ -79,6 +79,7 @@ impl PackageRoot {
 fn validate_package_uri(uri: &str) -> Result<(), ResolvePackagePathError> {
     let segments: Vec<_> = uri.split('/').collect();
     let invalid = uri.is_empty()
+        || uri.contains('\0')
         || uri.contains('\\')
         || uri.starts_with('/')
         || segments
@@ -213,6 +214,7 @@ mod tests {
             "dir//file.json",
             "./file.json",
             "dir/../file.json",
+            "nul\0byte.json",
         ] {
             let error = package_root.resolve(uri).expect_err("unsafe URI must fail");
             assert!(

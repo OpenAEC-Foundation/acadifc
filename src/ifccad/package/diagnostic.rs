@@ -179,6 +179,86 @@ mod tests {
     }
 
     #[test]
+    fn resource_uri_is_the_first_diagnostic_sort_key() {
+        let report = PackageValidationReport::from_diagnostics(vec![
+            diagnostic(
+                "A",
+                PackageDiagnosticSeverity::Error,
+                Some("z.json"),
+                Some("/a"),
+            ),
+            diagnostic(
+                "Z",
+                PackageDiagnosticSeverity::Error,
+                Some("a.json"),
+                Some("/z"),
+            ),
+        ]);
+
+        assert_eq!(report.diagnostics[0].code, "Z");
+    }
+
+    #[test]
+    fn location_precedes_severity_and_code_in_diagnostic_sorting() {
+        let report = PackageValidationReport::from_diagnostics(vec![
+            diagnostic(
+                "A",
+                PackageDiagnosticSeverity::Error,
+                Some("same.json"),
+                Some("/z"),
+            ),
+            diagnostic(
+                "Z",
+                PackageDiagnosticSeverity::Warning,
+                Some("same.json"),
+                Some("/a"),
+            ),
+        ]);
+
+        assert_eq!(report.diagnostics[0].code, "Z");
+    }
+
+    #[test]
+    fn severity_precedes_code_in_diagnostic_sorting() {
+        let report = PackageValidationReport::from_diagnostics(vec![
+            diagnostic(
+                "A",
+                PackageDiagnosticSeverity::Warning,
+                Some("same.json"),
+                Some("/same"),
+            ),
+            diagnostic(
+                "Z",
+                PackageDiagnosticSeverity::Error,
+                Some("same.json"),
+                Some("/same"),
+            ),
+        ]);
+
+        assert_eq!(report.diagnostics[0].code, "Z");
+    }
+
+    #[test]
+    fn code_orders_otherwise_equal_diagnostics() {
+        let report = PackageValidationReport::from_diagnostics(vec![
+            diagnostic(
+                "Z",
+                PackageDiagnosticSeverity::Error,
+                Some("same.json"),
+                Some("/same"),
+            ),
+            diagnostic(
+                "A",
+                PackageDiagnosticSeverity::Error,
+                Some("same.json"),
+                Some("/same"),
+            ),
+        ]);
+
+        assert_eq!(report.diagnostics[0].code, "A");
+    }
+
+    #[test]
     fn context_breaks_otherwise_equal_sort_keys_canonically() {
         let mut later_context = BTreeMap::new();
         later_context.insert(
