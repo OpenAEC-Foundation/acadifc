@@ -1,15 +1,14 @@
-//! Byte-exact validation of the annotative `AcDb*ObjectContextData` encoder.
+//! Semantic round-trip validation of the annotative
+//! `AcDb*ObjectContextData` encoder.
 //!
 //! Strategy: the golden R2018 file `~/Downloads/0718-mbmdmc.dwg` carries 134
 //! real `AcDbBlkRefObjectContextData` leaves (class 533). The reader models each
-//! into an `ObjectContextData` while keeping the verbatim `source_raw`.
+//! into an `ObjectContextData`.
 //!
 //! - `baseline_roundtrip_preserves_all_contexts` proves modeling did not
-//!   regress the round-trip: a plain save/reload preserves every leaf's bytes.
-//! - `encoder_reproduces_real_leaf_bytes` nulls `source_raw` on every modeled
-//!   leaf (forcing the field encoder), round-trips, and asserts the re-read
-//!   bytes are byte-identical to the originals — i.e. the encoder produces bytes
-//!   indistinguishable from what AutoCAD wrote.
+//!   regress the round-trip: a plain save/reload preserves every modeled leaf.
+//! - `encoder_preserves_context_fields_and_scale_link` verifies that the field
+//!   encoder preserves both the modeled payload and its annotation-scale link.
 //!
 //! Skips (does not fail) when the golden file is absent, so CI stays green.
 
@@ -39,36 +38,21 @@ fn roundtrip(doc: &CadDocument) -> CadDocument {
     r.read().expect("dwg re-read")
 }
 
-/// All modeled BLKREF leaves, keyed by handle, with their verbatim source bytes.
-fn blkref_raw(doc: &CadDocument) -> std::collections::BTreeMap<Handle, Vec<u8>> {
-    doc.objects
-        .iter()
-        .filter_map(|(h, o)| match o {
-            ObjectType::ObjectContextData(ObjectContextData {
-                kind: ObjectContextKind::BlkRef { .. },
-                source_raw: Some(raw),
-                ..
-            }) => Some((*h, raw.clone())),
-            _ => None,
-        })
-        .collect()
-}
-
 #[test]
 fn baseline_roundtrip_preserves_all_contexts() {
     let Some(doc) = load_golden() else { return };
 
     let ctx0 = doc.context_scales.len();
-    let blk0 = blkref_raw(&doc);
+    let blk0 = blkref_fields(&doc);
     eprintln!("loaded: context_scales={ctx0} modeled_blkref={}", blk0.len());
     assert!(blk0.len() >= 134, "expected the 134 BLKREF contexts");
 
     let rt = roundtrip(&doc);
     let ctx1 = rt.context_scales.len();
-    let blk1 = blkref_raw(&rt);
+    let blk1 = blkref_fields(&rt);
 
     assert_eq!(ctx0, ctx1, "context_scales count changed on round-trip");
-    assert_eq!(blk0, blk1, "modeled BLKREF raw bytes changed on round-trip");
+    assert_eq!(blk0, blk1, "modeled BLKREF fields changed on round-trip");
 }
 
 /// A BLKREF leaf's decoded fields + the annotation scale it resolves to (the
@@ -106,19 +90,6 @@ fn blkref_fields(doc: &CadDocument) -> std::collections::BTreeMap<Handle, BlkFie
         .collect()
 }
 
-fn force_field_encoding(doc: &mut CadDocument) -> usize {
-    let mut n = 0;
-    for obj in doc.objects.values_mut() {
-        if let ObjectType::ObjectContextData(c) = obj {
-            if matches!(c.kind, ObjectContextKind::BlkRef { .. }) {
-                c.source_raw = None;
-                n += 1;
-            }
-        }
-    }
-    n
-}
-
 #[test]
 fn encoder_preserves_context_fields_and_scale_link() {
     let Some(doc) = load_golden() else { return };
@@ -127,11 +98,8 @@ fn encoder_preserves_context_fields_and_scale_link() {
     let original = blkref_fields(&doc);
     assert!(original.len() >= 134, "expected the 134 BLKREF contexts");
 
-    // Force the FIELD encoder (drop verbatim raw), then round-trip.
-    let mut doc2 = doc.clone();
-    let forced = force_field_encoding(&mut doc2);
-    eprintln!("forced field-encoding on {forced} BLKREF leaves");
-    let rt = roundtrip(&doc2);
+    // Recognised context objects are always encoded from their modeled fields.
+    let rt = roundtrip(&doc);
     let produced = blkref_fields(&rt);
 
     assert_eq!(original.len(), produced.len(), "leaf count changed after encode");
@@ -154,18 +122,9 @@ fn encoder_preserves_context_fields_and_scale_link() {
     }
     assert_eq!(mism, 0, "{mism} BLKREF leaves lost fields/scale-link after field-encoding");
 
-    // The re-encode must be a STABLE fixed point: encoding the field-encoded
-    // document a second time reproduces byte-identical leaf records.
-    let once = blkref_raw(&rt);
-    let mut doc3 = rt.clone();
-    force_field_encoding(&mut doc3);
-    let twice = blkref_raw(&roundtrip(&doc3));
-    assert_eq!(once, twice, "field encoder is not idempotent (unstable output)");
-}
-
-#[allow(dead_code)]
-fn hex(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect::<Vec<_>>().join(" ")
+    // The re-encode must be a stable semantic fixed point.
+    let twice = blkref_fields(&roundtrip(&rt));
+    assert_eq!(produced, twice, "field encoder is not semantically stable");
 }
 
 // ── Synthesis path (what OCS uses to CREATE contexts from scratch) ──────────
@@ -194,9 +153,6 @@ fn synth_roundtrip_leaf(class_name: &str, kind: ObjectContextKind) -> (Handle, O
         is_default: true,
         scale: scale_h,
         kind,
-        source_raw: None,
-        source_handle_bits: 0,
-        source_version: None,
     };
     doc.objects.insert(leaf_h, ObjectType::ObjectContextData(ctx));
 
