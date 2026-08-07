@@ -1,6 +1,9 @@
 # Auto detect text files and perform LF normalization
 * text=auto
 
+# Active IFCCAD schemas
+ifccad/schemas/**/*.json text eol=lf
+
 # Versioned IFCCAD conformance data
 conformance/ifccad/**/*.json text eol=lf
 conformance/ifccad/**/blobs/* binary

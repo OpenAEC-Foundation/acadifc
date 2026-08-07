@@ -29,6 +29,12 @@ fn files_below(root: &Path) -> Vec<PathBuf> {
     values
 }
 
+fn active_schema_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("ifccad")
+        .join("schemas")
+}
+
 fn repository_git_dir(repository: &Path) -> Option<PathBuf> {
     let dot_git = repository.join(".git");
     if dot_git.is_dir() {
@@ -91,6 +97,24 @@ fn bundled_reference_includes_contract_schemas_and_provenance() {
 }
 
 #[test]
+fn active_schemas_start_from_bundled_contract_versions() {
+    let active = active_schema_root();
+    let bundled = bundled_conformance_root().join("schemas");
+
+    for relative in [
+        "ifcdr/registry-0.5.0.json",
+        "ifcdr/registry-meta-schema-v1.json",
+        "ifcpr/schema-0.1.0.json",
+    ] {
+        assert_eq!(
+            fs::read(active.join(relative)).expect("read active schema"),
+            fs::read(bundled.join(relative)).expect("read bundled schema"),
+            "active schema differs from its 1.0.0 bootstrap source: {relative}"
+        );
+    }
+}
+
+#[test]
 fn git_attributes_preserve_reference_bytes() {
     let repository = Path::new(env!("CARGO_MANIFEST_DIR"));
     let Some(git_dir) = repository_git_dir(repository) else {
@@ -110,6 +134,7 @@ fn git_attributes_preserve_reference_bytes() {
             "--",
             "conformance/ifccad/1.0.0/manifest.json",
             "conformance/ifccad/1.0.0/packages/valid/source-archive/blobs/fb357f76fddbb1178d0ebb2a6497d9c4929e7b04088729548c03ec578567f044",
+            "ifccad/schemas/ifcdr/registry-0.5.0.json",
         ])
         .output();
     let Ok(output) = output else {
@@ -125,6 +150,8 @@ fn git_attributes_preserve_reference_bytes() {
         .contains("fb357f76fddbb1178d0ebb2a6497d9c4929e7b04088729548c03ec578567f044: binary: set"));
     assert!(attributes
         .contains("fb357f76fddbb1178d0ebb2a6497d9c4929e7b04088729548c03ec578567f044: text: unset"));
+    assert!(attributes.contains("registry-0.5.0.json: text: set"));
+    assert!(attributes.contains("registry-0.5.0.json: eol: lf"));
 }
 
 #[test]
