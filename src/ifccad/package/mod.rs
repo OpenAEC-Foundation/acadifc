@@ -5,6 +5,7 @@
 
 mod codes;
 mod diagnostic;
+mod discovery;
 mod error;
 // Composed by the public validator in the follow-up package-validation change.
 #[allow(dead_code)]
