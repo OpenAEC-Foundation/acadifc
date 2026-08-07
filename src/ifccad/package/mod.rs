@@ -1,21 +1,22 @@
 //! Directory-based IFCCAD package foundations.
 //!
-//! Complete package validation is added separately; this module currently
-//! exposes its stable diagnostic vocabulary and entrypoint name.
+//! The directory loader remains an internal implementation detail. This module
+//! publicly exposes only the stable diagnostic vocabulary.
 
 mod codes;
 mod diagnostic;
+mod discovery;
 mod error;
-// Composed by the public validator in the follow-up package-validation change.
-#[allow(dead_code)]
 mod loader;
 mod path;
+mod uri;
+mod validation;
 
 pub use diagnostic::{
     PackageDiagnostic, PackageDiagnosticContextValue, PackageDiagnosticSeverity,
     PackageValidationReport,
 };
-pub use error::PackageOpenError;
+pub(crate) use error::PackageOpenError;
 
-/// Fixed IFCX entrypoint inside a directory-based IFCCAD package.
-pub const PACKAGE_ENTRYPOINT: &str = "package.ifcx.json";
+/// Current IFCX entrypoint inside an exploded directory package.
+pub(crate) const DIRECTORY_PACKAGE_ENTRYPOINT: &str = "package.ifcx.json";

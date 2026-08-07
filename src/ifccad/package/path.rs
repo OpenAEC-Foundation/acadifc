@@ -1,3 +1,4 @@
+use super::uri::{validate_package_uri, UnsafePackageUri};
 use super::PackageOpenError;
 use std::fs;
 use std::io;
@@ -12,11 +13,6 @@ pub(crate) struct PackageRoot {
 pub(crate) enum PackagePathResolution {
     Existing(PathBuf),
     Missing(PathBuf),
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct UnsafePackageUri {
-    pub(crate) uri: String,
 }
 
 #[derive(Debug)]
@@ -48,7 +44,7 @@ impl PackageRoot {
         &self,
         uri: &str,
     ) -> Result<PackagePathResolution, ResolvePackagePathError> {
-        validate_package_uri(uri)?;
+        validate_package_uri(uri).map_err(ResolvePackagePathError::Unsafe)?;
         let candidate = self.canonical.join(uri);
         match fs::canonicalize(&candidate) {
             Ok(target) => {
@@ -73,25 +69,6 @@ impl PackageRoot {
         } else {
             Err(unsafe_uri(uri))
         }
-    }
-}
-
-fn validate_package_uri(uri: &str) -> Result<(), ResolvePackagePathError> {
-    let segments: Vec<_> = uri.split('/').collect();
-    let invalid = uri.is_empty()
-        || uri.contains('\0')
-        || uri.contains('\\')
-        || uri.starts_with('/')
-        || segments
-            .first()
-            .is_some_and(|segment| segment.contains(':'))
-        || segments
-            .iter()
-            .any(|segment| segment.is_empty() || *segment == "." || *segment == "..");
-    if invalid {
-        Err(unsafe_uri(uri))
-    } else {
-        Ok(())
     }
 }
 

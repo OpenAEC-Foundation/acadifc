@@ -1,9 +1,9 @@
 use std::io;
 use std::path::PathBuf;
 
-/// External failure that prevents an IFCCAD package from being inspected.
+/// Failure that prevents an IFCCAD package from being inspected.
 #[derive(Debug, thiserror::Error)]
-pub enum PackageOpenError {
+pub(crate) enum PackageOpenError {
     /// The supplied package root exists but is not a directory.
     #[error("IFCCAD package root is not a directory: {path}")]
     RootNotDirectory { path: PathBuf },
