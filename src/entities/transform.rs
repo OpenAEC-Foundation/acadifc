@@ -238,6 +238,26 @@ pub(crate) fn transform_lwpolyline(e: &mut LwPolyline, transform: &Transform) {
 
 // ── Text ─────────────────────────────────────────────────────────────────────
 
+/// Carry a stored orientation angle through a transform.
+///
+/// TEXT, MTEXT, SHAPE and the ATTRIB pair keep which way they face as a single
+/// angle rather than as geometry, so transforming their points alone leaves the
+/// glyphs pointing the old way — ROTATE put the text in the right place and
+/// still drew it horizontal. Turn the angle into the direction it stands for,
+/// send that through the transform, and read the angle back. `atan2` ignores
+/// any scale the transform also carries, and a reflection lands on the mirrored
+/// angle, which is what the mirror paths used to work out separately.
+///
+/// A transform that flattens the direction away leaves the angle alone rather
+/// than snapping it to zero through `atan2(0, 0)`.
+pub(crate) fn rotate_stored_angle(rotation: &mut f64, transform: &Transform) {
+    let direction = Vector3::new(rotation.cos(), rotation.sin(), 0.0);
+    let rotated = transform.apply_rotation(direction);
+    if rotated.x != 0.0 || rotated.y != 0.0 {
+        *rotation = rotated.y.atan2(rotated.x);
+    }
+}
+
 pub(crate) fn transform_text(e: &mut Text, transform: &Transform) {
     // Insertion / alignment points are stored in OCS.
     let new_normal = transform.apply_rotation(e.normal).normalize();
@@ -251,6 +271,7 @@ pub(crate) fn transform_text(e: &mut Text, transform: &Transform) {
     let scale_factor = transformed_unit.length();
     e.height *= scale_factor;
     e.normal = new_normal;
+    rotate_stored_angle(&mut e.rotation, transform);
 }
 
 // ── MText ────────────────────────────────────────────────────────────────────
@@ -266,6 +287,7 @@ pub(crate) fn transform_mtext(e: &mut MText, transform: &Transform) {
         *h *= scale_factor;
     }
     e.normal = transform.apply_rotation(e.normal).normalize();
+    rotate_stored_angle(&mut e.rotation, transform);
 }
 
 // ── Spline ───────────────────────────────────────────────────────────────────
@@ -742,6 +764,7 @@ pub(crate) fn transform_attribute_definition(
     let transformed_unit = transform.apply_rotation(unit_x);
     let scale_factor = transformed_unit.length();
     e.height *= scale_factor;
+    rotate_stored_angle(&mut e.rotation, transform);
 }
 
 // ── AttributeEntity ──────────────────────────────────────────────────────────
@@ -758,6 +781,7 @@ pub(crate) fn transform_attribute_entity(e: &mut AttributeEntity, transform: &Tr
     let transformed_unit = transform.apply_rotation(unit_x);
     let scale_factor = transformed_unit.length();
     e.height *= scale_factor;
+    rotate_stored_angle(&mut e.rotation, transform);
 }
 
 // ── Leader ───────────────────────────────────────────────────────────────────
@@ -1002,6 +1026,7 @@ pub(crate) fn transform_shape(e: &mut Shape, transform: &Transform) {
     let scale_factor = transformed_unit.length();
     e.size *= scale_factor;
     e.normal = new_normal;
+    rotate_stored_angle(&mut e.rotation, transform);
 }
 
 // ── Underlay ─────────────────────────────────────────────────────────────────

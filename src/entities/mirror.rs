@@ -83,11 +83,11 @@ pub(crate) fn mirror_polyface_mesh(e: &mut PolyfaceMesh, transform: &Transform) 
 
 // ── Text ─────────────────────────────────────────────────────────────────────
 
+// `transform_*` now carries the stored orientation angle across a transform
+// for every entity that keeps one, reflections included, so these no longer
+// mirror the angle themselves — doing it again here would undo the flip.
 pub(crate) fn mirror_text(e: &mut Text, transform: &Transform) {
     super::transform::transform_text(e, transform);
-    let dir = Vector3::new(e.rotation.cos(), e.rotation.sin(), 0.0);
-    let mirrored_dir = transform.apply_rotation(dir);
-    e.rotation = mirrored_dir.y.atan2(mirrored_dir.x);
     e.oblique_angle = -e.oblique_angle;
 }
 
@@ -95,18 +95,12 @@ pub(crate) fn mirror_text(e: &mut Text, transform: &Transform) {
 
 pub(crate) fn mirror_mtext(e: &mut MText, transform: &Transform) {
     super::transform::transform_mtext(e, transform);
-    let dir = Vector3::new(e.rotation.cos(), e.rotation.sin(), 0.0);
-    let mirrored_dir = transform.apply_rotation(dir);
-    e.rotation = mirrored_dir.y.atan2(mirrored_dir.x);
 }
 
 // ── Shape ────────────────────────────────────────────────────────────────────
 
 pub(crate) fn mirror_shape(e: &mut Shape, transform: &Transform) {
     super::transform::transform_shape(e, transform);
-    let dir = Vector3::new(e.rotation.cos(), e.rotation.sin(), 0.0);
-    let mirrored_dir = transform.apply_rotation(dir);
-    e.rotation = mirrored_dir.y.atan2(mirrored_dir.x);
     e.relative_x_scale = -e.relative_x_scale;
     e.oblique_angle = -e.oblique_angle;
 }
