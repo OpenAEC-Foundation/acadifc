@@ -24,7 +24,7 @@ pub const BUNDLED_CONFORMANCE_VERSION: &str = "1.0.0";
 /// sources. It does not embed the collection in a consuming executable.
 pub fn bundled_conformance_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("conformance")
         .join("ifccad")
+        .join("conformance")
         .join(BUNDLED_CONFORMANCE_VERSION)
 }
