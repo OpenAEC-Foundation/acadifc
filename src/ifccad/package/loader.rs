@@ -6,7 +6,7 @@ use super::codes::{
 use super::path::{PackagePathResolution, PackageRoot, ResolvePackagePathError};
 use super::{
     PackageDiagnostic, PackageDiagnosticContextValue, PackageDiagnosticSeverity, PackageOpenError,
-    PackageValidationReport, PACKAGE_ENTRYPOINT,
+    PackageValidationReport, DIRECTORY_PACKAGE_ENTRYPOINT,
 };
 use std::cmp;
 use std::collections::BTreeMap;
@@ -64,7 +64,11 @@ impl DirectoryPackageLoader {
     pub(crate) fn load_entrypoint(
         &mut self,
     ) -> Result<Option<LoadedJsonResource>, PackageOpenError> {
-        self.load_json(PACKAGE_ENTRYPOINT, None, IFCCAD_PACKAGE_ENTRYPOINT_MISSING)
+        self.load_json(
+            DIRECTORY_PACKAGE_ENTRYPOINT,
+            None,
+            IFCCAD_PACKAGE_ENTRYPOINT_MISSING,
+        )
     }
 
     pub(crate) fn load_json_resource(
@@ -317,7 +321,7 @@ mod tests {
         IFCCAD_PACKAGE_RESOURCE_MISSING, IFCCAD_PACKAGE_TOTAL_LIMIT_EXCEEDED,
     };
     use crate::ifccad::package::{
-        PackageDiagnosticContextValue, PackageDiagnosticSeverity, PACKAGE_ENTRYPOINT,
+        PackageDiagnosticContextValue, PackageDiagnosticSeverity, DIRECTORY_PACKAGE_ENTRYPOINT,
     };
     use serde_json::json;
     use std::fs;
@@ -362,7 +366,8 @@ mod tests {
     fn entrypoint_load_retains_exact_bytes_and_parsed_json() {
         let root = TestDirectory::new("exact-entrypoint");
         let original = b"{\r\n  \"data\": []\r\n}\r\n  ";
-        fs::write(root.path().join(PACKAGE_ENTRYPOINT), original).expect("write entrypoint");
+        fs::write(root.path().join(DIRECTORY_PACKAGE_ENTRYPOINT), original)
+            .expect("write entrypoint");
         let mut loader = DirectoryPackageLoader::open(root.path(), limits(1024, 2048))
             .expect("open package loader");
 
@@ -371,12 +376,13 @@ mod tests {
             .expect("read entrypoint")
             .expect("loaded entrypoint");
 
-        assert_eq!(loaded.uri, PACKAGE_ENTRYPOINT);
+        assert_eq!(loaded.uri, DIRECTORY_PACKAGE_ENTRYPOINT);
         assert_eq!(loaded.bytes, original);
         assert_eq!(loaded.value, json!({ "data": [] }));
         assert_eq!(
             loaded.path,
-            fs::canonicalize(root.path().join(PACKAGE_ENTRYPOINT)).expect("canonical entrypoint")
+            fs::canonicalize(root.path().join(DIRECTORY_PACKAGE_ENTRYPOINT))
+                .expect("canonical entrypoint")
         );
         assert!(loader.into_report().is_valid());
     }
@@ -397,12 +403,15 @@ mod tests {
         let diagnostic = &report.diagnostics()[0];
         assert_eq!(diagnostic.code, IFCCAD_PACKAGE_ENTRYPOINT_MISSING);
         assert_eq!(diagnostic.severity, PackageDiagnosticSeverity::Error);
-        assert_eq!(diagnostic.resource_uri.as_deref(), Some(PACKAGE_ENTRYPOINT));
+        assert_eq!(
+            diagnostic.resource_uri.as_deref(),
+            Some(DIRECTORY_PACKAGE_ENTRYPOINT)
+        );
         assert_eq!(diagnostic.location, None);
         assert_eq!(
             diagnostic.context.get("missingUri"),
             Some(&PackageDiagnosticContextValue::String(
-                PACKAGE_ENTRYPOINT.to_owned()
+                DIRECTORY_PACKAGE_ENTRYPOINT.to_owned()
             ))
         );
     }
@@ -410,7 +419,8 @@ mod tests {
     #[test]
     fn malformed_entrypoint_json_is_a_diagnostic() {
         let root = TestDirectory::new("malformed-entrypoint");
-        fs::write(root.path().join(PACKAGE_ENTRYPOINT), b"{").expect("write malformed JSON");
+        fs::write(root.path().join(DIRECTORY_PACKAGE_ENTRYPOINT), b"{")
+            .expect("write malformed JSON");
         let mut loader = DirectoryPackageLoader::open(root.path(), limits(1024, 2048))
             .expect("open package loader");
 
@@ -424,7 +434,10 @@ mod tests {
         let diagnostic = &report.diagnostics()[0];
         assert_eq!(diagnostic.code, IFCCAD_PACKAGE_JSON_INVALID);
         assert_eq!(diagnostic.severity, PackageDiagnosticSeverity::Error);
-        assert_eq!(diagnostic.resource_uri.as_deref(), Some(PACKAGE_ENTRYPOINT));
+        assert_eq!(
+            diagnostic.resource_uri.as_deref(),
+            Some(DIRECTORY_PACKAGE_ENTRYPOINT)
+        );
         assert_eq!(diagnostic.location, None);
         assert_eq!(
             diagnostic.context.get("line"),
