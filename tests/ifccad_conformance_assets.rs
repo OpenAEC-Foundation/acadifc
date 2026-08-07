@@ -55,7 +55,14 @@ fn resolve_git_dir_pointer(repository: &Path, pointer: &str) -> Option<PathBuf> 
 
 #[test]
 fn bundled_reference_files_are_complete_and_valid_json() {
+    let expected_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("ifccad")
+        .join("conformance")
+        .join("1.0.0");
+    assert_eq!(bundled_conformance_root(), expected_root);
+
     let files = files_below(&bundled_conformance_root());
+    assert_eq!(files.len(), 89, "unexpected frozen reference file count");
     let json_files: Vec<_> = files
         .iter()
         .filter(|path| path.extension().is_some_and(|value| value == "json"))
@@ -132,8 +139,8 @@ fn git_attributes_preserve_reference_bytes() {
             "eol",
             "binary",
             "--",
-            "conformance/ifccad/1.0.0/manifest.json",
-            "conformance/ifccad/1.0.0/packages/valid/source-archive/blobs/fb357f76fddbb1178d0ebb2a6497d9c4929e7b04088729548c03ec578567f044",
+            "ifccad/conformance/1.0.0/manifest.json",
+            "ifccad/conformance/1.0.0/packages/valid/source-archive/blobs/fb357f76fddbb1178d0ebb2a6497d9c4929e7b04088729548c03ec578567f044",
             "ifccad/schemas/ifcdr/registry-0.5.0.json",
         ])
         .output();

@@ -5,5 +5,5 @@
 ifccad/schemas/**/*.json text eol=lf
 
 # Versioned IFCCAD conformance data
-conformance/ifccad/**/*.json text eol=lf
-conformance/ifccad/**/blobs/* binary
+ifccad/conformance/**/*.json text eol=lf
+ifccad/conformance/**/blobs/* binary
