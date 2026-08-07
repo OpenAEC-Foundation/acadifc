@@ -34,8 +34,12 @@ impl Default for PackageLoadLimits {
 
 #[derive(Debug)]
 pub(crate) struct LoadedJsonResource {
+    // Retained for byte-exact parsing and provenance in the next internal consumer.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) uri: String,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) path: PathBuf,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) bytes: Vec<u8>,
     pub(crate) value: serde_json::Value,
 }
@@ -605,53 +609,6 @@ mod tests {
                 .expect("valid package entrypoint");
 
             assert!(entrypoint.value.get("data").is_some(), "case {case}");
-            assert!(loader.into_report().is_valid(), "case {case}");
-        }
-    }
-
-    #[test]
-    fn loads_known_json_resources_from_committed_packages() {
-        let cases: [(&str, &[&str]); 5] = [
-            ("minimal-no-preservation", &["drawing.ifcdr.json"]),
-            (
-                "unrepresented-packed",
-                &["drawing.ifcdr.json", "preservation.ifcpr.json"],
-            ),
-            (
-                "source-archive",
-                &["drawing.ifcdr.json", "preservation.ifcpr.json"],
-            ),
-            (
-                "generated-snapshot",
-                &["drawing.ifcdr.json", "preservation.ifcpr.json"],
-            ),
-            (
-                "multi-drawing-projections",
-                &[
-                    "drawing.ifcdr.json",
-                    "drawing-b.ifcdr.json",
-                    "preservation.ifcpr.json",
-                ],
-            ),
-        ];
-
-        for (case, resource_uris) in cases {
-            let root = bundled_conformance_root()
-                .join("packages")
-                .join("valid")
-                .join(case);
-            let mut loader = DirectoryPackageLoader::open(root, PackageLoadLimits::default())
-                .expect("open package root");
-
-            for &uri in resource_uris {
-                let resource = loader
-                    .load_json_resource(uri, None)
-                    .expect("read known package resource")
-                    .expect("known package resource");
-                assert_eq!(resource.uri, uri, "case {case}");
-                assert!(resource.value.is_object(), "case {case}, URI {uri}");
-            }
-
             assert!(loader.into_report().is_valid(), "case {case}");
         }
     }

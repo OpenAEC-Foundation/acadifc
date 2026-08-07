@@ -7,11 +7,10 @@ mod codes;
 mod diagnostic;
 mod discovery;
 mod error;
-// Composed by the public validator in the follow-up package-validation change.
-#[allow(dead_code)]
 mod loader;
 mod path;
 mod uri;
+mod validation;
 
 pub use diagnostic::{
     PackageDiagnostic, PackageDiagnosticContextValue, PackageDiagnosticSeverity,
