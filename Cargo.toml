@@ -17,6 +17,9 @@ default = []
 # Forwarded so the re-exported codec types stay serialisable through here.
 serde = ["cadcodec/serde"]
 import = ["cadcodec/import"]
+# Polyline offsetting. Forwarded rather than always on, so a consumer that
+# only needs IFC or the codec does not pull cavalier_contours in.
+offset = ["cadkernel/offset"]
 
 [dependencies]
 # The DWG/DXF/ACIS codec, re-exported from the crate root so consumers reach
