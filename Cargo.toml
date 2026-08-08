@@ -20,8 +20,9 @@ import = ["cadcodec/import"]
 
 [dependencies]
 # The DWG/DXF/ACIS codec, re-exported from the crate root so consumers reach
-# the CAD side through this crate. Package is still named `acadrust`; that
-# rename waits on the upstream port PR.
+# the CAD side through this crate. It keeps the `acadrust` package name it
+# was forked with — the repository is cadcodec, the package is not, and the
+# alias below is what the rest of this crate reads.
 cadcodec = { package = "acadrust", git = "https://github.com/HakanSeven12/cadcodec.git", rev = "f226110" }
 
 # Geometry kernel. IFC conversion is geometry work — IfcAdvancedBrep carries
