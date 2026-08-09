@@ -240,3 +240,43 @@ fn a_surface_the_kernel_does_not_know_is_reported_rather_than_dropped() {
     // whole.
     assert!(bodies.is_empty() || bodies[0].faces.is_empty());
 }
+
+#[test]
+fn a_straight_edge_is_placed_by_its_vertices_not_by_its_record() {
+    // The fault this guards against, seen in the wild: a straight edge whose
+    // stored parameter pair spans the right *length* from the wrong place, so
+    // the curve runs alongside the face it is supposed to bound rather than
+    // along it. The loop then fails to close in parameter space, the face is
+    // dropped, and the solid comes out with a hole in it — from a record that
+    // reads as perfectly well formed.
+    //
+    // A line's parameter is a distance along an infinite curve, so its two
+    // vertices fix it and nothing else can. They are believed.
+    let mut document = one_face_document();
+    let edge = document
+        .records
+        .iter_mut()
+        .find(|record| record.entity_type == "edge")
+        .expect("an edge to spoil");
+    // The first edge runs from (0, 0) to (10, 0) along the x axis, so 0..10 is
+    // the truth. Ten units of the line starting ten further along is the same
+    // length in the wrong place.
+    edge.tokens[2] = SatToken::Float(10.0);
+    edge.tokens[4] = SatToken::Float(20.0);
+
+    let (bodies, _) = lift(&document);
+    let body = bodies.first().expect("a body");
+    // The spoiled edge runs between (0, 0) and (10, 0), so on a line through
+    // the origin along x its parameters are 0 and 10 — whatever the record
+    // claimed. Reading 10 and 20 back would put it ten units past the corner.
+    let spoiled = body
+        .edges
+        .iter()
+        .find(|(key, _)| {
+            body.edge_endpoints(*key)
+                .is_some_and(|(start, end)| start[0] == 0.0 && end[0] == 10.0)
+        })
+        .map(|(_, node)| (node.start_parameter, node.end_parameter))
+        .expect("the edge between the first two corners");
+    assert_eq!(spoiled, (0.0, 10.0), "the record was believed over the vertices");
+}

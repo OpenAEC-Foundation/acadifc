@@ -246,7 +246,28 @@ fn edge_of(
     // ACIS stores the two parameters in the curve's own direction; the kernel
     // keeps the smaller first and lets a coedge's sense say which way a loop
     // runs it.
-    let (low, high) = (source.start_param(), source.end_param());
+    //
+    // On a straight curve the vertices are read instead, and are believed over
+    // the record. A line's parameter is a distance along an infinite curve, so
+    // two endpoints fix it and nothing else can; files exist whose stored pair
+    // spans the right *length* from the wrong end, which puts the edge beside
+    // the face it bounds. The loop then fails to close in parameter space and
+    // the face is quietly dropped — a hole in the solid, from a record that
+    // looked well formed.
+    //
+    // Only for straight curves. A circle's parameter is an angle, where two
+    // endpoints leave which way round undecided — 350° to 10° is ten degrees
+    // or three hundred and fifty — and there the record is the only thing that
+    // knows.
+    let straight = matches!(body.curves.get(curve), Some(Curve3::Line(_)));
+    let ends = (body.vertices.get(start)?.point, body.vertices.get(end)?.point);
+    let apart = Vec3::from(ends.0).distance(Vec3::from(ends.1)) > 1e-9;
+    let (low, high) = match body.curves.get(curve) {
+        Some(shape) if straight && apart => {
+            (shape.parameter_at(ends.0), shape.parameter_at(ends.1))
+        }
+        _ => (source.start_param(), source.end_param()),
+    };
     let (start, end, low, high) = if low <= high {
         (start, end, low, high)
     } else {
