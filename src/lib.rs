@@ -34,4 +34,5 @@ pub use cadcodec::*;
 /// solids rather than just move records around.
 pub use cadkernel as kernel;
 
+pub mod acis;
 pub mod ifccad;
