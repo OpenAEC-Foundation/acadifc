@@ -30,7 +30,6 @@ use cadcodec::entities::acis::types::{
     SatDocument, SatEdge, SatFace, SatPointer, SatRecord, SatToken, SatVertex,
 };
 use cadkernel::brep::{Body, Curve3, Provenance, Surface};
-use cadkernel::space::Vec3;
 
 /// Why a body could not be written back.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -188,125 +187,43 @@ pub fn pending(body: &Body) -> usize {
             .count()
 }
 
-fn surface_type(surface: &Surface) -> &'static str {
-    match surface {
-        Surface::Plane(_) => "plane-surface",
-        // ACIS writes a cylinder as a cone with a zero half-angle; there is
-        // no separate record for one.
-        Surface::Cylinder(_) | Surface::Cone(_) => "cone-surface",
-        Surface::Sphere(_) => "sphere-surface",
-        Surface::Torus(_) => "torus-surface",
-    }
-}
-
-/// Every record leads with its attribute pointer, and the geometry
-/// accessors index from one — reading `root_point` at slots 1 to 3, not 0 to
-/// 2. Writing the floats without it shifts every coordinate one place and
-/// the record reads back as a different surface.
-fn surface_tokens(surface: &Surface) -> Option<Vec<SatToken>> {
-    let frame = surface.frame();
-    let normal = frame.normal()?;
-    let origin = frame.origin;
-    let u = frame.x_axis;
-    let mut tokens = vec![SatToken::Pointer(SatPointer::new(-1))];
-    tokens.extend(match surface {
-        Surface::Plane(_) => vec![
-            position(origin),
-            direction(normal),
-            direction(u),
-        ],
-        Surface::Cylinder(cylinder) => cone_tokens(origin, normal, u, cylinder.radius, 0.0),
-        Surface::Cone(cone) => cone_tokens(origin, normal, u, cone.radius, cone.half_angle),
-        Surface::Sphere(sphere) => vec![
-            position(origin),
-            SatToken::Float(sphere.radius),
-            direction(u),
-            direction(normal),
-        ],
-        Surface::Torus(torus) => vec![
-            position(origin),
-            direction(normal),
-            SatToken::Float(torus.major_radius),
-            SatToken::Float(torus.minor_radius),
-            direction(u),
-        ],
-    });
-    Some(tokens)
-}
-
-/// A cone record: centre, axis, the major axis whose *length* is the radius,
-/// the ratio, and the half-angle as its sine and cosine.
+/// The record kind and tokens for a surface, from the one place that knows
+/// the layouts.
 ///
-/// The radius goes into the major axis' length rather than into a separate
-/// token, which is how it is read back — writing a unit major axis and the
-/// radius beside it produces a cone of radius one.
-fn cone_tokens(
-    origin: [f64; 3],
-    axis: [f64; 3],
-    u: [f64; 3],
-    radius: f64,
-    half_angle: f64,
-) -> Vec<SatToken> {
-    let major = (Vec3::from(u) * radius).to_array();
-    let (sine, cosine) = half_angle.sin_cos();
-    vec![
-        position(origin),
-        direction(axis),
-        position(major),
-        SatToken::Float(1.0),
-        SatToken::Float(sine),
-        SatToken::Float(cosine),
-    ]
+/// Kept in `append` rather than copied here. The two had already drifted: a
+/// cone's half-angle sits at token thirteen, after two continuation tokens,
+/// and this file's own copy put it at eleven — which reads back as a
+/// cylinder whatever the cone's real angle was.
+fn surface_type(surface: &Surface) -> &'static str {
+    super::append::surface_record(surface)
+        .map(|(kind, _)| kind)
+        .unwrap_or("plane-surface")
+}
+
+fn surface_tokens(surface: &Surface) -> Option<Vec<SatToken>> {
+    let (_, tokens) = super::append::surface_record(surface)?;
+    Some(lead(tokens))
 }
 
 fn curve_type(curve: &Curve3) -> &'static str {
-    match curve {
-        Curve3::Line(_) => "straight-curve",
-        Curve3::Circle(_) | Curve3::Ellipse(_) => "ellipse-curve",
-        Curve3::PlanarSpline { .. } => "intcurve-curve",
-    }
+    super::append::curve_record(curve)
+        .map(|(kind, _)| kind)
+        .unwrap_or("straight-curve")
 }
 
 fn curve_tokens(curve: &Curve3) -> Option<Vec<SatToken>> {
-    let mut tokens = vec![SatToken::Pointer(SatPointer::new(-1))];
-    tokens.extend(match curve {
-        Curve3::Line(line) => vec![position(line.origin), direction(line.direction)],
-        Curve3::Circle(circle) => {
-            let normal = circle.plane.normal()?;
-            let major = (Vec3::from(circle.plane.x_axis) * circle.radius).to_array();
-            vec![
-                position(circle.plane.origin),
-                direction(normal),
-                position(major),
-                SatToken::Float(1.0),
-            ]
-        }
-        Curve3::Ellipse(ellipse) => {
-            let normal = ellipse.plane.normal()?;
-            let major = (Vec3::from(ellipse.plane.x_axis) * ellipse.major_radius).to_array();
-            vec![
-                position(ellipse.plane.origin),
-                direction(normal),
-                position(major),
-                SatToken::Float(ellipse.minor_radius / ellipse.major_radius),
-            ]
-        }
-        // A spline needs a bs3_curve subrecord written out, which is its own
-        // piece of work. Saying so beats writing a straight line where a
-        // curve was.
-        Curve3::PlanarSpline { .. } => return None,
-    });
-    Some(tokens)
+    let (_, tokens) = super::append::curve_record(curve)?;
+    Some(lead(tokens))
 }
 
 fn point_tokens(point: [f64; 3]) -> Vec<SatToken> {
-    vec![SatToken::Pointer(SatPointer::new(-1)), position(point)]
+    lead(vec![super::append::position(point)])
 }
 
-fn position(value: [f64; 3]) -> SatToken {
-    SatToken::Position(value[0], value[1], value[2])
-}
-
-fn direction(value: [f64; 3]) -> SatToken {
-    SatToken::Position(value[0], value[1], value[2])
+/// Every record's first token is its attribute pointer; the geometry
+/// accessors index from one.
+fn lead(mut tokens: Vec<SatToken>) -> Vec<SatToken> {
+    let mut all = vec![super::append::null()];
+    all.append(&mut tokens);
+    all
 }

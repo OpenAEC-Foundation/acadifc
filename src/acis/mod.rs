@@ -29,8 +29,10 @@
 //! through whatever subset of ACIS this kernel models — which is a quiet,
 //! total loss for bodies the user never opened.
 
+mod append;
 mod lift;
 mod lower;
 
+pub use append::{append, Unappendable, Written};
 pub use lift::{lift, lift_body, Loss};
 pub use lower::{lower, pending, Unwritable};
