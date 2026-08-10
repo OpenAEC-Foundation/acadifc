@@ -1,6 +1,4 @@
-#![cfg(feature = "ifccad")]
-
-use acadrust::ifccad::conformance::{
+use acadifc::ifccad::conformance::{
     bundled_conformance_root, load_conformance_manifest, ConformanceError,
 };
 use serde_json::json;

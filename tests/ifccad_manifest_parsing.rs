@@ -1,6 +1,4 @@
-#![cfg(feature = "ifccad")]
-
-use acadrust::ifccad::conformance::{
+use acadifc::ifccad::conformance::{
     parse_conformance_manifest, ConformanceCategory, ConformanceError, ConformanceOperationName,
 };
 use std::path::Path;

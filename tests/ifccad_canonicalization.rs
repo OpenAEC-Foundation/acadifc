@@ -1,7 +1,5 @@
-#![cfg(feature = "ifccad")]
-
-use acadrust::ifccad::canonicalization::{canonicalize, canonicalize_typed_value, CanonicalValue};
-use acadrust::ifccad::conformance::{bundled_conformance_root, verify_canonicalization_vectors};
+use acadifc::ifccad::canonicalization::{canonicalize, canonicalize_typed_value, CanonicalValue};
+use acadifc::ifccad::conformance::{bundled_conformance_root, verify_canonicalization_vectors};
 use serde_json::json;
 
 #[test]
