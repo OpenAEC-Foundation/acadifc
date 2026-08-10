@@ -1,8 +1,14 @@
 # IFCCAD Format Contract
 
 This directory contains the language-neutral IFCCAD format contract. The Rust
-implementation lives separately in `src/ifccad` and is available through the
-`ifccad` Cargo feature.
+implementation lives separately in `src/ifccad` and is part of acadifc's core
+API.
+
+An IFCCAD package combines one IFCX document with one or more IFCDR drawing
+resources and optional IFCPR preservation resources. The IFCX graph may
+describe only a CAD drawing set, or also a project, building, and products from
+which drawings are generated. The contract is being developed incrementally;
+the schemas in this directory do not yet cover that complete vocabulary.
 
 ## Directories
 

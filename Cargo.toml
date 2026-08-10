@@ -3,7 +3,7 @@ name = "acadifc"
 version = "0.5.0"
 edition = "2021"
 authors = ["Hakan AK"]
-description = "IFCCAD package handling, canonicalisation and conformance"
+description = "Rust foundations for IFCCAD packages, canonicalisation and conformance"
 license = "MPL-2.0"
 repository = "https://github.com/OpenAEC-Foundation/acadifc"
 homepage = "https://github.com/OpenAEC-Foundation/acadifc"
@@ -19,7 +19,7 @@ default = []
 # Error handling
 thiserror = "1.0"
 
-# IFC package handling: manifests, canonicalisation, blob digests
+# IFCCAD package handling: manifests, canonicalisation, blob digests
 base64 = "0.22"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
