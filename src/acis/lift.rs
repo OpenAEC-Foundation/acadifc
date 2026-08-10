@@ -17,15 +17,16 @@
 //! something with holes where the unrecognised faces were.
 
 use cadcodec::entities::acis::types::{
-    SatBody, SatConeSurface, SatDocument, SatEdge, SatEllipseCurve, SatFace, SatLoop, SatLump,
-    SatPlaneSurface, SatPoint, SatPointer, SatRecord, SatShell, SatSphereSurface,
-    SatStraightCurve, SatTorusSurface, SatVertex, Sense,
+    SatBody, SatConeSurface, SatDocument, SatEdge, SatEllipseCurve, SatFace, SatIntCurve, SatLoop,
+    SatLump, SatPCurve, SatPlaneSurface, SatPoint, SatPointer, SatRecord, SatShell,
+    SatSphereSurface, SatSplineSurface, SatStraightCurve, SatTorusSurface, SatVertex, Sense,
 };
 use cadkernel::brep::{
     Body, Circle3, Coedge, Cone, Curve3, CurveKey, Cylinder, Edge, EdgeKey, Face, Line3, Loop,
     Lump, Provenance, Shell, SourceRef, Sphere, Surface, SurfaceKey, Torus, Vertex, VertexKey,
 };
-use cadkernel::space::{Plane, Vec3};
+use cadkernel::geom2d::{Curve as Curve2, NurbsCurve};
+use cadkernel::space::{NurbsCurve3, NurbsSurface3, Plane, Vec3};
 use std::collections::HashMap;
 
 /// What a lift could not represent.
@@ -157,12 +158,12 @@ fn lift_face(
     record: &SatRecord,
     shell: cadkernel::brep::ShellKey,
 ) -> Option<()> {
+    let surface_record = resolve(document, source.surface())?;
+    let reversed_v = analytic_surface_reversed(surface_record);
     let surface = surface_of(document, body, seen, loss, source.surface())?;
     let face = body.faces.insert(Face {
         surface,
-        // ACIS records whether the face's normal agrees with its surface's,
-        // which is the same thing the kernel calls forward.
-        forward: source.sense() == Sense::Forward,
+        forward: (source.sense() == Sense::Forward) != reversed_v,
         loops: Vec::new(),
         owner: shell,
         provenance: clean(record),
@@ -198,9 +199,14 @@ fn lift_face(
                 break;
             };
             if let Some(edge) = edge_of(document, body, seen, loss, source_coedge.edge()) {
+                let edge_forward = resolve(document, source_coedge.edge())
+                    .and_then(SatEdge::from_record)
+                    .is_some_and(|edge| edge.sense() == Sense::Forward);
+                let forward = (source_coedge.sense() == Sense::Forward) == edge_forward;
                 let coedge = body.coedges.insert(Coedge {
                     edge,
-                    forward: source_coedge.sense() == Sense::Forward,
+                    forward,
+                    pcurve: read_pcurve(document, source_coedge.pcurve(), forward, reversed_v),
                     owner: ring,
                     provenance: clean(record),
                 });
@@ -268,8 +274,17 @@ fn edge_of(
         }
         _ => (source.start_param(), source.end_param()),
     };
+    let periodic_span = match body.curves.get(curve) {
+        Some(Curve3::Nurbs(curve)) if curve.periodicity() => {
+            let (from, to) = curve.domain();
+            Some(to - from)
+        }
+        _ => None,
+    };
     let (start, end, low, high) = if low <= high {
         (start, end, low, high)
+    } else if let Some(period) = periodic_span {
+        (start, end, low, high + period)
     } else {
         (end, start, high, low)
     };
@@ -328,7 +343,7 @@ fn curve_of(
     if let Some(key) = seen.curves.get(&index) {
         return Some(*key);
     }
-    let curve = read_curve(record).or_else(|| {
+    let curve = read_curve(document, record).or_else(|| {
         // Not a kind the kernel has; the edge still exists and its record is
         // carried through, but nothing here can evaluate it.
         loss.curves.push(index as usize);
@@ -339,7 +354,7 @@ fn curve_of(
     Some(key)
 }
 
-fn read_curve(record: &SatRecord) -> Option<Curve3> {
+fn read_curve(document: &SatDocument, record: &SatRecord) -> Option<Curve3> {
     if let Some(line) = SatStraightCurve::from_record(record) {
         let (x, y, z) = line.root_point();
         let (dx, dy, dz) = line.direction();
@@ -366,7 +381,68 @@ fn read_curve(record: &SatRecord) -> Option<Curve3> {
             })
         });
     }
+    if let Some(spline) = SatIntCurve::from_record(record) {
+        let closed = spline.is_closed_in(document);
+        let (degree, knots, controls) = spline.bspline_in(document)?;
+        let mut points = Vec::with_capacity(controls.len());
+        let mut weights = Vec::with_capacity(controls.len());
+        for control in controls {
+            let weight = control[3];
+            if !weight.is_finite() || weight <= 0.0 {
+                return None;
+            }
+            points.push([
+                control[0] / weight,
+                control[1] / weight,
+                control[2] / weight,
+            ]);
+            weights.push(weight);
+        }
+        return Some(Curve3::Nurbs(NurbsCurve3::new_strict(
+            degree, points, knots, weights,
+        )?
+        .with_periodicity(closed)));
+    }
     None
+}
+
+fn read_pcurve(
+    document: &SatDocument,
+    pointer: SatPointer,
+    forward: bool,
+    reversed_v: bool,
+) -> Option<Curve2> {
+    let source = SatPCurve::from_record(resolve(document, pointer)?)?;
+    let (degree, knots, controls) = source.bspline_in(document)?;
+    let mut points = Vec::with_capacity(controls.len());
+    let mut weights = Vec::with_capacity(controls.len());
+    for control in controls {
+        let weight = control[2];
+        if !weight.is_finite() || weight <= 0.0 {
+            return None;
+        }
+        points.push([control[0] / weight, control[1] / weight]);
+        weights.push(weight);
+    }
+    let curve = Curve2::Nurbs(NurbsCurve::new_strict(degree, points, knots, weights)?);
+    let curve = if reversed_v {
+        curve.transformed(&cadkernel::geom2d::Transform::scale(1.0, -1.0))?
+    } else {
+        curve
+    };
+    Some(match curve {
+        Curve2::Nurbs(curve) if !forward => Curve2::Nurbs(curve.reversed()),
+        curve => curve,
+    })
+}
+
+fn analytic_surface_reversed(record: &SatRecord) -> bool {
+    SatPlaneSurface::from_record(record)
+        .map(|surface| surface.sense())
+        .or_else(|| SatConeSurface::from_record(record).map(|surface| surface.sense()))
+        .or_else(|| SatSphereSurface::from_record(record).map(|surface| surface.sense()))
+        .or_else(|| SatTorusSurface::from_record(record).map(|surface| surface.sense()))
+        .is_some_and(|sense| sense == Sense::Reversed)
 }
 
 fn surface_of(
@@ -381,7 +457,7 @@ fn surface_of(
     if let Some(key) = seen.surfaces.get(&index) {
         return Some(*key);
     }
-    let surface = read_surface(record).or_else(|| {
+    let surface = read_surface(document, record).or_else(|| {
         loss.surfaces.push(index as usize);
         None
     })?;
@@ -390,7 +466,7 @@ fn surface_of(
     Some(key)
 }
 
-fn read_surface(record: &SatRecord) -> Option<Surface> {
+fn read_surface(document: &SatDocument, record: &SatRecord) -> Option<Surface> {
     if let Some(plane) = SatPlaneSurface::from_record(record) {
         let (x, y, z) = plane.root_point();
         let (nx, ny, nz) = plane.normal();
@@ -418,7 +494,7 @@ fn read_surface(record: &SatRecord) -> Option<Surface> {
             Surface::Cone(Cone {
                 base,
                 radius,
-                half_angle: sine.atan2(cosine),
+                half_angle: -sine.atan2(cosine),
             })
         });
     }
@@ -440,6 +516,43 @@ fn read_surface(record: &SatRecord) -> Option<Surface> {
             major_radius: torus.major_radius(),
             minor_radius: torus.minor_radius(),
         }));
+    }
+    if let Some(spline) = SatSplineSurface::from_record(record) {
+        let reversed = spline.sense() == Sense::Reversed;
+        let spline = spline.bspline(document)?;
+        let closed = |value: &Option<String>| {
+            value
+                .as_deref()
+                .is_some_and(|value| matches!(value, "closed" | "periodic"))
+        };
+        let (u_closed, v_closed) = (closed(&spline.u_closure), closed(&spline.v_closure));
+        let mut points = vec![vec![[0.0; 3]; spline.control_count_v]; spline.control_count_u];
+        let mut weights = vec![vec![1.0; spline.control_count_v]; spline.control_count_u];
+        for v in 0..spline.control_count_v {
+            for u in 0..spline.control_count_u {
+                let control = spline.control_points[v * spline.control_count_u + u];
+                let weight = control[3];
+                if !weight.is_finite() || weight <= 0.0 {
+                    return None;
+                }
+                points[u][v] = [
+                    control[0] / weight,
+                    control[1] / weight,
+                    control[2] / weight,
+                ];
+                weights[u][v] = weight;
+            }
+        }
+        return Some(Surface::Nurbs(NurbsSurface3::new_strict(
+            spline.degree_u,
+            spline.degree_v,
+            points,
+            spline.u_knots,
+            spline.v_knots,
+            weights,
+        )?
+        .with_periodicity(u_closed, v_closed)
+        .with_v_reversed(reversed)));
     }
     None
 }

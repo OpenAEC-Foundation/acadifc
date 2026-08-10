@@ -313,7 +313,7 @@ fn set(document: &mut SatDocument, id: i32, tokens: Vec<SatToken>) {
 }
 
 pub(super) fn surface_record(surface: &Surface) -> Option<(&'static str, Vec<SatToken>)> {
-    let frame = surface.frame();
+    let frame = surface.frame()?;
     let normal = frame.normal()?;
     let origin = frame.origin;
     let u = frame.x_axis;
@@ -349,6 +349,7 @@ pub(super) fn surface_record(surface: &Surface) -> Option<(&'static str, Vec<Sat
                 position(u),
             ],
         ),
+        Surface::Nurbs(_) => return None,
     })
 }
 
@@ -367,7 +368,7 @@ fn cone_tokens(
     half_angle: f64,
 ) -> Vec<SatToken> {
     let major = (Vec3::from(u) * radius).to_array();
-    let (sine, cosine) = half_angle.sin_cos();
+    let (sine, cosine) = (-half_angle).sin_cos();
     vec![
         position(origin),
         position(axis),
@@ -410,6 +411,7 @@ pub(super) fn curve_record(curve: &Curve3) -> Option<(&'static str, Vec<SatToken
         // A spline needs a bs3_curve subrecord, which is its own piece of
         // work. Saying so beats writing a line where a curve was.
         Curve3::PlanarSpline { .. } => return None,
+        Curve3::Nurbs(_) => return None,
     })
 }
 
