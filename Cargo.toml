@@ -3,35 +3,19 @@ name = "acadifc"
 version = "0.5.0"
 edition = "2021"
 authors = ["Hakan AK"]
-description = "IFC support for CAD drawings: package handling, canonicalisation, conformance, and conversion between IFC and DWG/DXF."
+description = "IFCCAD package handling, canonicalisation and conformance"
 license = "MPL-2.0"
 repository = "https://github.com/OpenAEC-Foundation/acadifc"
 homepage = "https://github.com/OpenAEC-Foundation/acadifc"
 documentation = "https://docs.rs/acadifc"
 readme = "README.md"
-keywords = ["cad", "ifc", "bim", "dxf", "dwg"]
+keywords = ["cad", "ifc", "ifccad", "bim", "conformance"]
 categories = ["parser-implementations", "encoding"]
 
 [features]
 default = []
-# Forwarded so the re-exported codec types stay serialisable through here.
-serde = ["cadcodec/serde"]
-import = ["cadcodec/import"]
-# Polyline offsetting. Forwarded rather than always on, so a consumer that
-# only needs IFC or the codec does not pull cavalier_contours in.
-offset = ["cadkernel/offset"]
 
 [dependencies]
-# The DWG/DXF/ACIS codec, re-exported from the crate root so consumers reach
-# the CAD side through this crate. It keeps the `acadrust` package name it
-# was forked with — the repository is cadcodec, the package is not, and the
-# alias below is what the rest of this crate reads.
-cadcodec = { package = "acadrust", git = "https://github.com/HakanSeven12/cadcodec.git", rev = "7e2fa8c" }
-
-# Geometry kernel. IFC conversion is geometry work — IfcAdvancedBrep carries
-# NURBS surfaces, IfcExtrudedAreaSolid is a sweep, profiles are 2D curves.
-cadkernel = { git = "https://github.com/HakanSeven12/cadkernel.git", rev = "ba7292c", features = ["brep"] }
-
 # Error handling
 thiserror = "1.0"
 
