@@ -30,7 +30,7 @@ cadcodec = { package = "acadrust", git = "https://github.com/HakanSeven12/cadcod
 
 # Geometry kernel. IFC conversion is geometry work — IfcAdvancedBrep carries
 # NURBS surfaces, IfcExtrudedAreaSolid is a sweep, profiles are 2D curves.
-cadkernel = { git = "https://github.com/HakanSeven12/cadkernel.git", rev = "435f7f1", features = ["brep"] }
+cadkernel = { git = "https://github.com/HakanSeven12/cadkernel.git", rev = "ba7292c", features = ["brep"] }
 
 # Error handling
 thiserror = "1.0"
