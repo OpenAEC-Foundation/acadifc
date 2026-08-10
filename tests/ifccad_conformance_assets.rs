@@ -1,6 +1,4 @@
-#![cfg(feature = "ifccad")]
-
-use acadrust::ifccad::conformance::bundled_conformance_root;
+use acadifc::ifccad::conformance::bundled_conformance_root;
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
